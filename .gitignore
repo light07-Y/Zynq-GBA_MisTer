@@ -1,0 +1,41 @@
+.git/
+.vscode/
+.Xil/
+
+# Vivado generated project data
+Zynq-GBA_MisTer-Vivado.cache/
+Zynq-GBA_MisTer-Vivado.gen/
+Zynq-GBA_MisTer-Vivado.hw/
+Zynq-GBA_MisTer-Vivado.ip_user_files/
+Zynq-GBA_MisTer-Vivado.runs/
+Zynq-GBA_MisTer-Vivado.sim/
+Zynq-GBA_MisTer-Vivado.srcs/
+
+# Vivado logs and transient files
+*.jou
+*.log
+*.pb
+*.rpx
+*.str
+*.tmp
+*.backup.jou
+*.backup.log
+dfx_runtime.txt
+
+# Reports generated during debug / analysis
+*.rpt
+linter_report.txt
+cdc_postroute_current.txt
+drc_precheck.txt
+temp_*.tcl
+
+# Bitstream / implementation outputs
+*.bit
+*.bin
+*.dcp
+*.ltx
+*.mmi
+
+# User-specific / IDE files
+*.suo
+*.user
