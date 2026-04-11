@@ -38,6 +38,8 @@ add_files -norecurse $local_bd_file
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl top *.v]]
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.v]]
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.sv]]
+add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.vh]]
+add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.mem]]
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.v]]
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.sv]]
 add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.vhd]]
@@ -57,6 +59,71 @@ foreach relpath [list \
 }
 
 open_bd_design $local_bd_file
+
+if {[llength [get_bd_cells -quiet fb_cap_bram_ctrl]] == 0} {
+    create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 fb_cap_bram_ctrl
+}
+set_property -dict [list CONFIG.DATA_WIDTH {32} CONFIG.SINGLE_PORT_BRAM {1}] [get_bd_cells fb_cap_bram_ctrl]
+
+if {[llength [get_bd_cells -quiet axi_ctrl_ic]] > 0} {
+    set_property CONFIG.NUM_MI {3} [get_bd_cells axi_ctrl_ic]
+}
+
+foreach pin_path [list \
+    axi_ctrl_ic/M02_AXI \
+    fb_cap_bram_ctrl/S_AXI \
+    fb_cap_bram_ctrl/BRAM_PORTA \
+    gba_pl_top_0/fb_cap_bram \
+] {
+    set pin [get_bd_intf_pins -quiet $pin_path]
+    if {[llength $pin] > 0} {
+        set net [get_bd_intf_nets -quiet -of_objects $pin]
+        if {[llength $net] > 0} {
+            disconnect_bd_intf_net $net $pin
+        }
+    }
+}
+
+foreach net_name [list axi_ctrl_ic_M02_AXI fb_cap_bram_ctrl_BRAM_PORTA axi_ctrl_ic_M02_AXI1 fb_cap_bram_ctrl_BRAM_PORTA1] {
+    set net [get_bd_intf_nets -quiet $net_name]
+    if {[llength $net] > 0} {
+        delete_bd_objs $net
+    }
+}
+
+connect_bd_intf_net -intf_net [get_bd_intf_nets -quiet axi_ctrl_ic_M02_AXI] [get_bd_intf_pins axi_ctrl_ic/M02_AXI] [get_bd_intf_pins fb_cap_bram_ctrl/S_AXI]
+connect_bd_intf_net -intf_net [get_bd_intf_nets -quiet fb_cap_bram_ctrl_BRAM_PORTA] [get_bd_intf_pins fb_cap_bram_ctrl/BRAM_PORTA] [get_bd_intf_pins gba_pl_top_0/fb_cap_bram]
+
+foreach pin_path [list \
+    axi_ctrl_ic/M02_ACLK \
+    axi_ctrl_ic/M02_ARESETN \
+    fb_cap_bram_ctrl/s_axi_aclk \
+    fb_cap_bram_ctrl/s_axi_aresetn \
+] {
+    set pin [get_bd_pins -quiet $pin_path]
+    if {[llength $pin] > 0} {
+        set net [get_bd_nets -quiet -of_objects $pin]
+        if {[llength $net] > 0} {
+            disconnect_bd_net $net $pin
+        }
+    }
+}
+
+connect_bd_net [get_bd_pins ps_core/FCLK_CLK0] [get_bd_pins axi_ctrl_ic/M02_ACLK]
+connect_bd_net [get_bd_pins rst_50M/peripheral_aresetn] [get_bd_pins axi_ctrl_ic/M02_ARESETN]
+connect_bd_net [get_bd_pins ps_core/FCLK_CLK0] [get_bd_pins fb_cap_bram_ctrl/s_axi_aclk]
+connect_bd_net [get_bd_pins rst_50M/peripheral_aresetn] [get_bd_pins fb_cap_bram_ctrl/s_axi_aresetn]
+
+set fb_cap_mem_seg [get_bd_addr_segs -quiet fb_cap_bram_ctrl/S_AXI/Mem0]
+set fb_cap_ps_seg [get_bd_addr_segs -quiet -filter {NAME == "SEG_fb_cap_bram_ctrl_Mem0"}]
+if {[llength $fb_cap_mem_seg] > 0} {
+    if {[llength $fb_cap_ps_seg] == 0} {
+        create_bd_addr_seg -range 256K -offset 0x44000000 [get_bd_addr_spaces ps_core/Data] $fb_cap_mem_seg SEG_fb_cap_bram_ctrl_Mem0
+    } else {
+        set_property offset 0x44000000 $fb_cap_ps_seg
+        set_property range 256K $fb_cap_ps_seg
+    }
+}
 
 # Ensure PS-side mandatory peripherals for this project:
 # - USB0 on MIO (for FreeRTOS USB stack usage)
@@ -92,13 +159,13 @@ set_property -dict [list \
     CONFIG.S_HAS_TLAST {1} \
     CONFIG.M_HAS_TREADY {1} \
     CONFIG.M_HAS_TSTRB {0} \
-    CONFIG.M_HAS_TKEEP {0} \
+    CONFIG.M_HAS_TKEEP {1} \
     CONFIG.M_HAS_TLAST {1} \
-    CONFIG.TDATA_REMAP {tdata[23:0]} \
+    CONFIG.TDATA_REMAP {tdata[23:16],tdata[7:0],tdata[15:8]} \
     CONFIG.TUSER_REMAP {tuser[0:0]} \
     CONFIG.TID_REMAP {1'b0} \
     CONFIG.TDEST_REMAP {1'b0} \
-    CONFIG.TKEEP_REMAP {1'b0} \
+    CONFIG.TKEEP_REMAP {tkeep[2:0]} \
     CONFIG.TSTRB_REMAP {1'b0} \
     CONFIG.TLAST_REMAP {tlast[0]} \
 ] [get_bd_cells hdmi_rgb_pack]
@@ -112,8 +179,41 @@ if {[llength [get_bd_cells -quiet rst_serial]] == 0} {
     create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 rst_serial
 }
 
+if {[llength [get_bd_cells -quiet hdmi_vid_reset_inv]] == 0} {
+    create_bd_cell -type ip -vlnv xilinx.com:ip:util_vector_logic:2.0 hdmi_vid_reset_inv
+}
+set_property -dict [list \
+    CONFIG.C_OPERATION {not} \
+    CONFIG.C_SIZE {1} \
+] [get_bd_cells hdmi_vid_reset_inv]
+
+set_property -dict [list \
+    CONFIG.HAS_AXI4_LITE {false} \
+    CONFIG.VIDEO_MODE {480p} \
+    CONFIG.enable_detection {false} \
+] [get_bd_cells hdmi_tc]
+
+set_property -dict [list \
+    CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {25.175} \
+    CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {125.875} \
+    CONFIG.MMCM_CLKFBOUT_MULT_F {17.625} \
+    CONFIG.MMCM_CLKOUT0_DIVIDE_F {35.000} \
+    CONFIG.MMCM_CLKOUT1_DIVIDE {7} \
+    CONFIG.NUM_OUT_CLKS {2} \
+    CONFIG.RESET_TYPE {ACTIVE_LOW} \
+    CONFIG.USE_LOCKED {true} \
+    CONFIG.USE_RESET {true} \
+] [get_bd_cells hdmi_clk_gen]
+
 foreach pin_path [list \
+    hdmi_clk_gen/clk_in1 \
+    hdmi_vid_out/aclken \
+    hdmi_vid_out/vid_io_out_ce \
+    hdmi_vid_out/vid_io_out_reset \
+    hdmi_tc/clken \
+    hdmi_tc/gen_clken \
     hdmi_dvi_enc/aRst_n \
+    hdmi_vid_reset_inv/Op1 \
     rst_serial/slowest_sync_clk \
     rst_serial/ext_reset_in \
     rst_serial/dcm_locked \
@@ -125,6 +225,13 @@ foreach pin_path [list \
     }
 }
 
+connect_bd_net [get_bd_pins ps_core/FCLK_CLK0] [get_bd_pins hdmi_clk_gen/clk_in1]
+connect_bd_net [get_bd_pins hdmi_clk_gen/locked] [get_bd_pins hdmi_vid_out/aclken]
+connect_bd_net [get_bd_pins hdmi_clk_gen/locked] [get_bd_pins hdmi_vid_out/vid_io_out_ce]
+connect_bd_net [get_bd_pins hdmi_clk_gen/locked] [get_bd_pins hdmi_tc/clken]
+connect_bd_net [get_bd_pins hdmi_clk_gen/locked] [get_bd_pins hdmi_vid_reset_inv/Op1]
+connect_bd_net [get_bd_pins hdmi_vid_reset_inv/Res] [get_bd_pins hdmi_vid_out/vid_io_out_reset]
+connect_bd_net [get_bd_pins hdmi_vid_out/vtg_ce] [get_bd_pins hdmi_tc/gen_clken]
 connect_bd_net [get_bd_pins hdmi_clk_gen/clk_out2] [get_bd_pins rst_serial/slowest_sync_clk]
 connect_bd_net [get_bd_pins ps_core/FCLK_RESET0_N] [get_bd_pins rst_serial/ext_reset_in]
 connect_bd_net [get_bd_pins hdmi_clk_gen/locked] [get_bd_pins rst_serial/dcm_locked]

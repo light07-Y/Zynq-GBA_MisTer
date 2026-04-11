@@ -35,7 +35,29 @@ temp_*.tcl
 *.dcp
 *.ltx
 *.mmi
+*.xsa
+*.zip
+*.d
 
 # User-specific / IDE files
 *.suo
 *.user
+/build/
+xsim.dir/
+sim/work/
+sim/dfx_runtime.txt
+src/ps/_ide/
+src/ps/.rigel_lopper/
+src/ps/app/_ide/
+src/ps/app/build/
+src/ps/app/compile_commands.json
+src/ps/app/vitis-comp.json
+src/ps/app/src/compile_commands.json
+src/ps/app/src/.cache/
+src/ps/app/src/.clangd
+src/ps/platform/
+src/ps/platform/export/
+src/ps/platform/hw/
+src/ps/platform/logs/
+src/ps/platform/vitis-comp.json
+src/ps/platform/ps7_cortexa9_0/**/build/

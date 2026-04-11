@@ -28,6 +28,35 @@ module axi_lite_ctrl_regs #(
   input  logic [31:0]          stat_cycles_vsync_speed,
   input  logic                 stat_fb_underflow,
   input  logic [1:0]           stat_fb_frame_idx,
+  input  logic [9:0]           stat_physical_keys,
+  input  logic [31:0]          stat_debug_cpu_pc,
+  input  logic [31:0]          stat_debug_cpu_mixed,
+  input  logic [31:0]          stat_debug_irq,
+  input  logic [31:0]          stat_debug_dma,
+  input  logic [31:0]          stat_debug_mem,
+  input  logic [31:0]          stat_dbg_chain_flags,
+  input  logic [31:0]          stat_dbg_chain_counts0,
+  input  logic [31:0]          stat_dbg_chain_counts1,
+  input  logic [31:0]          stat_dbg_ch1_first_addr,
+  input  logic [31:0]          stat_dbg_ch1_first_meta,
+  input  logic [31:0]          stat_dbg_ch1_last_addr,
+  input  logic [31:0]          stat_dbg_ch1_last_meta,
+  input  logic [31:0]          stat_dbg_ddr_first_addr,
+  input  logic [31:0]          stat_dbg_ddr_first_meta,
+  input  logic [31:0]          stat_dbg_ddr_last_addr,
+  input  logic [31:0]          stat_dbg_ddr_last_meta,
+  input  logic [31:0]          stat_dbg_axi_ar_first_addr,
+  input  logic [31:0]          stat_dbg_axi_ar_first_meta,
+  input  logic [31:0]          stat_dbg_axi_ar_last_addr,
+  input  logic [31:0]          stat_dbg_axi_ar_last_meta,
+  input  logic [31:0]          stat_dbg_axi_r_first_addr,
+  input  logic [31:0]          stat_dbg_axi_r_first_meta,
+  input  logic [31:0]          stat_dbg_axi_r_last_addr,
+  input  logic [31:0]          stat_dbg_axi_r_last_meta,
+  input  logic [31:0]          stat_dbg_done_first_addr,
+  input  logic [31:0]          stat_dbg_done_first_meta,
+  input  logic [31:0]          stat_dbg_done_last_addr,
+  input  logic [31:0]          stat_dbg_done_last_meta,
   
   // High-level status
   input  logic                 sys_rom_loading,
@@ -43,8 +72,11 @@ module axi_lite_ctrl_regs #(
   output logic [24:0]          cfg_max_pak_addr,
   output logic [15:0]          cfg_cycle_precalc,
   output logic [31:0]          cfg_rtc_timestamp,
+  output logic [1:0]           cfg_display_frame_idx,
   output logic                 cfg_sw_reset,
-  output logic                 cfg_commit_toggle
+  output logic                 cfg_commit_toggle,
+  input  logic [31:0]          stat_fbcap_frame_seq,
+  input  logic                 stat_fbcap_frame_buf_idx
 );
 
   localparam logic [ADDR_W-1:0] REG_CTRL            = 12'h000;
@@ -60,6 +92,37 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_ERROR_LATCH     = 12'h028;
   localparam logic [ADDR_W-1:0] REG_IRQ_EN          = 12'h02C;
   localparam logic [ADDR_W-1:0] REG_IRQ_STS         = 12'h030;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_PC    = 12'h034;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_MIX   = 12'h038;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_IRQ       = 12'h03C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA       = 12'h040;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_MEM       = 12'h044;
+  localparam logic [ADDR_W-1:0] REG_DISPLAY_FRAME   = 12'h048;
+  localparam logic [ADDR_W-1:0] REG_DBG_CHAIN_FLAGS       = 12'h04C;
+  localparam logic [ADDR_W-1:0] REG_DBG_CHAIN_COUNTS0     = 12'h050;
+  localparam logic [ADDR_W-1:0] REG_DBG_CHAIN_COUNTS1     = 12'h054;
+  localparam logic [ADDR_W-1:0] REG_DBG_CH1_FIRST_ADDR    = 12'h058;
+  localparam logic [ADDR_W-1:0] REG_DBG_CH1_FIRST_META    = 12'h05C;
+  localparam logic [ADDR_W-1:0] REG_DBG_CH1_LAST_ADDR     = 12'h060;
+  localparam logic [ADDR_W-1:0] REG_DBG_CH1_LAST_META     = 12'h064;
+  localparam logic [ADDR_W-1:0] REG_DBG_DDR_FIRST_ADDR    = 12'h068;
+  localparam logic [ADDR_W-1:0] REG_DBG_DDR_FIRST_META    = 12'h06C;
+  localparam logic [ADDR_W-1:0] REG_DBG_DDR_LAST_ADDR     = 12'h070;
+  localparam logic [ADDR_W-1:0] REG_DBG_DDR_LAST_META     = 12'h074;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_AR_FIRST_ADDR = 12'h078;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_AR_FIRST_META = 12'h07C;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_AR_LAST_ADDR  = 12'h080;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_AR_LAST_META  = 12'h084;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_R_FIRST_ADDR  = 12'h088;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_R_FIRST_META  = 12'h08C;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_R_LAST_ADDR   = 12'h090;
+  localparam logic [ADDR_W-1:0] REG_DBG_AXI_R_LAST_META   = 12'h094;
+  localparam logic [ADDR_W-1:0] REG_DBG_DONE_FIRST_ADDR   = 12'h098;
+  localparam logic [ADDR_W-1:0] REG_DBG_DONE_FIRST_META   = 12'h09C;
+  localparam logic [ADDR_W-1:0] REG_DBG_DONE_LAST_ADDR    = 12'h0A0;
+  localparam logic [ADDR_W-1:0] REG_DBG_DONE_LAST_META    = 12'h0A4;
+  localparam logic [ADDR_W-1:0] REG_FB_CAP_STATUS         = 12'h0A8;
+  localparam logic [ADDR_W-1:0] REG_FB_CAP_SEQ            = 12'h0AC;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
@@ -100,17 +163,18 @@ module axi_lite_ctrl_regs #(
     logic [31:0] merged32;
 
     if (!rst_n) begin
-      shadow_ctrl          <= 32'h0000_1600;
+      shadow_ctrl          <= 32'h0000_1612;
       shadow_keys          <= '0;
       shadow_max_pak_addr  <= '0;
       shadow_cycle_precalc <= 16'd100;
       shadow_rtc_timestamp <= '0;
 
-      cfg_ctrl             <= 32'h0000_1600;
+      cfg_ctrl             <= 32'h0000_1612;
       cfg_keys             <= '0;
       cfg_max_pak_addr     <= '0;
       cfg_cycle_precalc    <= 16'd100;
       cfg_rtc_timestamp    <= '0;
+      cfg_display_frame_idx <= 2'd0;
       cfg_sw_reset         <= 1'b0;
       cfg_commit_toggle    <= 1'b0;
 
@@ -189,6 +253,9 @@ module axi_lite_ctrl_regs #(
           REG_SW_RESET: begin
             cfg_sw_reset <= s_axi_wdata[0];
           end
+          REG_DISPLAY_FRAME: begin
+            cfg_display_frame_idx <= s_axi_wdata[1:0];
+          end
           REG_ERROR_LATCH: begin
             // Write 1 to clear current error latch
             if (s_axi_wdata[0]) error_latch <= 32'h0;
@@ -226,13 +293,44 @@ module axi_lite_ctrl_regs #(
           REG_MAX_PAK_ADDR:  rdata_next = {7'd0, cfg_max_pak_addr};
           REG_CYCLE_PRECALC: rdata_next = {16'd0, cfg_cycle_precalc};
           REG_RTC_TIMESTAMP: rdata_next = cfg_rtc_timestamp;
-          REG_STATUS0:       rdata_next = {31'd0, stat_fb_underflow};
+          REG_STATUS0:       rdata_next = {22'd0, stat_physical_keys};
           REG_STATUS1:       rdata_next = {stat_cycles_vsync_speed[15:0], stat_cycles_missing[13:0], stat_fb_frame_idx};
           REG_SW_RESET:      rdata_next = {31'd0, cfg_sw_reset};
           REG_ROM_STATUS:    rdata_next = {31'd0, sys_rom_loading};
           REG_ERROR_LATCH:   rdata_next = error_latch;
           REG_IRQ_EN:        rdata_next = irq_en;
           REG_IRQ_STS:       rdata_next = {30'd0, irq_sts};
+          REG_DEBUG_CPU_PC:  rdata_next = stat_debug_cpu_pc;
+          REG_DEBUG_CPU_MIX: rdata_next = stat_debug_cpu_mixed;
+          REG_DEBUG_IRQ:     rdata_next = stat_debug_irq;
+          REG_DEBUG_DMA:     rdata_next = stat_debug_dma;
+          REG_DEBUG_MEM:     rdata_next = stat_debug_mem;
+          REG_DISPLAY_FRAME: rdata_next = {30'd0, cfg_display_frame_idx};
+          REG_DBG_CHAIN_FLAGS:       rdata_next = stat_dbg_chain_flags;
+          REG_DBG_CHAIN_COUNTS0:     rdata_next = stat_dbg_chain_counts0;
+          REG_DBG_CHAIN_COUNTS1:     rdata_next = stat_dbg_chain_counts1;
+          REG_DBG_CH1_FIRST_ADDR:    rdata_next = stat_dbg_ch1_first_addr;
+          REG_DBG_CH1_FIRST_META:    rdata_next = stat_dbg_ch1_first_meta;
+          REG_DBG_CH1_LAST_ADDR:     rdata_next = stat_dbg_ch1_last_addr;
+          REG_DBG_CH1_LAST_META:     rdata_next = stat_dbg_ch1_last_meta;
+          REG_DBG_DDR_FIRST_ADDR:    rdata_next = stat_dbg_ddr_first_addr;
+          REG_DBG_DDR_FIRST_META:    rdata_next = stat_dbg_ddr_first_meta;
+          REG_DBG_DDR_LAST_ADDR:     rdata_next = stat_dbg_ddr_last_addr;
+          REG_DBG_DDR_LAST_META:     rdata_next = stat_dbg_ddr_last_meta;
+          REG_DBG_AXI_AR_FIRST_ADDR: rdata_next = stat_dbg_axi_ar_first_addr;
+          REG_DBG_AXI_AR_FIRST_META: rdata_next = stat_dbg_axi_ar_first_meta;
+          REG_DBG_AXI_AR_LAST_ADDR:  rdata_next = stat_dbg_axi_ar_last_addr;
+          REG_DBG_AXI_AR_LAST_META:  rdata_next = stat_dbg_axi_ar_last_meta;
+          REG_DBG_AXI_R_FIRST_ADDR:  rdata_next = stat_dbg_axi_r_first_addr;
+          REG_DBG_AXI_R_FIRST_META:  rdata_next = stat_dbg_axi_r_first_meta;
+          REG_DBG_AXI_R_LAST_ADDR:   rdata_next = stat_dbg_axi_r_last_addr;
+          REG_DBG_AXI_R_LAST_META:   rdata_next = stat_dbg_axi_r_last_meta;
+          REG_DBG_DONE_FIRST_ADDR:   rdata_next = stat_dbg_done_first_addr;
+          REG_DBG_DONE_FIRST_META:   rdata_next = stat_dbg_done_first_meta;
+          REG_DBG_DONE_LAST_ADDR:    rdata_next = stat_dbg_done_last_addr;
+          REG_DBG_DONE_LAST_META:    rdata_next = stat_dbg_done_last_meta;
+          REG_FB_CAP_STATUS:         rdata_next = {31'd0, stat_fbcap_frame_buf_idx};
+          REG_FB_CAP_SEQ:            rdata_next = stat_fbcap_frame_seq;
           default:           rdata_next = 32'h0;
         endcase
 

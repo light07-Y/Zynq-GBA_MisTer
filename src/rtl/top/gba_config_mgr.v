@@ -14,8 +14,8 @@ module gba_config_mgr (
     input         cfg_commit_toggle_axi,
     
     // 板载物理输入 (来自 Pin Domain)
-    input [3:0]   btns,           // 物理按键 (A, B, Select, Start)
-    input [3:0]   sws,            // 物理拨码 ( 方向键)
+    input [3:0]   btns,           // 物理按键 (Up, Down, Left, Right)
+    input [3:0]   sws,            // 物理拨码 (A, B, Select, Start)
     
     // 同步后的核心配置 (Core Domain)
     output reg [31:0] cfg_ctrl_core,
@@ -41,7 +41,7 @@ module gba_config_mgr (
 
     always @(posedge clk_core) begin
         if (!rst_n) begin
-            {cfg_ctrl_meta, cfg_ctrl_sync} <= 64'h0000_1600_0000_1600;
+            {cfg_ctrl_meta, cfg_ctrl_sync} <= 64'h0000_1612_0000_1612;
             {cfg_keys_meta, cfg_keys_sync} <= 20'd0;
             {cfg_max_pak_addr_meta, cfg_max_pak_addr_sync} <= 50'd0;
             {cfg_cycle_precalc_meta, cfg_cycle_precalc_sync} <= 32'd100;
@@ -64,22 +64,39 @@ module gba_config_mgr (
     end
 
     // --- 2. 配置提交逻辑 (Atomic Commit) ---
-    // AXI 传入的按键寄存器在提交时才参与合并逻辑
+    // 关键点：cfg_* 与 commit_toggle 是独立 CDC，同拍提交会存在采样旧值的窗口。
+    // 这里在检测到 commit 后额外等待若干 core 周期，再锁存同步后的 cfg_*。
+    localparam [1:0] COMMIT_SETTLE_CYCLES = 2'd2;
+
     reg [9:0] cfg_keys_axi_reg;
+    reg       cfg_commit_pending;
+    reg [1:0] cfg_commit_settle_count;
 
     always @(posedge clk_core) begin
         if (!rst_n) begin
-            cfg_ctrl_core          <= 32'h0000_1600;
+            cfg_ctrl_core          <= 32'h0000_1612;
             cfg_keys_axi_reg       <= 10'd0;
             cfg_max_pak_addr_core  <= 25'd0;
             cfg_cycle_precalc_core <= 16'd100;
             cfg_rtc_timestamp_core <= 32'd0;
-        end else if (cfg_commit_pulse) begin
-            cfg_ctrl_core          <= cfg_ctrl_sync;
-            cfg_keys_axi_reg       <= cfg_keys_sync;
-            cfg_max_pak_addr_core  <= cfg_max_pak_addr_sync;
-            cfg_cycle_precalc_core <= cfg_cycle_precalc_sync;
-            cfg_rtc_timestamp_core <= cfg_rtc_timestamp_sync;
+            cfg_commit_pending     <= 1'b0;
+            cfg_commit_settle_count <= 2'd0;
+        end else begin
+            if (cfg_commit_pulse) begin
+                cfg_commit_pending <= 1'b1;
+                cfg_commit_settle_count <= COMMIT_SETTLE_CYCLES;
+            end else if (cfg_commit_pending) begin
+                if (cfg_commit_settle_count != 2'd0) begin
+                    cfg_commit_settle_count <= cfg_commit_settle_count - 2'd1;
+                end else begin
+                    cfg_ctrl_core          <= cfg_ctrl_sync;
+                    cfg_keys_axi_reg       <= cfg_keys_sync;
+                    cfg_max_pak_addr_core  <= cfg_max_pak_addr_sync;
+                    cfg_cycle_precalc_core <= cfg_cycle_precalc_sync;
+                    cfg_rtc_timestamp_core <= cfg_rtc_timestamp_sync;
+                    cfg_commit_pending     <= 1'b0;
+                end
+            end
         end
     end
 
@@ -90,14 +107,14 @@ module gba_config_mgr (
         // 物理按键直接从引脚同步到核心时钟域
         physical_keys_meta <= {
             2'b0,         // R, L (暂无物理映射)
-            sws[1],       // Down
-            sws[0],       // Up
-            sws[3],       // Left
-            sws[2],       // Right
-            btns[3],      // Start
-            btns[2],      // Select
-            btns[1],      // B
-            btns[0]       // A
+            btns[1],      // Down
+            btns[0],      // Up
+            btns[2],      // Left
+            btns[3],      // Right
+            sws[3],       // Start
+            sws[2],       // Select
+            sws[1],       // B
+            sws[0]        // A
         };
         physical_keys_sync <= physical_keys_meta;
     end

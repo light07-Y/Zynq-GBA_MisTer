@@ -3,7 +3,7 @@ module zynq_gba_top #(
 ) (
   // Clock and Reset Interfaces
   (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 clk_100 CLK" *)
-  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF M_AXI, ASSOCIATED_RESET rst_n" *)
+  (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF M_AXI, ASSOCIATED_RESET rst_n, FREQ_HZ 100000000" *)
   input         clk_100,
   (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 rst_n RST" *)
   (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
@@ -55,6 +55,22 @@ module zynq_gba_top #(
   output        s_axi_rvalid,
   (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 s_axi RREADY" *)
   input         s_axi_rready,
+
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram CLK" *)
+  (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME fb_cap_bram, MASTER_TYPE BRAM_CTRL, MEM_SIZE 262144, MEM_WIDTH 32, MEM_ECC NONE, READ_WRITE_MODE READ_WRITE" *)
+  input         fb_cap_bram_clk,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram RST" *)
+  input         fb_cap_bram_rst,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram EN" *)
+  input         fb_cap_bram_en,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram WE" *)
+  input [3:0]   fb_cap_bram_we,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram ADDR" *)
+  input [17:0]  fb_cap_bram_addr,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram DIN" *)
+  input [31:0]  fb_cap_bram_din,
+  (* X_INTERFACE_INFO = "xilinx.com:interface:bram:1.0 fb_cap_bram DOUT" *)
+  output [31:0] fb_cap_bram_dout,
 
   // AXI4 master to PS DDR
   (* X_INTERFACE_INFO = "xilinx.com:interface:aximm:1.0 M_AXI AWADDR" *)
@@ -158,6 +174,7 @@ module zynq_gba_top #(
   wire [24:0] w_axi_cfg_max_pak_addr;
   wire [15:0] w_axi_cfg_cycle_precalc;
   wire [31:0] w_axi_cfg_rtc_timestamp;
+  wire [1:0]  w_axi_display_frame_idx;
   wire        w_axi_cfg_commit_toggle;
   wire        w_axi_cfg_sw_reset;
 
@@ -197,13 +214,22 @@ module zynq_gba_top #(
 
   // 5. 视频与帧缓冲信号
   wire        fb_frame_pulse;
-  wire [1:0]  fb_frame_idx;
+  // fb_frame_idx_unused 已随 frame_tick_480p 一并移除
+  wire [1:0]  display_frame_idx_core;
   wire [27:1] fb_wr_addr;
   wire [63:0] fb_wr_data;
   wire        fb_wr_req, fb_wr_ack;
+  wire [25:0] core_fb_addr;
+  wire [63:0] core_fb_data;
+  wire        core_fb_req;
+  wire        core_fb_done;
+  wire        core_fb_newframe;
   wire [15:0] core_pixel_addr;
   wire [17:0] core_pixel_data;
   wire        core_pixel_we;
+  wire [31:0] fbcap_frame_seq;
+  wire        fbcap_frame_buf_idx;
+  wire [31:0] core_debug_internal;
 
   // 6. 状态与统计
   wire [31:0] cycles_missing, cycles_vsync_speed;
@@ -213,17 +239,109 @@ module zynq_gba_top #(
   wire        irq_vsync_pulse_axi;
   wire        irq_error_pulse_axi;
   wire        sys_rom_loading_axi;
+  wire [9:0]  physical_keys_axi;
+  wire [31:0] debug_cpu_pc_axi;
+  wire [31:0] debug_cpu_mixed_axi;
+  wire [31:0] debug_irq_axi;
+  wire [31:0] debug_dma_axi;
+  wire [31:0] debug_mem_axi;
+  wire [31:0] dbg_chain_flags_axi;
+  wire [31:0] dbg_chain_counts0_axi;
+  wire [31:0] dbg_chain_counts1_axi;
+  wire [31:0] dbg_ch1_first_addr_axi;
+  wire [31:0] dbg_ch1_first_meta_axi;
+  wire [31:0] dbg_ch1_last_addr_axi;
+  wire [31:0] dbg_ch1_last_meta_axi;
+  wire [31:0] dbg_ddr_first_addr_axi;
+  wire [31:0] dbg_ddr_first_meta_axi;
+  wire [31:0] dbg_ddr_last_addr_axi;
+  wire [31:0] dbg_ddr_last_meta_axi;
+  wire [31:0] dbg_axi_ar_first_addr_axi;
+  wire [31:0] dbg_axi_ar_first_meta_axi;
+  wire [31:0] dbg_axi_ar_last_addr_axi;
+  wire [31:0] dbg_axi_ar_last_meta_axi;
+  wire [31:0] dbg_axi_r_first_addr_axi;
+  wire [31:0] dbg_axi_r_first_meta_axi;
+  wire [31:0] dbg_axi_r_last_addr_axi;
+  wire [31:0] dbg_axi_r_last_meta_axi;
+  wire [31:0] dbg_done_first_addr_axi;
+  wire [31:0] dbg_done_first_meta_axi;
+  wire [31:0] dbg_done_last_addr_axi;
+  wire [31:0] dbg_done_last_meta_axi;
 
   (* ASYNC_REG = "TRUE" *) reg        w_core_cfg_sw_reset_meta, w_core_cfg_sw_reset_sync;
+  (* ASYNC_REG = "TRUE" *) reg [1:0]  display_frame_idx_core_meta, display_frame_idx_core_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] cycles_missing_axi_meta, cycles_missing_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] cycles_vsync_speed_axi_meta, cycles_vsync_speed_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] sys_err_vec_axi_meta, sys_err_vec_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [1:0]  fb_frame_idx_axi_meta, fb_frame_idx_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg        sys_rom_loading_axi_meta, sys_rom_loading_axi_sync;
-  reg                                 fb_frame_pulse_toggle;
-  reg                                 sys_err_pulse_toggle;
+  (* ASYNC_REG = "TRUE" *) reg [9:0]  physical_keys_axi_meta, physical_keys_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_pc_axi_meta, debug_cpu_pc_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_mixed_axi_meta, debug_cpu_mixed_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_irq_axi_meta, debug_irq_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_axi_meta, debug_dma_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_mem_axi_meta, debug_mem_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_flags_axi_meta, dbg_chain_flags_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_counts0_axi_meta, dbg_chain_counts0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_counts1_axi_meta, dbg_chain_counts1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ch1_first_addr_axi_meta, dbg_ch1_first_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ch1_first_meta_axi_meta, dbg_ch1_first_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ch1_last_addr_axi_meta, dbg_ch1_last_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ch1_last_meta_axi_meta, dbg_ch1_last_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ddr_first_addr_axi_meta, dbg_ddr_first_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ddr_first_meta_axi_meta, dbg_ddr_first_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ddr_last_addr_axi_meta, dbg_ddr_last_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_ddr_last_meta_axi_meta, dbg_ddr_last_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_ar_first_addr_axi_meta, dbg_axi_ar_first_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_ar_first_meta_axi_meta, dbg_axi_ar_first_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_ar_last_addr_axi_meta, dbg_axi_ar_last_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_ar_last_meta_axi_meta, dbg_axi_ar_last_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_r_first_addr_axi_meta, dbg_axi_r_first_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_r_first_meta_axi_meta, dbg_axi_r_first_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_r_last_addr_axi_meta, dbg_axi_r_last_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_axi_r_last_meta_axi_meta, dbg_axi_r_last_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_first_addr_axi_meta, dbg_done_first_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_first_meta_axi_meta, dbg_done_first_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_last_addr_axi_meta, dbg_done_last_addr_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_last_meta_axi_meta, dbg_done_last_meta_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] fbcap_frame_seq_axi_meta, fbcap_frame_seq_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        fbcap_frame_buf_idx_axi_meta, fbcap_frame_buf_idx_axi_sync;
+
+  wire [31:0] unused_core_fb_base;
+  wire [15:0] unused_core_vcount;
+  reg                                  fb_frame_pulse_toggle;
+  reg                                  sys_err_pulse_toggle;
   (* ASYNC_REG = "TRUE" *) reg [2:0]  fb_frame_pulse_toggle_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [2:0]  sys_err_pulse_toggle_axi_sync;
+  reg [31:0]                          dbg_chain_flags_core;
+  reg [31:0]                          dbg_chain_counts0_core;
+  reg [31:0]                          dbg_chain_counts1_core;
+  reg [31:0]                          dbg_ch1_first_addr_core;
+  reg [31:0]                          dbg_ch1_first_meta_core;
+  reg [31:0]                          dbg_ch1_last_addr_core;
+  reg [31:0]                          dbg_ch1_last_meta_core;
+  reg [31:0]                          dbg_ddr_first_addr_core;
+  reg [31:0]                          dbg_ddr_first_meta_core;
+  reg [31:0]                          dbg_ddr_last_addr_core;
+  reg [31:0]                          dbg_ddr_last_meta_core;
+  reg [31:0]                          dbg_axi_ar_first_addr_core;
+  reg [31:0]                          dbg_axi_ar_first_meta_core;
+  reg [31:0]                          dbg_axi_ar_last_addr_core;
+  reg [31:0]                          dbg_axi_ar_last_meta_core;
+  reg [31:0]                          dbg_axi_r_first_addr_core;
+  reg [31:0]                          dbg_axi_r_first_meta_core;
+  reg [31:0]                          dbg_axi_r_last_addr_core;
+  reg [31:0]                          dbg_axi_r_last_meta_core;
+  reg [31:0]                          dbg_done_first_addr_core;
+  reg [31:0]                          dbg_done_first_meta_core;
+  reg [31:0]                          dbg_done_last_addr_core;
+  reg [31:0]                          dbg_done_last_meta_core;
+  reg [31:0]                          dbg_pending_line_addr;
+  reg [1:0]                           dbg_pending_lane;
+  reg [31:0]                          dbg_pending_axi_ar_addr;
+  reg [1:0]                           dbg_last_axi_rresp;
+  reg                                 dbg_last_axi_rlast;
 
   // 7. 明确收口上游核心当前未接入的可选功能，避免综合依赖隐式默认值
   localparam [1:0] GBA_UNDERCLOCK_OFF       = 2'b00;
@@ -245,25 +363,105 @@ module zynq_gba_top #(
   wire [31:0] unused_debug_irq;
   wire [31:0] unused_debug_dma;
   wire [31:0] unused_debug_mem;
-  wire [31:0] unused_core_fb_base;
-  wire [25:0] unused_core_fb_addr;
-  wire [63:0] unused_core_fb_data;
-  wire        unused_core_fb_req;
+  wire [15:0] core_audio_l;
+  wire [15:0] core_audio_r;
+  wire [15:0] validation_audio_l;
+  wire [15:0] validation_audio_r;
+  wire        validation_audio_active;
+  wire        audio_sample_ce;
+  wire [15:0] audio_out_l;
+  wire [15:0] audio_out_r;
+  wire        audio_validation_enable;
 
   assign w_core_cfg_sw_reset = w_core_cfg_sw_reset_sync;
+  assign display_frame_idx_core = display_frame_idx_core_sync;
   assign irq_vsync_pulse_axi = fb_frame_pulse_toggle_axi_sync[2] ^ fb_frame_pulse_toggle_axi_sync[1];
   assign irq_error_pulse_axi = sys_err_pulse_toggle_axi_sync[2] ^ sys_err_pulse_toggle_axi_sync[1];
   assign sys_rom_loading_axi = sys_rom_loading_axi_sync;
+  assign physical_keys_axi = physical_keys_axi_sync;
+  assign debug_cpu_pc_axi = debug_cpu_pc_axi_sync;
+  assign debug_cpu_mixed_axi = debug_cpu_mixed_axi_sync;
+  assign debug_irq_axi = debug_irq_axi_sync;
+  assign debug_dma_axi = debug_dma_axi_sync;
+  assign debug_mem_axi = debug_mem_axi_sync;
+  assign audio_validation_enable = w_core_cfg_ctrl[6];
+  assign audio_out_l = validation_audio_active ? validation_audio_l : core_audio_l;
+  assign audio_out_r = validation_audio_active ? validation_audio_r : core_audio_r;
+  assign audio_l = audio_out_l;
+  assign audio_r = audio_out_r;
+  assign core_fb_newframe = core_fb_req && (core_fb_addr[19:0] == 20'd0);
+  assign dbg_chain_flags_axi = dbg_chain_flags_axi_sync;
+  assign dbg_chain_counts0_axi = dbg_chain_counts0_axi_sync;
+  assign dbg_chain_counts1_axi = dbg_chain_counts1_axi_sync;
+  assign dbg_ch1_first_addr_axi = dbg_ch1_first_addr_axi_sync;
+  assign dbg_ch1_first_meta_axi = dbg_ch1_first_meta_axi_sync;
+  assign dbg_ch1_last_addr_axi = dbg_ch1_last_addr_axi_sync;
+  assign dbg_ch1_last_meta_axi = dbg_ch1_last_meta_axi_sync;
+  assign dbg_ddr_first_addr_axi = dbg_ddr_first_addr_axi_sync;
+  assign dbg_ddr_first_meta_axi = dbg_ddr_first_meta_axi_sync;
+  assign dbg_ddr_last_addr_axi = dbg_ddr_last_addr_axi_sync;
+  assign dbg_ddr_last_meta_axi = dbg_ddr_last_meta_axi_sync;
+  assign dbg_axi_ar_first_addr_axi = dbg_axi_ar_first_addr_axi_sync;
+  assign dbg_axi_ar_first_meta_axi = dbg_axi_ar_first_meta_axi_sync;
+  assign dbg_axi_ar_last_addr_axi = dbg_axi_ar_last_addr_axi_sync;
+  assign dbg_axi_ar_last_meta_axi = dbg_axi_ar_last_meta_axi_sync;
+  assign dbg_axi_r_first_addr_axi = dbg_axi_r_first_addr_axi_sync;
+  assign dbg_axi_r_first_meta_axi = dbg_axi_r_first_meta_axi_sync;
+  assign dbg_axi_r_last_addr_axi = dbg_axi_r_last_addr_axi_sync;
+  assign dbg_axi_r_last_meta_axi = dbg_axi_r_last_meta_axi_sync;
+  assign dbg_done_first_addr_axi = dbg_done_first_addr_axi_sync;
+  assign dbg_done_first_meta_axi = dbg_done_first_meta_axi_sync;
+  assign dbg_done_last_addr_axi = dbg_done_last_addr_axi_sync;
+  assign dbg_done_last_meta_axi = dbg_done_last_meta_axi_sync;
+
+  function [7:0] sat_inc8;
+    input [7:0] value;
+    begin
+      sat_inc8 = (value == 8'hFF) ? value : (value + 8'd1);
+    end
+  endfunction
 
   always @(posedge clk_100) begin
     if (!rst_n) begin
       w_core_cfg_sw_reset_meta <= 1'b0;
       w_core_cfg_sw_reset_sync <= 1'b0;
+      display_frame_idx_core_meta <= 2'd0;
+      display_frame_idx_core_sync <= 2'd0;
       fb_frame_pulse_toggle    <= 1'b0;
       sys_err_pulse_toggle     <= 1'b0;
+      dbg_chain_flags_core     <= 32'd0;
+      dbg_chain_counts0_core   <= 32'd0;
+      dbg_chain_counts1_core   <= 32'd0;
+      dbg_ch1_first_addr_core  <= 32'd0;
+      dbg_ch1_first_meta_core  <= 32'd0;
+      dbg_ch1_last_addr_core   <= 32'd0;
+      dbg_ch1_last_meta_core   <= 32'd0;
+      dbg_ddr_first_addr_core  <= 32'd0;
+      dbg_ddr_first_meta_core  <= 32'd0;
+      dbg_ddr_last_addr_core   <= 32'd0;
+      dbg_ddr_last_meta_core   <= 32'd0;
+      dbg_axi_ar_first_addr_core <= 32'd0;
+      dbg_axi_ar_first_meta_core <= 32'd0;
+      dbg_axi_ar_last_addr_core <= 32'd0;
+      dbg_axi_ar_last_meta_core <= 32'd0;
+      dbg_axi_r_first_addr_core <= 32'd0;
+      dbg_axi_r_first_meta_core <= 32'd0;
+      dbg_axi_r_last_addr_core <= 32'd0;
+      dbg_axi_r_last_meta_core <= 32'd0;
+      dbg_done_first_addr_core <= 32'd0;
+      dbg_done_first_meta_core <= 32'd0;
+      dbg_done_last_addr_core <= 32'd0;
+      dbg_done_last_meta_core <= 32'd0;
+      dbg_pending_line_addr   <= 32'd0;
+      dbg_pending_lane        <= 2'd0;
+      dbg_pending_axi_ar_addr <= 32'd0;
+      dbg_last_axi_rresp      <= 2'd0;
+      dbg_last_axi_rlast      <= 1'b0;
     end else begin
       w_core_cfg_sw_reset_meta <= w_axi_cfg_sw_reset;
       w_core_cfg_sw_reset_sync <= w_core_cfg_sw_reset_meta;
+      display_frame_idx_core_meta <= w_axi_display_frame_idx;
+      display_frame_idx_core_sync <= display_frame_idx_core_meta;
 
       if (fb_frame_pulse) begin
         fb_frame_pulse_toggle <= ~fb_frame_pulse_toggle;
@@ -271,6 +469,130 @@ module zynq_gba_top #(
 
       if (sys_err_pulse_w) begin
         sys_err_pulse_toggle <= ~sys_err_pulse_toggle;
+      end
+
+      if (w_core_cfg_sw_reset) begin
+        dbg_chain_flags_core     <= 32'd0;
+        dbg_chain_counts0_core   <= 32'd0;
+        dbg_chain_counts1_core   <= 32'd0;
+        dbg_ch1_first_addr_core  <= 32'd0;
+        dbg_ch1_first_meta_core  <= 32'd0;
+        dbg_ch1_last_addr_core   <= 32'd0;
+        dbg_ch1_last_meta_core   <= 32'd0;
+        dbg_ddr_first_addr_core  <= 32'd0;
+        dbg_ddr_first_meta_core  <= 32'd0;
+        dbg_ddr_last_addr_core   <= 32'd0;
+        dbg_ddr_last_meta_core   <= 32'd0;
+        dbg_axi_ar_first_addr_core <= 32'd0;
+        dbg_axi_ar_first_meta_core <= 32'd0;
+        dbg_axi_ar_last_addr_core <= 32'd0;
+        dbg_axi_ar_last_meta_core <= 32'd0;
+        dbg_axi_r_first_addr_core <= 32'd0;
+        dbg_axi_r_first_meta_core <= 32'd0;
+        dbg_axi_r_last_addr_core <= 32'd0;
+        dbg_axi_r_last_meta_core <= 32'd0;
+        dbg_done_first_addr_core <= 32'd0;
+        dbg_done_first_meta_core <= 32'd0;
+        dbg_done_last_addr_core <= 32'd0;
+        dbg_done_last_meta_core <= 32'd0;
+        dbg_pending_line_addr   <= 32'd0;
+        dbg_pending_lane        <= 2'd0;
+        dbg_pending_axi_ar_addr <= 32'd0;
+        dbg_last_axi_rresp      <= 2'd0;
+        dbg_last_axi_rlast      <= 1'b0;
+      end else begin
+        if (ch1_req) begin
+          dbg_pending_line_addr <= {4'b0011, ch1_addr[27:3], 3'b000};
+          dbg_pending_lane <= ch1_addr[2:1];
+          if (!dbg_chain_flags_core[0]) begin
+            dbg_ch1_first_addr_core <= {4'b0011, ch1_addr[27:3], 3'b000};
+            dbg_ch1_first_meta_core <= {19'd0, display_frame_idx_core, ddram_busy, ch1_addr[2:1], dbg_chain_counts0_core[7:0]};
+            dbg_chain_flags_core[0] <= 1'b1;
+          end
+          dbg_ch1_last_addr_core <= {4'b0011, ch1_addr[27:3], 3'b000};
+          dbg_ch1_last_meta_core <= {19'd0, display_frame_idx_core, ddram_busy, ch1_addr[2:1], dbg_chain_counts0_core[7:0]};
+          dbg_chain_counts0_core[7:0] <= sat_inc8(dbg_chain_counts0_core[7:0]);
+        end
+
+        if (ddram_rd || ddram_we) begin
+          dbg_pending_line_addr <= {ddram_addr, 3'b000};
+          if (!dbg_chain_flags_core[1]) begin
+            dbg_ddr_first_addr_core <= {ddram_addr, 3'b000};
+            dbg_ddr_first_meta_core <= {13'd0, ddram_busy, ddram_we, ddram_rd, ddram_burstcnt, dbg_chain_counts0_core[15:8]};
+            dbg_chain_flags_core[1] <= 1'b1;
+          end
+          dbg_ddr_last_addr_core <= {ddram_addr, 3'b000};
+          dbg_ddr_last_meta_core <= {13'd0, ddram_busy, ddram_we, ddram_rd, ddram_burstcnt, dbg_chain_counts0_core[15:8]};
+          dbg_chain_counts0_core[15:8] <= sat_inc8(dbg_chain_counts0_core[15:8]);
+        end
+
+        if (M_AXI_ARVALID && M_AXI_ARREADY) begin
+          dbg_pending_axi_ar_addr <= M_AXI_ARADDR;
+          if (!dbg_chain_flags_core[2]) begin
+            dbg_axi_ar_first_addr_core <= M_AXI_ARADDR;
+            dbg_axi_ar_first_meta_core <= {10'd0, M_AXI_ARREADY, M_AXI_ARBURST, M_AXI_ARSIZE, M_AXI_ARLEN, dbg_chain_counts0_core[23:16]};
+            dbg_chain_flags_core[2] <= 1'b1;
+          end
+          dbg_axi_ar_last_addr_core <= M_AXI_ARADDR;
+          dbg_axi_ar_last_meta_core <= {10'd0, M_AXI_ARREADY, M_AXI_ARBURST, M_AXI_ARSIZE, M_AXI_ARLEN, dbg_chain_counts0_core[23:16]};
+          dbg_chain_counts0_core[23:16] <= sat_inc8(dbg_chain_counts0_core[23:16]);
+        end
+
+        if (M_AXI_RVALID && M_AXI_RREADY) begin
+          dbg_last_axi_rresp <= M_AXI_RRESP;
+          dbg_last_axi_rlast <= M_AXI_RLAST;
+          if (!dbg_chain_flags_core[3]) begin
+            dbg_axi_r_first_addr_core <= dbg_pending_axi_ar_addr;
+            dbg_axi_r_first_meta_core <= {21'd0, M_AXI_RLAST, M_AXI_RRESP, dbg_chain_counts0_core[31:24]};
+            dbg_chain_flags_core[3] <= 1'b1;
+          end
+          dbg_axi_r_last_addr_core <= dbg_pending_axi_ar_addr;
+          dbg_axi_r_last_meta_core <= {21'd0, M_AXI_RLAST, M_AXI_RRESP, dbg_chain_counts0_core[31:24]};
+          dbg_chain_counts0_core[31:24] <= sat_inc8(dbg_chain_counts0_core[31:24]);
+          if (M_AXI_RRESP != 2'b00) begin
+            dbg_chain_flags_core[7] <= 1'b1;
+          end
+        end
+
+        if (ddram_dout_ready) begin
+          dbg_chain_flags_core[4] <= 1'b1;
+          dbg_chain_counts1_core[7:0] <= sat_inc8(dbg_chain_counts1_core[7:0]);
+        end
+
+        if (sdram_read_done) begin
+          if (!dbg_chain_flags_core[5]) begin
+            dbg_done_first_addr_core <= dbg_pending_line_addr;
+            dbg_done_first_meta_core <= {17'd0, dbg_last_axi_rlast, dbg_last_axi_rresp, display_frame_idx_core, dbg_pending_lane, dbg_chain_counts1_core[15:8]};
+            dbg_chain_flags_core[5] <= 1'b1;
+          end
+          dbg_done_last_addr_core <= dbg_pending_line_addr;
+          dbg_done_last_meta_core <= {17'd0, dbg_last_axi_rlast, dbg_last_axi_rresp, display_frame_idx_core, dbg_pending_lane, dbg_chain_counts1_core[15:8]};
+          dbg_chain_counts1_core[15:8] <= sat_inc8(dbg_chain_counts1_core[15:8]);
+        end
+
+        if (sys_err_pulse_w) begin
+          dbg_chain_flags_core[6] <= 1'b1;
+          dbg_chain_counts1_core[23:16] <= sat_inc8(dbg_chain_counts1_core[23:16]);
+        end
+
+        // flags[21:8] = core_debug_internal sticky flags
+        // bit8=gbaon, 9=reset, 10=new_cycles_valid, 11=gba_step,
+        // 12=sleep_ss, 13=sleep_cheat, 14=sleep_rewind, 15=loading_ss,
+        // 16=settle, 17=pix_we_int, 18=cpu_done, 19=dma_on,
+        // 20=GBA_on_raw, 21=lockspeed
+        dbg_chain_flags_core[21:8] <= dbg_chain_flags_core[21:8] | core_debug_internal[13:0];
+
+        // counts1[27:24] = ddram_we 4-bit saturating counter
+        if (ddram_we) begin
+          if (dbg_chain_counts1_core[27:24] != 4'hF)
+            dbg_chain_counts1_core[27:24] <= dbg_chain_counts1_core[27:24] + 4'd1;
+        end
+
+        // counts1[31:28] = core_pixel_we 4-bit saturating counter
+        if (core_pixel_we) begin
+          if (dbg_chain_counts1_core[31:28] != 4'hF)
+            dbg_chain_counts1_core[31:28] <= dbg_chain_counts1_core[31:28] + 4'd1;
+        end
       end
     end
   end
@@ -287,6 +609,68 @@ module zynq_gba_top #(
       fb_frame_idx_axi_sync        <= 2'd0;
       sys_rom_loading_axi_meta     <= 1'b0;
       sys_rom_loading_axi_sync     <= 1'b0;
+      physical_keys_axi_meta       <= 10'd0;
+      physical_keys_axi_sync       <= 10'd0;
+      debug_cpu_pc_axi_meta        <= 32'd0;
+      debug_cpu_pc_axi_sync        <= 32'd0;
+      debug_cpu_mixed_axi_meta     <= 32'd0;
+      debug_cpu_mixed_axi_sync     <= 32'd0;
+      debug_irq_axi_meta           <= 32'd0;
+      debug_irq_axi_sync           <= 32'd0;
+      debug_dma_axi_meta           <= 32'd0;
+      debug_dma_axi_sync           <= 32'd0;
+      debug_mem_axi_meta           <= 32'd0;
+      debug_mem_axi_sync           <= 32'd0;
+      dbg_chain_flags_axi_meta     <= 32'd0;
+      dbg_chain_flags_axi_sync     <= 32'd0;
+      dbg_chain_counts0_axi_meta   <= 32'd0;
+      dbg_chain_counts0_axi_sync   <= 32'd0;
+      dbg_chain_counts1_axi_meta   <= 32'd0;
+      dbg_chain_counts1_axi_sync   <= 32'd0;
+      dbg_ch1_first_addr_axi_meta  <= 32'd0;
+      dbg_ch1_first_addr_axi_sync  <= 32'd0;
+      dbg_ch1_first_meta_axi_meta  <= 32'd0;
+      dbg_ch1_first_meta_axi_sync  <= 32'd0;
+      dbg_ch1_last_addr_axi_meta   <= 32'd0;
+      dbg_ch1_last_addr_axi_sync   <= 32'd0;
+      dbg_ch1_last_meta_axi_meta   <= 32'd0;
+      dbg_ch1_last_meta_axi_sync   <= 32'd0;
+      dbg_ddr_first_addr_axi_meta  <= 32'd0;
+      dbg_ddr_first_addr_axi_sync  <= 32'd0;
+      dbg_ddr_first_meta_axi_meta  <= 32'd0;
+      dbg_ddr_first_meta_axi_sync  <= 32'd0;
+      dbg_ddr_last_addr_axi_meta   <= 32'd0;
+      dbg_ddr_last_addr_axi_sync   <= 32'd0;
+      dbg_ddr_last_meta_axi_meta   <= 32'd0;
+      dbg_ddr_last_meta_axi_sync   <= 32'd0;
+      dbg_axi_ar_first_addr_axi_meta <= 32'd0;
+      dbg_axi_ar_first_addr_axi_sync <= 32'd0;
+      dbg_axi_ar_first_meta_axi_meta <= 32'd0;
+      dbg_axi_ar_first_meta_axi_sync <= 32'd0;
+      dbg_axi_ar_last_addr_axi_meta <= 32'd0;
+      dbg_axi_ar_last_addr_axi_sync <= 32'd0;
+      dbg_axi_ar_last_meta_axi_meta <= 32'd0;
+      dbg_axi_ar_last_meta_axi_sync <= 32'd0;
+      dbg_axi_r_first_addr_axi_meta <= 32'd0;
+      dbg_axi_r_first_addr_axi_sync <= 32'd0;
+      dbg_axi_r_first_meta_axi_meta <= 32'd0;
+      dbg_axi_r_first_meta_axi_sync <= 32'd0;
+      dbg_axi_r_last_addr_axi_meta <= 32'd0;
+      dbg_axi_r_last_addr_axi_sync <= 32'd0;
+      dbg_axi_r_last_meta_axi_meta <= 32'd0;
+      dbg_axi_r_last_meta_axi_sync <= 32'd0;
+      dbg_done_first_addr_axi_meta <= 32'd0;
+      dbg_done_first_addr_axi_sync <= 32'd0;
+      dbg_done_first_meta_axi_meta <= 32'd0;
+      dbg_done_first_meta_axi_sync <= 32'd0;
+      dbg_done_last_addr_axi_meta <= 32'd0;
+      dbg_done_last_addr_axi_sync <= 32'd0;
+      dbg_done_last_meta_axi_meta <= 32'd0;
+      dbg_done_last_meta_axi_sync <= 32'd0;
+      fbcap_frame_seq_axi_meta <= 32'd0;
+      fbcap_frame_seq_axi_sync <= 32'd0;
+      fbcap_frame_buf_idx_axi_meta <= 1'b0;
+      fbcap_frame_buf_idx_axi_sync <= 1'b0;
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
       sys_err_pulse_toggle_axi_sync  <= 3'b000;
     end else begin
@@ -296,10 +680,72 @@ module zynq_gba_top #(
       cycles_vsync_speed_axi_sync  <= cycles_vsync_speed_axi_meta;
       sys_err_vec_axi_meta         <= sys_err_vec_w;
       sys_err_vec_axi_sync         <= sys_err_vec_axi_meta;
-      fb_frame_idx_axi_meta        <= fb_frame_idx;
+      fb_frame_idx_axi_meta        <= display_frame_idx_core;
       fb_frame_idx_axi_sync        <= fb_frame_idx_axi_meta;
       sys_rom_loading_axi_meta     <= w_core_cfg_ctrl[8];
       sys_rom_loading_axi_sync     <= sys_rom_loading_axi_meta;
+      physical_keys_axi_meta       <= {2'b0, btns[1], btns[0], btns[2], btns[3], sws[3], sws[2], sws[1], sws[0]};
+      physical_keys_axi_sync       <= physical_keys_axi_meta;
+      debug_cpu_pc_axi_meta        <= unused_debug_cpu_pc;
+      debug_cpu_pc_axi_sync        <= debug_cpu_pc_axi_meta;
+      debug_cpu_mixed_axi_meta     <= unused_debug_cpu_mixed;
+      debug_cpu_mixed_axi_sync     <= debug_cpu_mixed_axi_meta;
+      debug_irq_axi_meta           <= unused_debug_irq;
+      debug_irq_axi_sync           <= debug_irq_axi_meta;
+      debug_dma_axi_meta           <= unused_debug_dma;
+      debug_dma_axi_sync           <= debug_dma_axi_meta;
+      debug_mem_axi_meta           <= unused_debug_mem;
+      debug_mem_axi_sync           <= debug_mem_axi_meta;
+      dbg_chain_flags_axi_meta     <= dbg_chain_flags_core;
+      dbg_chain_flags_axi_sync     <= dbg_chain_flags_axi_meta;
+      dbg_chain_counts0_axi_meta   <= dbg_chain_counts0_core;
+      dbg_chain_counts0_axi_sync   <= dbg_chain_counts0_axi_meta;
+      dbg_chain_counts1_axi_meta   <= dbg_chain_counts1_core;
+      dbg_chain_counts1_axi_sync   <= dbg_chain_counts1_axi_meta;
+      dbg_ch1_first_addr_axi_meta  <= dbg_ch1_first_addr_core;
+      dbg_ch1_first_addr_axi_sync  <= dbg_ch1_first_addr_axi_meta;
+      dbg_ch1_first_meta_axi_meta  <= dbg_ch1_first_meta_core;
+      dbg_ch1_first_meta_axi_sync  <= dbg_ch1_first_meta_axi_meta;
+      dbg_ch1_last_addr_axi_meta   <= dbg_ch1_last_addr_core;
+      dbg_ch1_last_addr_axi_sync   <= dbg_ch1_last_addr_axi_meta;
+      dbg_ch1_last_meta_axi_meta   <= dbg_ch1_last_meta_core;
+      dbg_ch1_last_meta_axi_sync   <= dbg_ch1_last_meta_axi_meta;
+      dbg_ddr_first_addr_axi_meta  <= dbg_ddr_first_addr_core;
+      dbg_ddr_first_addr_axi_sync  <= dbg_ddr_first_addr_axi_meta;
+      dbg_ddr_first_meta_axi_meta  <= dbg_ddr_first_meta_core;
+      dbg_ddr_first_meta_axi_sync  <= dbg_ddr_first_meta_axi_meta;
+      dbg_ddr_last_addr_axi_meta   <= dbg_ddr_last_addr_core;
+      dbg_ddr_last_addr_axi_sync   <= dbg_ddr_last_addr_axi_meta;
+      dbg_ddr_last_meta_axi_meta   <= dbg_ddr_last_meta_core;
+      dbg_ddr_last_meta_axi_sync   <= dbg_ddr_last_meta_axi_meta;
+      dbg_axi_ar_first_addr_axi_meta <= dbg_axi_ar_first_addr_core;
+      dbg_axi_ar_first_addr_axi_sync <= dbg_axi_ar_first_addr_axi_meta;
+      dbg_axi_ar_first_meta_axi_meta <= dbg_axi_ar_first_meta_core;
+      dbg_axi_ar_first_meta_axi_sync <= dbg_axi_ar_first_meta_axi_meta;
+      dbg_axi_ar_last_addr_axi_meta <= dbg_axi_ar_last_addr_core;
+      dbg_axi_ar_last_addr_axi_sync <= dbg_axi_ar_last_addr_axi_meta;
+      dbg_axi_ar_last_meta_axi_meta <= dbg_axi_ar_last_meta_core;
+      dbg_axi_ar_last_meta_axi_sync <= dbg_axi_ar_last_meta_axi_meta;
+      dbg_axi_r_first_addr_axi_meta <= dbg_axi_r_first_addr_core;
+      dbg_axi_r_first_addr_axi_sync <= dbg_axi_r_first_addr_axi_meta;
+      dbg_axi_r_first_meta_axi_meta <= dbg_axi_r_first_meta_core;
+      dbg_axi_r_first_meta_axi_sync <= dbg_axi_r_first_meta_axi_meta;
+      dbg_axi_r_last_addr_axi_meta <= dbg_axi_r_last_addr_core;
+      dbg_axi_r_last_addr_axi_sync <= dbg_axi_r_last_addr_axi_meta;
+      dbg_axi_r_last_meta_axi_meta <= dbg_axi_r_last_meta_core;
+      dbg_axi_r_last_meta_axi_sync <= dbg_axi_r_last_meta_axi_meta;
+      dbg_done_first_addr_axi_meta <= dbg_done_first_addr_core;
+      dbg_done_first_addr_axi_sync <= dbg_done_first_addr_axi_meta;
+      dbg_done_first_meta_axi_meta <= dbg_done_first_meta_core;
+      dbg_done_first_meta_axi_sync <= dbg_done_first_meta_axi_meta;
+      dbg_done_last_addr_axi_meta <= dbg_done_last_addr_core;
+      dbg_done_last_addr_axi_sync <= dbg_done_last_addr_axi_meta;
+      dbg_done_last_meta_axi_meta <= dbg_done_last_meta_core;
+      dbg_done_last_meta_axi_sync <= dbg_done_last_meta_axi_meta;
+      fbcap_frame_seq_axi_meta     <= fbcap_frame_seq;
+      fbcap_frame_seq_axi_sync     <= fbcap_frame_seq_axi_meta;
+      fbcap_frame_buf_idx_axi_meta <= fbcap_frame_buf_idx;
+      fbcap_frame_buf_idx_axi_sync <= fbcap_frame_buf_idx_axi_meta;
       fb_frame_pulse_toggle_axi_sync <= {fb_frame_pulse_toggle_axi_sync[1:0], fb_frame_pulse_toggle};
       sys_err_pulse_toggle_axi_sync  <= {sys_err_pulse_toggle_axi_sync[1:0], sys_err_pulse_toggle};
     end
@@ -334,6 +780,35 @@ module zynq_gba_top #(
     .stat_cycles_vsync_speed(cycles_vsync_speed_axi_sync),
     .stat_fb_underflow   (1'b0),
     .stat_fb_frame_idx   (fb_frame_idx_axi_sync),
+    .stat_physical_keys  (physical_keys_axi),
+    .stat_debug_cpu_pc   (debug_cpu_pc_axi),
+    .stat_debug_cpu_mixed(debug_cpu_mixed_axi),
+    .stat_debug_irq      (debug_irq_axi),
+    .stat_debug_dma      (debug_dma_axi),
+    .stat_debug_mem      (debug_mem_axi),
+    .stat_dbg_chain_flags(dbg_chain_flags_axi),
+    .stat_dbg_chain_counts0(dbg_chain_counts0_axi),
+    .stat_dbg_chain_counts1(dbg_chain_counts1_axi),
+    .stat_dbg_ch1_first_addr(dbg_ch1_first_addr_axi),
+    .stat_dbg_ch1_first_meta(dbg_ch1_first_meta_axi),
+    .stat_dbg_ch1_last_addr(dbg_ch1_last_addr_axi),
+    .stat_dbg_ch1_last_meta(dbg_ch1_last_meta_axi),
+    .stat_dbg_ddr_first_addr(dbg_ddr_first_addr_axi),
+    .stat_dbg_ddr_first_meta(dbg_ddr_first_meta_axi),
+    .stat_dbg_ddr_last_addr(dbg_ddr_last_addr_axi),
+    .stat_dbg_ddr_last_meta(dbg_ddr_last_meta_axi),
+    .stat_dbg_axi_ar_first_addr(dbg_axi_ar_first_addr_axi),
+    .stat_dbg_axi_ar_first_meta(dbg_axi_ar_first_meta_axi),
+    .stat_dbg_axi_ar_last_addr(dbg_axi_ar_last_addr_axi),
+    .stat_dbg_axi_ar_last_meta(dbg_axi_ar_last_meta_axi),
+    .stat_dbg_axi_r_first_addr(dbg_axi_r_first_addr_axi),
+    .stat_dbg_axi_r_first_meta(dbg_axi_r_first_meta_axi),
+    .stat_dbg_axi_r_last_addr(dbg_axi_r_last_addr_axi),
+    .stat_dbg_axi_r_last_meta(dbg_axi_r_last_meta_axi),
+    .stat_dbg_done_first_addr(dbg_done_first_addr_axi),
+    .stat_dbg_done_first_meta(dbg_done_first_meta_axi),
+    .stat_dbg_done_last_addr(dbg_done_last_addr_axi),
+    .stat_dbg_done_last_meta(dbg_done_last_meta_axi),
     .sys_rom_loading     (sys_rom_loading_axi), // 使用控制寄存器位 8 标识加载状态
     .sys_error_in        (sys_err_vec_axi_sync),
     .irq_vsync_pulse     (irq_vsync_pulse_axi),
@@ -344,8 +819,11 @@ module zynq_gba_top #(
     .cfg_max_pak_addr    (w_axi_cfg_max_pak_addr),
     .cfg_cycle_precalc   (w_axi_cfg_cycle_precalc),
     .cfg_rtc_timestamp   (w_axi_cfg_rtc_timestamp),
+    .cfg_display_frame_idx(w_axi_display_frame_idx),
     .cfg_sw_reset        (w_axi_cfg_sw_reset),
-    .cfg_commit_toggle   (w_axi_cfg_commit_toggle)
+    .cfg_commit_toggle   (w_axi_cfg_commit_toggle),
+    .stat_fbcap_frame_seq(fbcap_frame_seq_axi_sync),
+    .stat_fbcap_frame_buf_idx(fbcap_frame_buf_idx_axi_sync)
   );
 
   gba_config_mgr u_config_mgr (
@@ -373,19 +851,31 @@ module zynq_gba_top #(
   
   i2s_transmitter u_audio_out (
     .clk_100               (clk_100),
-    .audio_l               (audio_l),
-    .audio_r               (audio_r),
+    .rst_n                 (rst_n),
+    .audio_l               (audio_out_l),
+    .audio_r               (audio_out_r),
     .ac_mclk               (ac_mclk),
     .ac_bclk               (ac_bclk),
     .ac_pblrc              (ac_pblrc),
     .ac_pbdat              (ac_pbdat),
-    .ac_muten              (ac_muten)
+    .ac_muten              (ac_muten),
+    .sample_ce             (audio_sample_ce)
+  );
+
+  audio_validation_tone u_audio_validation_tone (
+    .clk_100               (clk_100),
+    .rst_n                 (rst_n),
+    .enable                (audio_validation_enable),
+    .sample_ce             (audio_sample_ce),
+    .audio_l               (validation_audio_l),
+    .audio_r               (validation_audio_r),
+    .active                (validation_audio_active)
   );
 
   // 系统统计/指示灯映射
-  assign leds[0] = audio_l[15];          // 播放活动指示
+  assign leds[0] = audio_out_l[15];      // 播放活动指示
   assign leds[1] = ddram_busy;           // 内存活动指示
-  assign leds[2] = |{audio_l, audio_r};  // 音频信号检测
+  assign leds[2] = |{audio_out_l, audio_out_r};  // 音频信号检测
   assign leds[3] = w_core_cfg_sw_reset;  // 软复位状态指示
 
   // ==========================================================================
@@ -501,23 +991,42 @@ module zynq_gba_top #(
     .pixel_out_data        (core_pixel_data),
     .pixel_out_we          (core_pixel_we),
 
-    // 视频流输出：改为使用原生 240x160 像素流，在顶层做轻量 2x framebuffer 写入
+    // 复用 core 内部原生的 largeimg 打包链路，让 framebuffer 写入
+    // 与上游 MiSTer 参考实现保持一致。
     .largeimg_out_base     (unused_core_fb_base),
-    .largeimg_out_addr     (unused_core_fb_addr),
-    .largeimg_out_data     (unused_core_fb_data),
-    .largeimg_out_req      (unused_core_fb_req),
-    .largeimg_out_done     (1'b0),
-    .largeimg_newframe     (1'b0),
+    .largeimg_out_addr     (core_fb_addr),
+    .largeimg_out_data     (core_fb_data),
+    .largeimg_out_req      (core_fb_req),
+    .largeimg_out_done     (core_fb_done),
+    .largeimg_newframe     (core_fb_newframe),
     .largeimg_singlebuf    (1'b0),
 
     // 音频流输出
-    .sound_out_left        (audio_l),
-    .sound_out_right       (audio_r),
+    .sound_out_left        (core_audio_l),
+    .sound_out_right       (core_audio_r),
     .debug_cpu_pc          (unused_debug_cpu_pc),
     .debug_cpu_mixed       (unused_debug_cpu_mixed),
     .debug_irq             (unused_debug_irq),
     .debug_dma             (unused_debug_dma),
-    .debug_mem             (unused_debug_mem)
+    .debug_mem             (unused_debug_mem),
+    .debug_internal         (core_debug_internal)
+  );
+
+  gba_frame_capture_bram u_fb_capture (
+    .wr_clk            (clk_100),
+    .wr_rst_n          (rst_n),
+    .pixel_addr        (core_pixel_addr),
+    .pixel_data        (core_pixel_data),
+    .pixel_we          (core_pixel_we),
+    .frame_seq         (fbcap_frame_seq),
+    .frame_buf_idx     (fbcap_frame_buf_idx),
+    .bram_clk_b        (fb_cap_bram_clk),
+    .bram_rst_b        (fb_cap_bram_rst),
+    .bram_en_b         (fb_cap_bram_en),
+    .bram_we_b         (fb_cap_bram_we),
+    .bram_addr_b       (fb_cap_bram_addr),
+    .bram_din_b        (fb_cap_bram_din),
+    .bram_dout_b       (fb_cap_bram_dout)
   );
 
   // 内存仲裁与总线打包
@@ -585,22 +1094,26 @@ module zynq_gba_top #(
   // --- 第四层：视频时序单元 (Video Sequencer) ---
   // ==========================================================================
   // 责任：帧脉冲生成及 framebuffer 到 DDR 的写请求仲裁
+  //
+  // 使用 gba_top 内部的 largeimg 打包链路（已含 2x 垂直缩放和 64-bit 像素
+  // 打包），通过 fb_largeimg_bridge 映射到 Zynq framebuffer 布局，再经
+  // fb_ddr_arbiter 写入 DDR。core_fb_done 连回 wr_ack 以节流 largeimg
+  // 状态机，保证每笔 DDR 写入完成后才发起下一笔。
 
-  frame_tick_480p u_frame_tick (
-    .clk(clk_100), .rst_n(rst_n),
-    .frame_pulse(fb_frame_pulse), .frame_idx(fb_frame_idx)
-  );
+  // 帧脉冲：由 largeimg 链路检测帧起始（像素地址低 20 位归零）产生，
+  // 替代之前的自由计数器，与实际帧内容同步。
+  assign fb_frame_pulse = core_fb_newframe;
 
-  fb_native_scale_writer u_fb_writer (
-    .clk       (clk_100),
-    .rst_n     (rst_n),
-    .pixel_addr(core_pixel_addr),
-    .pixel_data(core_pixel_data),
-    .pixel_we  (core_pixel_we),
-    .wr_addr   (fb_wr_addr),
-    .wr_data   (fb_wr_data),
-    .wr_req    (fb_wr_req),
-    .wr_ack    (fb_wr_ack)
+  fb_largeimg_bridge u_fb_bridge (
+    .clk              (clk_100),
+    .rst_n            (rst_n),
+    .display_frame_idx(display_frame_idx_core),
+    .largeimg_addr    (core_fb_addr),
+    .largeimg_data    (core_fb_data),
+    .largeimg_req     (1'b0),
+    .wr_addr          (fb_wr_addr),
+    .wr_data          (fb_wr_data),
+    .wr_req           (fb_wr_req)
   );
 
   fb_ddr_arbiter u_fb_arb (
@@ -608,5 +1121,8 @@ module zynq_gba_top #(
     .wr_addr(fb_wr_addr), .wr_data(fb_wr_data), .wr_req(fb_wr_req), .wr_ack(fb_wr_ack),
     .ch5_addr(ch5_addr), .ch5_din(ch5_din), .ch5_req(ch5_req), .ch5_rnw(ch5_rnw), .ch5_ready(ch5_ready)
   );
+
+  // 将 DDR 写确认反馈给 gba_top 的 largeimg_out_done，节流状态机。
+  assign core_fb_done = 1'b1;
 
 endmodule

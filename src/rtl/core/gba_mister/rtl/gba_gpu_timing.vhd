@@ -113,6 +113,7 @@ begin
                      REG_DISPSTAT_V_Blank_flag;
    
    process (clk100)
+      variable cycles_work : unsigned(11 downto 0);
    begin
       if rising_edge(clk100) then
       
@@ -155,24 +156,25 @@ begin
             --    GBRegs.Sect_display.DISPSTAT_H_Blank_flag.write(0);
             -- end if;
          
+            cycles_work := cycles;
             if (new_cycles_valid = '1') then
-               cycles <= cycles + new_cycles;
-            else
-            
-               case (gpustate) is
+               cycles_work := cycles + new_cycles;
+            end if;
+
+            case (gpustate) is
                   when VISIBLE =>
-                     if ((lockspeed = '0' or cycles >= 160)) then
+                     if ((lockspeed = '0' or cycles_work >= 160)) then
                         if (lockspeed = '1') then
-                           pixelpos  <= (to_integer(cycles) / 2) - 80;
+                           pixelpos  <= (to_integer(cycles_work) / 2) - 80;
                         end if;
                         if (drawsoon = '1') then
                            drawline  <= '1';
                            drawsoon  <= '0';
                         end if;
                      end if;
-                     if (cycles >= 1008) then -- 960 is drawing time
+                     if (cycles_work >= 1008) then -- 960 is drawing time
                         pixelpos                  <= 240;
-                        cycles                    <= cycles - 1008;
+                        cycles_work               := cycles_work - 1008;
                         gpustate                  <= HBLANK;
                         REG_DISPSTAT_H_Blank_flag <= "1";
                         hblank_trigger            <= '1';
@@ -185,8 +187,8 @@ begin
                      end if;
                   
                   when HBLANK =>
-                     if (cycles >= 224) then -- 272
-                        cycles      <= cycles - 224;
+                     if (cycles_work >= 224) then -- 272
+                        cycles_work := cycles_work - 224;
                         linecounter <= linecounter + 1;
                         if ((linecounter + 1) = unsigned(REG_DISPSTAT_V_Count_Setting)) then
                            if (REG_DISPSTAT_V_Counter_IRQ_Enable = "1") then
@@ -215,8 +217,8 @@ begin
                      end if;
                   
                   when VBLANK =>
-                     if (cycles >= 1008) then
-                        cycles                     <= cycles - 1008;
+                     if (cycles_work >= 1008) then
+                        cycles_work                := cycles_work - 1008;
                         gpustate                   <= VBLANKHBLANK;
                         REG_DISPSTAT_H_Blank_flag  <= "1";
                         newline_invsync            <= '1';
@@ -233,8 +235,8 @@ begin
                      end if;
                   
                   when VBLANKHBLANK =>
-                     if (cycles >= 224) then -- 272
-                        cycles      <= cycles - 224;
+                     if (cycles_work >= 224) then -- 272
+                        cycles_work := cycles_work - 224;
                         linecounter <= linecounter + 1;
                         if ((linecounter + 1) = unsigned(REG_DISPSTAT_V_Count_Setting) or ((linecounter + 1) = 228 and REG_DISPSTAT_V_Count_Setting = x"00")) then
                            if (REG_DISPSTAT_V_Counter_IRQ_Enable = "1") then
@@ -261,8 +263,8 @@ begin
                      end if;
                
                end case;
-         
-            end if;
+
+            cycles <= cycles_work;
          
          end if;
       

@@ -137,7 +137,9 @@ entity gba_top is
       debug_cpu_mixed       : out    std_logic_vector(31 downto 0);
       debug_irq             : out    std_logic_vector(31 downto 0);
       debug_dma             : out    std_logic_vector(31 downto 0);
-      debug_mem             : out    std_logic_vector(31 downto 0)  
+      debug_mem             : out    std_logic_vector(31 downto 0);
+      -- 内部诊断端口：暴露关键控制信号到顶层用于硬件调试
+      debug_internal        : out    std_logic_vector(31 downto 0)
    );
 end entity;
 
@@ -390,6 +392,41 @@ begin
    pixel_out_addr <= pixel_out_addr_int;
    pixel_out_data <= pixel_out_data_int;
    pixel_out_we   <= pixel_out_we_int;
+
+   -- debug_internal 信号打包：暴露关键内部控制信号
+   -- bit 0: gbaon (registered GBA_on)
+   -- bit 1: reset (from savestate module, single-cycle pulse)
+   -- bit 2: new_cycles_valid (CPU producing cycles for GPU)
+   -- bit 3: gba_step (CPU stepping enabled)
+   -- bit 4: sleep_savestate
+   -- bit 5: sleep_cheats
+   -- bit 6: sleep_rewind
+   -- bit 7: loading_savestate
+   -- bit 8: settle (from statemanager)
+   -- bit 9: pixel_out_we_int
+   -- bit 10: cpu_done
+   -- bit 11: dma_on
+   -- bit 12: GBA_on (raw input, before register)
+   -- bit 13: GBA_lockspeed
+   -- bit[23:16]: new_cycles(7:0) snapshot
+   -- bit[31:24]: cycles_ahead(7:0) snapshot
+   debug_internal(0)  <= gbaon;
+   debug_internal(1)  <= reset;
+   debug_internal(2)  <= new_cycles_valid;
+   debug_internal(3)  <= gba_step;
+   debug_internal(4)  <= sleep_savestate;
+   debug_internal(5)  <= sleep_cheats;
+   debug_internal(6)  <= sleep_rewind;
+   debug_internal(7)  <= loading_savestate;
+   debug_internal(8)  <= settle;
+   debug_internal(9)  <= pixel_out_we_int;
+   debug_internal(10) <= cpu_done;
+   debug_internal(11) <= dma_on;
+   debug_internal(12) <= GBA_on;
+   debug_internal(13) <= GBA_lockspeed;
+   debug_internal(15 downto 14) <= (others => '0');
+   debug_internal(23 downto 16) <= std_logic_vector(new_cycles);
+   debug_internal(31 downto 24) <= std_logic_vector(to_unsigned(cycles_ahead mod 256, 8));
 
    -- dummy modules
    igba_reservedregs : entity work.gba_reservedregs
@@ -1086,9 +1123,10 @@ begin
       bEna     => open
    );
 
-   debug_irq(15 downto 0) <= IRPFLags;
-   debug_irq(16) <= REG_IME(0);
-   debug_irq(31 downto 17) <= (others => '0');
+   debug_irq(15 downto 0)  <= IRPFLags;
+   debug_irq(16)           <= REG_IME(0);
+   debug_irq(24 downto 17) <= DISPSTAT_debug(23 downto 16); -- VCOUNT
+   debug_irq(31 downto 25) <= DISPSTAT_debug(6 downto 0);   -- DISPSTAT low flags/IRQ enable bits
 
    ------------- interrupt
    process (clk100)
@@ -1288,7 +1326,10 @@ begin
          case (state) is
          
             when IDLE =>
-               if (pixel_out_y_1 /= pixel_out_y_int and pixel_write_ena = '1' and (hdmode2x_bg = '1' or hdmode2x_obj = '1')) then
+               -- largeimg_out_* is reused by the external HDMI framebuffer path
+               -- even when hdmode2x is disabled, so the line packer must keep
+               -- draining completed 480x320 line pairs in normal mode too.
+               if (pixel_out_y_1 /= pixel_out_y_int and pixel_write_ena = '1') then
                   pixel_out_y_1     <= pixel_out_y_int;
                   state             <= READPIXEL;
                   pixelpos          <= 0;
