@@ -6,13 +6,33 @@
 #include "task.h"
 #include "sleep.h"
 #include "xaxivdma_hw.h"
+#include "xil_io.h"
 #include "xparameters.h"
 #include "xuartps.h"
 #include "xil_printf.h"
 
 #include "Diagnostics/Inc/ps_app_diag.h"
+#include "Save/Inc/ps_app_save.h"
 #include "Video/Inc/ps_app_video.h"
 #include "Rom/Inc/ps_rom_loader.h"
+
+/*
+ * 这里显式保留 MIO50/MIO51 的 SLCR 地址，是为了在应用启动阶段兜底覆盖
+ * 旧 platform/ps7_init 残留的错误配置。实测错误配置会把 BTN4/BTN5 钉死，
+ * 导致 raw50/raw51 始终不变，UART 侧也看不到按键边沿。
+ */
+#define PS_APP_SLCR_LOCK_ADDR          0xF8000004U
+#define PS_APP_SLCR_UNLOCK_ADDR        0xF8000008U
+#define PS_APP_SLCR_LOCK_CODE          0x0000767BU
+#define PS_APP_SLCR_UNLOCK_CODE        0x0000DF0DU
+#define PS_APP_MIO50_CFG_ADDR          0xF80007C8U
+#define PS_APP_MIO51_CFG_ADDR          0xF80007CCU
+#define PS_APP_MIO_GPIO_INPUT_CFG      0x00000200U
+#define PS_APP_AUDIO_VOLUME_MAX        100U
+#define PS_APP_AUDIO_VOLUME_STEP       5U
+#define PS_APP_AUDIO_DEFAULT_VOLUME    95U
+#define PS_APP_AUDIO_CODEC_MIN_VOLUME  0x5FU
+#define PS_APP_AUDIO_CODEC_MAX_VOLUME  0x7FU
 
 static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
     size_t src_len;
@@ -34,6 +54,7 @@ static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
     memcpy(dst, src, src_len);
     dst[src_len] = '\0';
 }
+
 static int PsAppRuntime_ResolveRomPath(const char *input,
                                        char *resolved_path,
                                        size_t resolved_path_size) {
@@ -66,6 +87,7 @@ static int PsAppRuntime_ResolveRomPath(const char *input,
     resolved_path[input_len + 3U] = '\0';
     return 0;
 }
+
 static void PsAppRuntime_PrintPhysicalKeys(u32 keys_mask) {
     static const char *kNames[10] = {
         "A", "B", "SELECT", "START", "RIGHT",
@@ -88,6 +110,226 @@ static void PsAppRuntime_PrintPhysicalKeys(u32 keys_mask) {
     xil_printf("\r\n");
 }
 
+static void PsAppRuntime_PrintPsButtons(u32 ps_btn_mask) {
+    xil_printf("[BTN] ps BTN4=%u BTN5=%u mask=0x%02x\r\n",
+               (unsigned int)((ps_btn_mask & PS_APP_BTN4_MASK) != 0U),
+               (unsigned int)((ps_btn_mask & PS_APP_BTN5_MASK) != 0U),
+               (unsigned int)(ps_btn_mask & (PS_APP_BTN4_MASK | PS_APP_BTN5_MASK)));
+}
+
+static u8 PsAppRuntime_ClampAudioVolumePercent(u32 volume_percent) {
+    if (volume_percent > PS_APP_AUDIO_VOLUME_MAX) {
+        return (u8)PS_APP_AUDIO_VOLUME_MAX;
+    }
+    return (u8)volume_percent;
+}
+
+static u8 PsAppRuntime_EncodeCodecVolume(u8 volume_percent) {
+    u32 codec_range;
+
+    if (volume_percent == 0U) {
+        return PS_APP_AUDIO_CODEC_MIN_VOLUME;
+    }
+
+    /*
+     * 这个板子的 codec 实际可用听感主要集中在较高的耳机音量寄存器区间。
+     * 如果把 0-100 线性映射到整个 0x00-0x7F，像 volume=45 这样的中档位
+     * 会过早落到几乎听不见的衰减区。因此这里改为：
+     * 1) volume=0 仍由上层静音逻辑处理；
+     * 2) volume=1..100 只映射到更实用的可听区间 [0x5F, 0x7F]。
+     */
+    codec_range = (u32)PS_APP_AUDIO_CODEC_MAX_VOLUME - (u32)PS_APP_AUDIO_CODEC_MIN_VOLUME;
+    return (u8)((u32)PS_APP_AUDIO_CODEC_MIN_VOLUME +
+                (((u32)volume_percent * codec_range) + (PS_APP_AUDIO_VOLUME_MAX / 2U)) /
+                    PS_APP_AUDIO_VOLUME_MAX);
+}
+
+/*
+ * Zybo Z7-20 上这两个 PS 按键最终应工作在 0x00000200 配置下。
+ * 如果启动后仍保留旧的 0x00001201，按钮输入会被内部上拉扰乱，
+ * 所以这里在 XGpioPs 初始化完成后再强制写一次，确保应用层读到真实电平。
+ */
+static void PsAppRuntime_ForcePsButtonMioConfig(void) {
+    Xil_Out32(PS_APP_SLCR_UNLOCK_ADDR, PS_APP_SLCR_UNLOCK_CODE);
+    Xil_Out32(PS_APP_MIO50_CFG_ADDR, PS_APP_MIO_GPIO_INPUT_CFG);
+    Xil_Out32(PS_APP_MIO51_CFG_ADDR, PS_APP_MIO_GPIO_INPUT_CFG);
+    Xil_Out32(PS_APP_SLCR_LOCK_ADDR, PS_APP_SLCR_LOCK_CODE);
+}
+
+/*
+ * 这个调试接口保留 raw50/raw51、bank1、dir1、outen1 和 mio50/mio51，
+ * 是为了以后再次遇到“按键没反应”时，能够一步区分：
+ * 1) 应用逻辑问题；
+ * 2) GPIO 方向/输出使能问题；
+ * 3) MIO/SLCR 配置残留问题。
+ */
+void PsAppRuntime_ReadPsButtonRawLevels(PsAppRuntimeContext *ctx,
+                                        u32 *btn4_level,
+                                        u32 *btn5_level,
+                                        u32 *bank1_data,
+                                        u32 *bank1_dir,
+                                        u32 *bank1_outen,
+                                        u32 *mio50_cfg,
+                                        u32 *mio51_cfg) {
+    if (btn4_level != NULL) {
+        *btn4_level = 0U;
+    }
+    if (btn5_level != NULL) {
+        *btn5_level = 0U;
+    }
+    if (bank1_data != NULL) {
+        *bank1_data = 0U;
+    }
+    if (bank1_dir != NULL) {
+        *bank1_dir = 0U;
+    }
+    if (bank1_outen != NULL) {
+        *bank1_outen = 0U;
+    }
+    if (mio50_cfg != NULL) {
+        *mio50_cfg = 0U;
+    }
+    if (mio51_cfg != NULL) {
+        *mio51_cfg = 0U;
+    }
+
+    if ((ctx == NULL) || (ctx->ps_gpio == NULL) || (ctx->ps_gpio_ready == 0U)) {
+        return;
+    }
+
+#if defined(XPAR_XGPIOPS_0_BASEADDR) || defined(XPAR_XGPIOPS_0_DEVICE_ID)
+    if (btn4_level != NULL) {
+        *btn4_level = XGpioPs_ReadPin(ctx->ps_gpio, PS_APP_BTN4_MIO_PIN);
+    }
+    if (btn5_level != NULL) {
+        *btn5_level = XGpioPs_ReadPin(ctx->ps_gpio, PS_APP_BTN5_MIO_PIN);
+    }
+    if (bank1_data != NULL) {
+        *bank1_data = XGpioPs_Read(ctx->ps_gpio, XGPIOPS_BANK1);
+    }
+    if (bank1_dir != NULL) {
+        *bank1_dir = XGpioPs_GetDirection(ctx->ps_gpio, XGPIOPS_BANK1);
+    }
+    if (bank1_outen != NULL) {
+        *bank1_outen = XGpioPs_GetOutputEnable(ctx->ps_gpio, XGPIOPS_BANK1);
+    }
+    if (mio50_cfg != NULL) {
+        *mio50_cfg = Xil_In32(PS_APP_MIO50_CFG_ADDR);
+    }
+    if (mio51_cfg != NULL) {
+        *mio51_cfg = Xil_In32(PS_APP_MIO51_CFG_ADDR);
+    }
+#endif
+}
+
+u32 PsAppRuntime_ReadPsButtonMask(PsAppRuntimeContext *ctx) {
+    u32 ps_btn_mask;
+
+    if ((ctx == NULL) || (ctx->ps_gpio == NULL) || (ctx->ps_gpio_ready == 0U)) {
+        return 0U;
+    }
+
+    ps_btn_mask = 0U;
+#if defined(XPAR_XGPIOPS_0_BASEADDR) || defined(XPAR_XGPIOPS_0_DEVICE_ID)
+    /*
+     * 当前板上修复后的实际行为是：空闲为低电平，按下为高电平。
+     * 因此这里按 active-high 解释 BTN4/BTN5，和 raw50/raw51 的诊断输出保持一致。
+     */
+    if (XGpioPs_ReadPin(ctx->ps_gpio, PS_APP_BTN4_MIO_PIN) != 0U) {
+        ps_btn_mask |= PS_APP_BTN4_MASK;
+    }
+    if (XGpioPs_ReadPin(ctx->ps_gpio, PS_APP_BTN5_MIO_PIN) != 0U) {
+        ps_btn_mask |= PS_APP_BTN5_MASK;
+    }
+#endif
+    return ps_btn_mask;
+}
+
+XStatus PsAppRuntime_ApplyAudioOutputState(PsAppRuntimeContext *ctx) {
+    XStatus status;
+    u8 codec_volume;
+    u8 effective_mute;
+
+    if ((ctx == NULL) || (ctx->audio == NULL)) {
+        return XST_FAILURE;
+    }
+
+    ctx->audio->volume = PsAppRuntime_ClampAudioVolumePercent(ctx->audio->volume);
+    if ((ctx->codec == NULL) || (ctx->codec->is_ready == 0U)) {
+        return XST_SUCCESS;
+    }
+
+    codec_volume = PsAppRuntime_EncodeCodecVolume(ctx->audio->volume);
+    status = PsAudioCodec_SetHeadphoneVolume(ctx->codec, codec_volume);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+
+    effective_mute = ((ctx->audio->mute != 0U) || (ctx->audio->volume == 0U)) ? 1U : 0U;
+    return PsAudioCodec_SetMute(ctx->codec, effective_mute);
+}
+
+XStatus PsAppRuntime_SetAudioVolume(PsAppRuntimeContext *ctx, u32 volume_percent) {
+    XStatus status;
+
+    if ((ctx == NULL) || (ctx->audio == NULL)) {
+        return XST_FAILURE;
+    }
+
+    ctx->audio->volume = PsAppRuntime_ClampAudioVolumePercent(volume_percent);
+    status = PsAppRuntime_ApplyAudioOutputState(ctx);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+
+    return XST_SUCCESS;
+}
+
+XStatus PsAppRuntime_InitPsGpio(PsAppRuntimeContext *ctx) {
+    XStatus status;
+#if defined(XPAR_XGPIOPS_0_BASEADDR) || defined(XPAR_XGPIOPS_0_DEVICE_ID)
+    XGpioPs_Config *cfg;
+#endif
+
+    if ((ctx == NULL) || (ctx->ps_gpio == NULL)) {
+        return XST_FAILURE;
+    }
+
+    ctx->ps_gpio_ready = 0U;
+    ctx->ps_btn_last_mask = 0U;
+
+#if defined(XPAR_XGPIOPS_0_BASEADDR) || defined(XPAR_XGPIOPS_0_DEVICE_ID)
+#if defined(SDT)
+    cfg = XGpioPs_LookupConfig(XPAR_XGPIOPS_0_BASEADDR);
+#else
+    cfg = XGpioPs_LookupConfig(XPAR_XGPIOPS_0_DEVICE_ID);
+#endif
+    if (cfg == NULL) {
+        return XST_FAILURE;
+    }
+
+    status = XGpioPs_CfgInitialize(ctx->ps_gpio, cfg, cfg->BaseAddr);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+
+    PsAppRuntime_ForcePsButtonMioConfig();
+
+    XGpioPs_SetDirectionPin(ctx->ps_gpio, PS_APP_BTN4_MIO_PIN, 0U);
+    XGpioPs_SetOutputEnablePin(ctx->ps_gpio, PS_APP_BTN4_MIO_PIN, 0U);
+    XGpioPs_SetDirectionPin(ctx->ps_gpio, PS_APP_BTN5_MIO_PIN, 0U);
+    XGpioPs_SetOutputEnablePin(ctx->ps_gpio, PS_APP_BTN5_MIO_PIN, 0U);
+
+    ctx->ps_gpio_ready = 1U;
+    ctx->ps_btn_last_mask = PsAppRuntime_ReadPsButtonMask(ctx);
+    return XST_SUCCESS;
+#else
+    (void)status;
+    xil_printf("[INIT] 8 warning: BSP has no XGPIOPS instance, regenerate platform from updated XSA\r\n");
+    return XST_SUCCESS;
+#endif
+}
+
 static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->config->ctrl =
         (PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL) | PS_APP_GBA_CTRL_BOOT_REQUIRED) &
@@ -101,8 +343,7 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->audio->sample_rate_hz = 48000U;
     ctx->audio->bits_per_sample = 16U;
     ctx->audio->mute = 0U;
-    ctx->audio->volume = 0x79U;
-    ctx->audio->tone_enable = 1U;
+    ctx->audio->volume = (u8)PS_APP_AUDIO_DEFAULT_VOLUME;
 
     ctx->video->display_frame_idx = 0xFFU;
     ctx->video->pending_frame_idx = 0xFFU;
@@ -115,6 +356,16 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->rom->size_bytes = 0U;
     ctx->rom->size_aligned = 0U;
     ctx->rom->path[0] = '\0';
+
+    ctx->save->event_counters = 0U;
+    ctx->save->flush_count = 0U;
+    ctx->save->quiet_ticks = 0U;
+    ctx->save->last_bytes = 0U;
+    ctx->save->last_checksum = 0U;
+    ctx->save->active_kind = PS_APP_SAVE_KIND_NONE;
+    ctx->save->dirty = 0U;
+    ctx->save->loaded_from_sd = 0U;
+    ctx->save->path[0] = '\0';
 
     ctx->diag->last_runtime_irq_sts = 0U;
     ctx->diag->last_physical_keys = 0U;
@@ -134,6 +385,8 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->diag->fbscan_tick = 0U;
     ctx->diag->fbscan_dump_count = 0U;
     ctx->diag->fbscan_last_anomaly_tick = 0U;
+    ctx->ps_gpio_ready = 0U;
+    ctx->ps_btn_last_mask = 0U;
 }
 
 static XStatus PsAppRuntime_AutoloadDefaultRom(PsAppRuntimeContext *ctx) {
@@ -199,12 +452,7 @@ XStatus PsAppRuntime_ProgramAudio(PsAppRuntimeContext *ctx) {
         return status;
     }
 
-    status = PsAudioCodec_SetHeadphoneVolume(ctx->codec, ctx->audio->volume);
-    if (status != XST_SUCCESS) {
-        return status;
-    }
-
-    return PsAudioCodec_SetMute(ctx->codec, ctx->audio->mute);
+    return PsAppRuntime_ApplyAudioOutputState(ctx);
 }
 
 XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *requested_path) {
@@ -259,6 +507,10 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
         return status;
     }
 
+    if (PsAppSave_PrepareForRom(ctx->save_ctx, resolved_path) != XST_SUCCESS) {
+        xil_printf("[SAVE] preload skipped\r\n");
+    }
+
     ctx->config->max_pak_addr = load_result.max_pak_addr & 0x1FFFFFFU;
     ctx->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
     ctx->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED);
@@ -303,6 +555,7 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
     xil_printf("[INIT] 1: gba regs bootstrap\r\n");
     PsGbaRegs_Init(ctx->regs, XPAR_ZYNQ_GBA_TOP_0_BASEADDR);
     PsAppRuntime_InitDefaults(ctx);
+    PsAppSave_Reset(ctx->save_ctx);
     PsAppRuntime_ApplyShadowConfig(ctx);
     PsGbaRegs_SetIrqEnable(ctx->regs, ctx->config->irq_enable);
     PsGbaRegs_ClearIrqStatus(ctx->regs, PS_APP_IRQ_MASK_VSYNC | PS_APP_IRQ_MASK_ERROR);
@@ -369,7 +622,16 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
         }
     }
 
-    xil_printf("[INIT] 8: boot audio cue armed=%u\r\n", (unsigned int)ctx->audio->tone_enable);
+    xil_printf("[INIT] 8: ps gpio BTN4/BTN5 init\r\n");
+    status = PsAppRuntime_InitPsGpio(ctx);
+    if (status != XST_SUCCESS) {
+        xil_printf("[INIT] 8 failed: %d\r\n", status);
+        return status;
+    }
+    if (ctx->ps_gpio_ready != 0U) {
+        PsAppRuntime_PrintPsButtons(ctx->ps_btn_last_mask);
+    }
+
     xil_printf("[INIT] 8.1: input map BTN3/2/1/0=left/up/down/right SW3/2/1/0=select(start-mod)/start/b/a SW3+BTN3=L SW3+BTN0=R\r\n");
     xil_printf("[INIT] 9: rom autoload\r\n");
     if (PsAppRuntime_AutoloadDefaultRom(ctx) != XST_SUCCESS) {
@@ -391,6 +653,8 @@ void PsAppRuntime_Service(PsAppRuntimeContext *ctx) {
     u32 vdma_status;
     u32 vdma_errs;
     u32 physical_keys;
+    u32 ps_btn_mask;
+    u32 pressed_ps_btns;
 
     if (ctx == NULL) {
         return;
@@ -411,6 +675,29 @@ void PsAppRuntime_Service(PsAppRuntimeContext *ctx) {
     if (ctx->diag->last_physical_keys != physical_keys) {
         PsAppRuntime_PrintPhysicalKeys(physical_keys);
         ctx->diag->last_physical_keys = physical_keys;
+    }
+    ps_btn_mask = PsAppRuntime_ReadPsButtonMask(ctx);
+    if ((ctx->ps_gpio_ready != 0U) && (ctx->ps_btn_last_mask != ps_btn_mask)) {
+        pressed_ps_btns = ps_btn_mask & ~ctx->ps_btn_last_mask;
+        if ((pressed_ps_btns & PS_APP_BTN4_MASK) != 0U) {
+            u32 next_volume = (u32)ctx->audio->volume + PS_APP_AUDIO_VOLUME_STEP;
+            if (PsAppRuntime_SetAudioVolume(ctx, next_volume) == XST_SUCCESS) {
+                xil_printf("[AUDIO] volume=%u mute=%u\r\n",
+                           (unsigned int)ctx->audio->volume,
+                           (unsigned int)((ctx->audio->mute != 0U) || (ctx->audio->volume == 0U)));
+            }
+        }
+        if ((pressed_ps_btns & PS_APP_BTN5_MASK) != 0U) {
+            u32 next_volume = (ctx->audio->volume > PS_APP_AUDIO_VOLUME_STEP) ?
+                              ((u32)ctx->audio->volume - PS_APP_AUDIO_VOLUME_STEP) : 0U;
+            if (PsAppRuntime_SetAudioVolume(ctx, next_volume) == XST_SUCCESS) {
+                xil_printf("[AUDIO] volume=%u mute=%u\r\n",
+                           (unsigned int)ctx->audio->volume,
+                           (unsigned int)((ctx->audio->mute != 0U) || (ctx->audio->volume == 0U)));
+            }
+        }
+        PsAppRuntime_PrintPsButtons(ps_btn_mask);
+        ctx->ps_btn_last_mask = ps_btn_mask;
     }
 
     if (ctx->rom->is_loading != 0U) {
@@ -471,6 +758,13 @@ void PsAppRuntime_Service(PsAppRuntimeContext *ctx) {
         ctx->diag->warn_last_vdma_errs = 0U;
     }
 
+    // FB_CAP_SEQ is the authoritative "a full capture frame is ready" signal.
+    // Poll it every service tick so the BRAM->PS->VDMA path still advances even
+    // if the VSYNC IRQ edge is missed or arrives before PS starts servicing.
+    if (ctx->rom->loaded != 0U) {
+        PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
+    }
+
     if (irq_sts != 0U) {
         if ((irq_sts & PS_APP_IRQ_MASK_VSYNC) != 0U) {
             PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
@@ -493,6 +787,25 @@ void PsAppRuntime_Service(PsAppRuntimeContext *ctx) {
     PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
     PsAppDiag_MaybePrintStallAudit(ctx->diag_ctx, status1, dbg_pc, dbg_mem, dbg_dma);
     PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);
+    PsAppSave_Service(ctx->save_ctx);
+
+    /* 早期 BRAM 捕获诊断：ROM 加载后约 1 秒触发一次 */
+    if (ctx->rom->loaded && ctx->diag->delayed_chain_printed == 0U &&
+        ctx->diag->delayed_chain_tick >= 80U && ctx->diag->delayed_chain_tick <= 82U) {
+        u32 cap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
+        u32 cap_sts = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
+        u32 bram_w0 = PsAppVideo_ReadCaptureWord(cap_sts & 0x1U, 0U);
+        u32 bram_w1 = PsAppVideo_ReadCaptureWord(cap_sts & 0x1U, 1U);
+        u32 ctrl_rb = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+        xil_printf("[CAPDIAG] seq=%u buf=%u w0=0x%08x w1=0x%08x ctrl=0x%08x last_seq=%u vdma_sr=0x%08x\r\n",
+                   (unsigned int)cap_seq,
+                   (unsigned int)(cap_sts & 0x1U),
+                   (unsigned int)bram_w0,
+                   (unsigned int)bram_w1,
+                   (unsigned int)ctrl_rb,
+                   (unsigned int)ctx->video->fbcap_last_frame_seq,
+                   (unsigned int)vdma_status);
+    }
 
     if (ctx->rom->loaded && ctx->diag->delayed_chain_printed < 2U) {
         ctx->diag->delayed_chain_tick++;

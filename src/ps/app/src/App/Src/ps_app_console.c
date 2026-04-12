@@ -75,6 +75,7 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  remap on|off\r\n");
     xil_printf("  key <name> on|off   (a/b/select/start/right/left/up/down/r/l)\r\n");
     xil_printf("  keymask <hex>\r\n");
+    xil_printf("  btn status           (PS-side BTN4/BTN5 on MIO50/51)\r\n");
     xil_printf("  rtc <hex>\r\n");
     xil_printf("  cycle <dec>\r\n");
     xil_printf("  maxpak <hex>\r\n");
@@ -86,8 +87,7 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  audio status\r\n");
     xil_printf("  audio reinit\r\n");
     xil_printf("  audio mute on|off\r\n");
-    xil_printf("  audio tone on|off   (one-shot boot cue)\r\n");
-    xil_printf("  audio vol <0-127>\r\n");
+    xil_printf("  audio vol <0-100>\r\n");
     xil_printf("  audio fmt <sample_rate_hz> <bits>\r\n");
     xil_printf("  rom status\r\n");
     xil_printf("  rom load [path]\r\n");
@@ -282,6 +282,46 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         return;
     }
 
+    if ((strcmp(cmd, "btn") == 0) || (strcmp(cmd, "button") == 0)) {
+        u32 ps_btn_mask;
+        u32 btn4_raw;
+        u32 btn5_raw;
+        u32 bank1_data;
+        u32 bank1_dir;
+        u32 bank1_outen;
+        u32 mio50_cfg;
+        u32 mio51_cfg;
+        a1 = strtok(NULL, " \t");
+
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            ps_btn_mask = PsAppRuntime_ReadPsButtonMask(app);
+            PsAppRuntime_ReadPsButtonRawLevels(app,
+                                               &btn4_raw,
+                                               &btn5_raw,
+                                               &bank1_data,
+                                               &bank1_dir,
+                                               &bank1_outen,
+                                               &mio50_cfg,
+                                               &mio51_cfg);
+            xil_printf("[CMD] ps_gpio_ready=%u BTN4=%u BTN5=%u mask=0x%02x raw50=%u raw51=%u bank1=0x%08x dir1=0x%08x outen1=0x%08x mio50=0x%08x mio51=0x%08x\r\n",
+                       (unsigned int)app->ps_gpio_ready,
+                       (unsigned int)((ps_btn_mask & PS_APP_BTN4_MASK) != 0U),
+                       (unsigned int)((ps_btn_mask & PS_APP_BTN5_MASK) != 0U),
+                       (unsigned int)(ps_btn_mask & (PS_APP_BTN4_MASK | PS_APP_BTN5_MASK)),
+                       (unsigned int)btn4_raw,
+                       (unsigned int)btn5_raw,
+                       (unsigned int)bank1_data,
+                       (unsigned int)bank1_dir,
+                       (unsigned int)bank1_outen,
+                       (unsigned int)mio50_cfg,
+                       (unsigned int)mio51_cfg);
+            return;
+        }
+
+        xil_printf("[CMD] usage: btn status\r\n");
+        return;
+    }
+
     if ((strcmp(cmd, "core") == 0) || (strcmp(cmd, "turbo") == 0) ||
         (strcmp(cmd, "lock") == 0) || (strcmp(cmd, "remap") == 0)) {
         u32 bit;
@@ -391,9 +431,8 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
             xil_printf("[CMD] audio rate=%u bits=%u mute=%u vol=%u\r\n",
                        (unsigned int)app->audio->sample_rate_hz,
                        (unsigned int)app->audio->bits_per_sample,
-                       (unsigned int)app->audio->mute,
+                       (unsigned int)((app->audio->mute != 0U) || (app->audio->volume == 0U)),
                        (unsigned int)app->audio->volume);
-            xil_printf("[CMD] audio cue=%u\r\n", (unsigned int)app->audio->tone_enable);
             return;
         }
 
@@ -406,8 +445,8 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         if ((a1 != NULL) && (strcmp(a1, "mute") == 0)) {
             a2 = strtok(NULL, " \t");
             if (PsAppConsole_ParseOnOff(a2, &v) == 0) {
-                if (PsAudioCodec_SetMute(app->codec, (u8)v) == XST_SUCCESS) {
-                    app->audio->mute = (u8)v;
+                app->audio->mute = (u8)v;
+                if (PsAppRuntime_ApplyAudioOutputState(app) == XST_SUCCESS) {
                     xil_printf("[CMD] audio mute=%u\r\n", (unsigned int)v);
                 } else {
                     xil_printf("[CMD] audio mute failed\r\n");
@@ -418,32 +457,17 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
             return;
         }
 
-        if ((a1 != NULL) && (strcmp(a1, "tone") == 0)) {
-            a2 = strtok(NULL, " \t");
-            if (PsAppConsole_ParseOnOff(a2, &v) == 0) {
-                app->audio->tone_enable = (u8)v;
-                if (app->audio->tone_enable != 0U) app->config->ctrl |= GBA_CTRL_AUDIO_TONE;
-                else app->config->ctrl &= ~GBA_CTRL_AUDIO_TONE;
-                PsAppRuntime_ApplyShadowConfig(app);
-                xil_printf("[CMD] audio cue=%u\r\n", (unsigned int)app->audio->tone_enable);
-                return;
-            }
-            xil_printf("[CMD] usage: audio tone on|off\r\n");
-            return;
-        }
-
         if ((a1 != NULL) && (strcmp(a1, "vol") == 0)) {
             a2 = strtok(NULL, " \t");
             if ((a2 != NULL) && (PsAppConsole_ParseU32Value(a2, &v) == 0)) {
-                if (PsAudioCodec_SetHeadphoneVolume(app->codec, (u8)v) == XST_SUCCESS) {
-                    app->audio->volume = (u8)(v & 0x7FU);
+                if (PsAppRuntime_SetAudioVolume(app, v) == XST_SUCCESS) {
                     xil_printf("[CMD] audio vol=%u\r\n", (unsigned int)app->audio->volume);
                 } else {
                     xil_printf("[CMD] audio vol failed\r\n");
                 }
                 return;
             }
-            xil_printf("[CMD] usage: audio vol <0-127>\r\n");
+            xil_printf("[CMD] usage: audio vol <0-100>\r\n");
             return;
         }
 

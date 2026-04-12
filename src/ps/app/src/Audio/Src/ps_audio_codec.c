@@ -265,14 +265,24 @@ XStatus PsAudioCodec_ProgramPlayback48k16b(PsAudioCodec *ctx) {
 }
 
 XStatus PsAudioCodec_SetMute(PsAudioCodec *ctx, u8 mute) {
-    u16 analog_path;
     XStatus status;
+    u16 analog_path;
+    u16 digital_path;
 
-    analog_path = (mute != 0U) ? 0b000011010U : 0b000010010U;
-    status = PsAudioCodec_WriteReg(ctx, SSM_R4_ANALOG_PATH, analog_path);
-    if (status == XST_SUCCESS) {
-        ctx->is_muted = (mute != 0U) ? 1U : 0U;
+    analog_path = 0b000010010U;
+    digital_path = (mute != 0U) ? 0b000001000U : 0b000000000U;
+
+    status = PsAudioCodec_WriteReg(ctx, SSM_R5_DIGITAL_PATH, digital_path);
+    if (status != XST_SUCCESS) {
+        return status;
     }
+
+    status = PsAudioCodec_WriteReg(ctx, SSM_R4_ANALOG_PATH, analog_path);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+
+    ctx->is_muted = (mute != 0U) ? 1U : 0U;
 
     return status;
 }

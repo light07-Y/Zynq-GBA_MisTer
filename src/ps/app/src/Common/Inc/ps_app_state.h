@@ -9,6 +9,13 @@
 extern "C" {
 #endif
 
+typedef enum {
+    PS_APP_SAVE_KIND_NONE = 0U,
+    PS_APP_SAVE_KIND_SRAM = 1U,
+    PS_APP_SAVE_KIND_FLASH = 2U,
+    PS_APP_SAVE_KIND_EEPROM = 3U
+} PsAppSaveKind;
+
 typedef struct {
     u32 ctrl;
     u32 keys;
@@ -23,7 +30,6 @@ typedef struct {
     u16 bits_per_sample;
     u8 mute;
     u8 volume;
-    u8 tone_enable;
 } PsAppAudioState;
 
 typedef struct {
@@ -45,6 +51,19 @@ typedef struct {
     u32 size_aligned;
     char path[PS_APP_ROM_PATH_MAX_CHARS];
 } PsAppRomState;
+
+typedef struct {
+    u32 event_counters;
+    u32 flush_count;
+    u32 quiet_ticks;
+    u32 last_bytes;
+    u32 last_checksum;
+    u8 active_kind;
+    u8 dirty;
+    u8 loaded_from_sd;
+    u8 reserved0;
+    char path[PS_APP_ROM_PATH_MAX_CHARS];
+} PsAppSaveState;
 
 typedef struct {
     u32 last_runtime_irq_sts;

@@ -9,15 +9,15 @@
     "parameters": {
       "component_parameters": {
         "NUM_SI": [ { "value": "1", "resolve_type": "user", "format": "long", "usage": "all" } ],
-        "NUM_MI": [ { "value": "2", "value_src": "user", "resolve_type": "user", "format": "long", "usage": "all" } ],
+        "NUM_MI": [ { "value": "3", "value_src": "user", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "STRATEGY": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "ENABLE_ADVANCED_OPTIONS": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "ENABLE_PROTOCOL_CHECKERS": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
-        "XBAR_DATA_WIDTH": [ { "value": "32", "resolve_type": "user", "format": "long", "usage": "all" } ],
+        "XBAR_DATA_WIDTH": [ { "value": "32", "value_permission": "bd_and_user", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "PCHK_WAITS": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "PCHK_MAX_RD_BURSTS": [ { "value": "2", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "PCHK_MAX_WR_BURSTS": [ { "value": "2", "resolve_type": "user", "format": "long", "usage": "all" } ],
-        "SYNCHRONIZATION_STAGES": [ { "value": "3", "resolve_type": "user", "format": "long", "usage": "all" } ],
+        "SYNCHRONIZATION_STAGES": [ { "value": "3", "value_permission": "bd_and_user", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "M00_HAS_REGSLICE": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "M01_HAS_REGSLICE": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
         "M02_HAS_REGSLICE": [ { "value": "0", "resolve_type": "user", "format": "long", "usage": "all" } ],
@@ -343,11 +343,11 @@
         "MANAGED": [ { "value": "TRUE" } ],
         "OUTPUTDIR": [ { "value": "../../../../../../Zynq-GBA_MisTer-Vivado.gen/sources_1/bd/zynq_gba_system/ip/zynq_gba_system_axi_ctrl_ic_0" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
-        "SHAREDDIR": [ { "value": "../../../../../../Zynq-GBA_MisTer-Vivado/src/bd/zynq_gba_system/ipshared" } ],
+        "SHAREDDIR": [ { "value": "../../ipshared" } ],
         "SWVERSION": [ { "value": "2025.2.1" } ],
         "SYNTHESISFLOW": [ { "value": "GLOBAL" } ]
       }
     }
   },
-  "checksum": "e710bc5e"
+  "checksum": "4d1a76d8"
 }

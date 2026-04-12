@@ -2,10 +2,25 @@ set script_dir [file dirname [file normalize [info script]]]
 set repo_root  [file normalize [file join $script_dir .. ..]]
 
 set project_name  "Zynq-GBA_MisTer-Vivado"
+set bd_dir        [file join $repo_root src bd zynq_gba_system]
 set bd_file       [file join $repo_root src bd zynq_gba_system zynq_gba_system.bd]
 set constr_file   [file join $repo_root src constraints zybo_z7_20.xdc]
 set local_bd_dir  [file join $repo_root ${project_name}.srcs sources_1 bd zynq_gba_system]
 set local_bd_file [file join $local_bd_dir zynq_gba_system.bd]
+set local_gen_bd_dir [file join $repo_root ${project_name}.gen sources_1 bd zynq_gba_system]
+set src_ip_dir    [file join $bd_dir ip]
+set local_ip_dir  [file join $local_bd_dir ip]
+set src_shared_dir   [file join $bd_dir ipshared]
+set local_shared_dir [file join $local_gen_bd_dir ipshared]
+
+source [file join $script_dir bd_ip_maintenance.tcl]
+
+proc add_globbed_files {pattern} {
+    set files [glob -nocomplain $pattern]
+    if {[llength $files] > 0} {
+        add_files -norecurse $files
+    }
+}
 
 create_project -force $project_name $repo_root -part xc7z020clg400-1
 set_property board_part digilentinc.com:zybo-z7-20:part0:1.2 [current_project]
@@ -19,6 +34,8 @@ set_property XPM_LIBRARIES {XPM_CDC XPM_MEMORY} [current_project]
 # one-hot, which pushes this design over the Z-7020 LUT budget.
 set_property strategy {Vivado Synthesis Defaults} [get_runs synth_1]
 set_property strategy Performance_ExplorePostRoutePhysOpt [get_runs impl_1]
+# Known-benign module_ref interface propagation warning; keep batch logs clean.
+set_msg_config -id {BD 41-926} -suppress
 
 set ip_repos {}
 foreach repo [list D:/Tools/vivado-library-master D:/Tools/vivado-library-master/ip] {
@@ -31,18 +48,31 @@ if {[llength $ip_repos] > 0} {
     update_ip_catalog
 }
 
+# Harvest any previously generated local BD IP into source snapshot first.
+repair_bd_ip_snapshot $repo_root $project_name zynq_gba_system
+if {[file exists $local_bd_dir]} {
+    file delete -force $local_bd_dir
+}
 file mkdir $local_bd_dir
+file mkdir $local_gen_bd_dir
 file copy -force $bd_file $local_bd_file
+if {[file isdirectory $src_ip_dir]} {
+    file copy -force $src_ip_dir $local_ip_dir
+}
+if {[file isdirectory $src_shared_dir]} {
+    file copy -force $src_shared_dir $local_shared_dir
+}
+normalize_xci_shareddir $local_ip_dir
 
 add_files -norecurse $local_bd_file
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl top *.v]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.v]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.sv]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.vh]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl common *.mem]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.v]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.sv]]
-add_files -norecurse [glob -nocomplain [file join $repo_root src rtl core gba_mister rtl *.vhd]]
+add_globbed_files [file join $repo_root src rtl top *.v]
+add_globbed_files [file join $repo_root src rtl common *.v]
+add_globbed_files [file join $repo_root src rtl common *.sv]
+add_globbed_files [file join $repo_root src rtl common *.vh]
+add_globbed_files [file join $repo_root src rtl common *.mem]
+add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.v]
+add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.sv]
+add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.vhd]
 add_files -fileset constrs_1 -norecurse $constr_file
 
 foreach relpath [list \
@@ -64,10 +94,6 @@ if {[llength [get_bd_cells -quiet fb_cap_bram_ctrl]] == 0} {
     create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 fb_cap_bram_ctrl
 }
 set_property -dict [list CONFIG.DATA_WIDTH {32} CONFIG.SINGLE_PORT_BRAM {1}] [get_bd_cells fb_cap_bram_ctrl]
-
-if {[llength [get_bd_cells -quiet axi_ctrl_ic]] > 0} {
-    set_property CONFIG.NUM_MI {3} [get_bd_cells axi_ctrl_ic]
-}
 
 foreach pin_path [list \
     axi_ctrl_ic/M02_AXI \
@@ -127,12 +153,22 @@ if {[llength $fb_cap_mem_seg] > 0} {
 
 # Ensure PS-side mandatory peripherals for this project:
 # - USB0 on MIO (for FreeRTOS USB stack usage)
+# - BTN4/BTN5 on MIO50/51 via PS GPIO
 # - F2P interrupt path enabled
 set ps_core_cell [get_bd_cells -quiet ps_core]
 if {[llength $ps_core_cell] > 0} {
     set_property CONFIG.PCW_EN_USB0 {1} $ps_core_cell
     set_property CONFIG.PCW_USB0_PERIPHERAL_ENABLE {1} $ps_core_cell
     set_property CONFIG.PCW_USB0_USB0_IO {MIO 28 .. 39} $ps_core_cell
+    set_property CONFIG.PCW_EN_GPIO {1} $ps_core_cell
+    set_property CONFIG.PCW_GPIO_PERIPHERAL_ENABLE {1} $ps_core_cell
+    set_property CONFIG.PCW_GPIO_MIO_GPIO_ENABLE {1} $ps_core_cell
+    set_property CONFIG.PCW_GPIO_MIO_GPIO_IO {MIO} $ps_core_cell
+    # BTN4/BTN5 对应 MIO50/MIO51。这里必须关闭内部 pull-up，
+    # 否则旧 platform/ps7_init 可能把按键输入长期钉在错误电平，
+    # 最终表现为 PS 端 raw50/raw51 不变化、UART 无按键日志。
+    set_property CONFIG.PCW_MIO_50_PULLUP {disabled} $ps_core_cell
+    set_property CONFIG.PCW_MIO_51_PULLUP {disabled} $ps_core_cell
     # NOTE: USB reset select/io knobs are disabled in current PS7 IP profile
     # (Vivado 2025.2.1 for this board setup), so no dedicated USB reset pin
     # can be configured here from BD.
@@ -266,7 +302,13 @@ connect_bd_net [get_bd_pins pl_irq_concat/dout] [get_bd_pins ps_core/IRQ_F2P]
 validate_bd_design
 save_bd_design
 file copy -force $local_bd_file $bd_file
-generate_target all [get_files $local_bd_file]
+normalize_xci_shareddir $local_ip_dir
+set bd_obj [get_files $local_bd_file]
+reset_target all $bd_obj
+generate_target all $bd_obj
+export_ip_user_files -of_objects $bd_obj -no_script -sync -force
+
+repair_bd_ip_snapshot $repo_root $project_name zynq_gba_system
 
 # Avoid TIMING-4/TIMING-27 from clk_wiz scoped primary-clock definition on
 # hierarchical pin. The design already has a top-level PS FCLK source clock.

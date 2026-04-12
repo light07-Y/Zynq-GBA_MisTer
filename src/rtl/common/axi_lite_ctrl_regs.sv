@@ -75,7 +75,8 @@ module axi_lite_ctrl_regs #(
   output logic                 cfg_sw_reset,
   output logic                 cfg_commit_toggle,
   input  logic [31:0]          stat_fbcap_frame_seq,
-  input  logic                 stat_fbcap_frame_buf_idx
+  input  logic                 stat_fbcap_frame_buf_idx,
+  input  logic [31:0]          stat_save_status
 );
 
   localparam logic [ADDR_W-1:0] REG_CTRL            = 12'h000;
@@ -122,6 +123,7 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_DBG_DONE_LAST_META    = 12'h0A4;
   localparam logic [ADDR_W-1:0] REG_FB_CAP_STATUS         = 12'h0A8;
   localparam logic [ADDR_W-1:0] REG_FB_CAP_SEQ            = 12'h0AC;
+  localparam logic [ADDR_W-1:0] REG_SAVE_STATUS           = 12'h0B0;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
@@ -330,6 +332,7 @@ module axi_lite_ctrl_regs #(
           REG_DBG_DONE_LAST_META:    rdata_next = stat_dbg_done_last_meta;
           REG_FB_CAP_STATUS:         rdata_next = {31'd0, stat_fbcap_frame_buf_idx};
           REG_FB_CAP_SEQ:            rdata_next = stat_fbcap_frame_seq;
+          REG_SAVE_STATUS:           rdata_next = stat_save_status;
           default:           rdata_next = 32'h0;
         endcase
 

@@ -9,6 +9,10 @@
 
 static FATFS g_ps_fatfs;
 
+static FRESULT PsFatFsStorage_Mount(void) {
+    return f_mount(&g_ps_fatfs, PS_FATFS_STORAGE_DRIVE_PATH, 0);
+}
+
 const char *PsFatFsStorage_StrError(FRESULT result) {
     switch (result) {
         case FR_OK: return "ok";
@@ -59,7 +63,7 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
     offset = 0U;
     memset(&file, 0, sizeof(file));
 
-    fs_result = f_mount(&g_ps_fatfs, PS_FATFS_STORAGE_DRIVE_PATH, 0);
+    fs_result = PsFatFsStorage_Mount();
     if (result_out != NULL) {
         result_out->fs_result = fs_result;
     }
@@ -111,4 +115,115 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
     }
 
     return XST_SUCCESS;
+}
+
+XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
+                                        UINTPTR src_addr,
+                                        u32 bytes_to_write,
+                                        PsFatFsStorageWriteResult *result_out) {
+    FIL file;
+    FRESULT fs_result;
+    UINT bytes_written;
+    const u8 *src_ptr;
+    u32 offset;
+
+    if (result_out != NULL) {
+        memset(result_out, 0, sizeof(*result_out));
+        result_out->src_addr = src_addr;
+    }
+
+    if ((path == NULL) || (*path == '\0') || (bytes_to_write == 0U)) {
+        return XST_INVALID_PARAM;
+    }
+
+    src_ptr = (const u8 *)src_addr;
+    offset = 0U;
+    memset(&file, 0, sizeof(file));
+
+    fs_result = PsFatFsStorage_Mount();
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        return XST_FAILURE;
+    }
+
+    fs_result = f_open(&file, path, FA_CREATE_ALWAYS | FA_WRITE);
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        return XST_FAILURE;
+    }
+
+    Xil_DCacheFlushRange((INTPTR)src_addr, bytes_to_write);
+
+    while (offset < bytes_to_write) {
+        u32 chunk_bytes;
+
+        chunk_bytes = bytes_to_write - offset;
+        if (chunk_bytes > PS_FATFS_STORAGE_CHUNK_BYTES) {
+            chunk_bytes = PS_FATFS_STORAGE_CHUNK_BYTES;
+        }
+
+        bytes_written = 0U;
+        fs_result = f_write(&file, &src_ptr[offset], chunk_bytes, &bytes_written);
+        if (result_out != NULL) {
+            result_out->fs_result = fs_result;
+        }
+        if ((fs_result != FR_OK) || (bytes_written != chunk_bytes)) {
+            (void)f_close(&file);
+            return XST_FAILURE;
+        }
+
+        offset += bytes_written;
+    }
+
+    fs_result = f_sync(&file);
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        (void)f_close(&file);
+        return XST_FAILURE;
+    }
+
+    (void)f_close(&file);
+
+    if (result_out != NULL) {
+        result_out->bytes_written = bytes_to_write;
+        result_out->fs_result = FR_OK;
+    }
+
+    return XST_SUCCESS;
+}
+
+XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
+    FILINFO info;
+    FRESULT fs_result;
+
+    if ((path == NULL) || (*path == '\0')) {
+        return XST_INVALID_PARAM;
+    }
+
+    fs_result = PsFatFsStorage_Mount();
+    if (fs_result != FR_OK) {
+        return XST_FAILURE;
+    }
+
+    memset(&info, 0, sizeof(info));
+    fs_result = f_stat(path, &info);
+    if (fs_result == FR_OK) {
+        return ((info.fattrib & AM_DIR) != 0U) ? XST_SUCCESS : XST_FAILURE;
+    }
+    if ((fs_result != FR_NO_FILE) && (fs_result != FR_NO_PATH)) {
+        return XST_FAILURE;
+    }
+
+    fs_result = f_mkdir(path);
+    if ((fs_result == FR_OK) || (fs_result == FR_EXIST)) {
+        return XST_SUCCESS;
+    }
+
+    return XST_FAILURE;
 }

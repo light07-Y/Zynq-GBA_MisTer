@@ -3,6 +3,7 @@
 
 #include "App/Inc/ps_app_runtime_context.h"
 #include "Diagnostics/Inc/ps_app_diag_context.h"
+#include "Save/Inc/ps_app_save_context.h"
 #include "Video/Inc/ps_app_video_context.h"
 
 #ifdef __cplusplus
@@ -14,13 +15,16 @@ typedef struct {
     PsHdmiVdma vdma;
     PsGbaRegs regs;
     XUartPs uart;
+    XGpioPs ps_gpio;
     PsAppShadowConfig config;
     PsAppAudioState audio;
     PsAppVideoState video;
     PsAppRomState rom;
+    PsAppSaveState save;
     PsAppDiagState diag;
     PsAppVideoContext video_ctx;
     PsAppDiagContext diag_ctx;
+    PsAppSaveContext save_ctx;
     PsAppRuntimeContext runtime_ctx;
     PsAppConsoleContext console_ctx;
 } PsAppContext;

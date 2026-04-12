@@ -15,20 +15,31 @@ extern "C" {
 #define PS_APP_HDMI_WIDTH               640U
 #define PS_APP_HDMI_HEIGHT              480U
 #define PS_APP_HDMI_BPP                 4U
+#define PS_APP_GBA_SAVE_REGION_BASE_ADDR 0x10000000U
+#define PS_APP_GBA_SAVE_REGION_MAX_BYTES (256U * 1024U)
+#define PS_APP_GBA_SAVE_SRAM_BYTES      (64U * 1024U)
+#define PS_APP_GBA_SAVE_FLASH_BYTES     (128U * 1024U)
+#define PS_APP_GBA_SAVE_EEPROM_BYTES    (8U * 1024U)
 #define PS_APP_GBA_ROM_REGION_BASE_ADDR 0x100C0000U
 #define PS_APP_GBA_ROM_REGION_MAX_BYTES (32U * 1024U * 1024U)
 #define PS_APP_ROM_PATH_MAX_CHARS       128U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/ucity-advance-v1.0.3.gba"
+#define PS_APP_SAVE_SD_DIR              "0:/saves"
 
 #define PS_APP_SYS_TASK_STACK_WORDS       (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_SYS_TASK_PRIORITY          (tskIDLE_PRIORITY + 3U)
 #define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 8U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
 #define PS_APP_UART_BAUDRATE              115200U
+#define PS_APP_BTN4_MIO_PIN               50U
+#define PS_APP_BTN5_MIO_PIN               51U
+#define PS_APP_BTN4_MASK                  (1U << 0U)
+#define PS_APP_BTN5_MASK                  (1U << 1U)
 #define PS_APP_IRQ_MASK_VSYNC             0x1U
 #define PS_APP_IRQ_MASK_ERROR             0x2U
 #define PS_APP_IRQ_MASK_DEFAULT           (PS_APP_IRQ_MASK_VSYNC | PS_APP_IRQ_MASK_ERROR)
 #define PS_APP_MONITOR_INTERVAL_MS        10U
+#define PS_APP_SAVE_FLUSH_QUIET_TICKS     25U
 #define PS_APP_TRACE_DEFAULT_SAMPLES      20U
 #define PS_APP_TRACE_DEFAULT_INTERVAL_MS  100U
 #define PS_APP_TRACE_MAX_SAMPLES          200U
@@ -45,7 +56,14 @@ extern "C" {
 #define PS_APP_FBSCAN_BLACK_PIXEL         0x00000000U
 
 #define PS_APP_GBA_CTRL_BOOT_REQUIRED \
-    (GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN | GBA_CTRL_AUDIO_TONE)
+    (GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN)
+
+#define PS_APP_SAVE_STATUS_SRAM_DIRTY      (1U << 0)
+#define PS_APP_SAVE_STATUS_FLASH_DIRTY     (1U << 1)
+#define PS_APP_SAVE_STATUS_EEPROM_DIRTY    (1U << 2)
+#define PS_APP_SAVE_STATUS_DIRTY_MASK      (PS_APP_SAVE_STATUS_SRAM_DIRTY | \
+                                           PS_APP_SAVE_STATUS_FLASH_DIRTY | \
+                                           PS_APP_SAVE_STATUS_EEPROM_DIRTY)
 
 #define PS_APP_GBA_FRAME_WIDTH            240U
 #define PS_APP_GBA_FRAME_HEIGHT           160U

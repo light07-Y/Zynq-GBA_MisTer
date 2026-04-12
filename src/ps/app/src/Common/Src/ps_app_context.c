@@ -22,15 +22,22 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->diag_ctx.rom = &ctx->rom;
     ctx->diag_ctx.diag = &ctx->diag;
 
+    ctx->save_ctx.regs = &ctx->regs;
+    ctx->save_ctx.state = &ctx->save;
+    ctx->save_ctx.rom = &ctx->rom;
+
     ctx->runtime_ctx.codec = &ctx->codec;
     ctx->runtime_ctx.vdma = &ctx->vdma;
     ctx->runtime_ctx.regs = &ctx->regs;
     ctx->runtime_ctx.uart = &ctx->uart;
+    ctx->runtime_ctx.ps_gpio = &ctx->ps_gpio;
     ctx->runtime_ctx.config = &ctx->config;
     ctx->runtime_ctx.audio = &ctx->audio;
     ctx->runtime_ctx.video = &ctx->video;
     ctx->runtime_ctx.rom = &ctx->rom;
+    ctx->runtime_ctx.save = &ctx->save;
     ctx->runtime_ctx.diag = &ctx->diag;
+    ctx->runtime_ctx.save_ctx = &ctx->save_ctx;
     ctx->runtime_ctx.video_ctx = &ctx->video_ctx;
     ctx->runtime_ctx.diag_ctx = &ctx->diag_ctx;
 

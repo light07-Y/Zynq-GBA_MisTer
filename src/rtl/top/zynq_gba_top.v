@@ -1,5 +1,6 @@
 module zynq_gba_top #(
-  parameter [31:0] G_DDR_BASE = 32'h1000_0000
+  parameter [31:0] G_DDR_BASE = 32'h1000_0000,
+  parameter         G_ENABLE_DEBUG = 1'b0
 ) (
   // Clock and Reset Interfaces
   (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 clk_100 CLK" *)
@@ -265,6 +266,7 @@ module zynq_gba_top #(
   wire [31:0] dbg_done_first_meta_axi;
   wire [31:0] dbg_done_last_addr_axi;
   wire [31:0] dbg_done_last_meta_axi;
+  wire [31:0] save_status_axi;
 
   (* ASYNC_REG = "TRUE" *) reg        w_core_cfg_sw_reset_meta, w_core_cfg_sw_reset_sync;
   (* ASYNC_REG = "TRUE" *) reg [1:0]  display_frame_idx_core_meta, display_frame_idx_core_sync;
@@ -304,6 +306,7 @@ module zynq_gba_top #(
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_last_meta_axi_meta, dbg_done_last_meta_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] fbcap_frame_seq_axi_meta, fbcap_frame_seq_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg        fbcap_frame_buf_idx_axi_meta, fbcap_frame_buf_idx_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] save_status_axi_meta, save_status_axi_sync;
 
   wire [15:0] unused_core_vcount;
   reg                                  fb_frame_pulse_toggle;
@@ -338,6 +341,9 @@ module zynq_gba_top #(
   reg [31:0]                          dbg_pending_axi_ar_addr;
   reg [1:0]                           dbg_last_axi_rresp;
   reg                                 dbg_last_axi_rlast;
+  reg [7:0]                           save_sram_count_core;
+  reg [7:0]                           save_flash_count_core;
+  reg [7:0]                           save_eeprom_count_core;
 
   // 7. 明确收口上游核心当前未接入的可选功能，避免综合依赖隐式默认值
   localparam [1:0] GBA_UNDERCLOCK_OFF       = 2'b00;
@@ -361,13 +367,9 @@ module zynq_gba_top #(
   wire [31:0] unused_debug_mem;
   wire [15:0] core_audio_l;
   wire [15:0] core_audio_r;
-  wire [15:0] validation_audio_l;
-  wire [15:0] validation_audio_r;
-  wire        validation_audio_active;
   wire        audio_sample_ce;
   wire [15:0] audio_out_l;
   wire [15:0] audio_out_r;
-  wire        audio_validation_enable;
 
   assign w_core_cfg_sw_reset = w_core_cfg_sw_reset_sync;
   assign display_frame_idx_core = display_frame_idx_core_sync;
@@ -375,40 +377,44 @@ module zynq_gba_top #(
   assign irq_error_pulse_axi = sys_err_pulse_toggle_axi_sync[2] ^ sys_err_pulse_toggle_axi_sync[1];
   assign sys_rom_loading_axi = sys_rom_loading_axi_sync;
   assign physical_keys_axi = physical_keys_axi_sync;
-  assign debug_cpu_pc_axi = debug_cpu_pc_axi_sync;
-  assign debug_cpu_mixed_axi = debug_cpu_mixed_axi_sync;
-  assign debug_irq_axi = debug_irq_axi_sync;
-  assign debug_dma_axi = debug_dma_axi_sync;
-  assign debug_mem_axi = debug_mem_axi_sync;
-  assign audio_validation_enable = w_core_cfg_ctrl[6];
-  assign audio_out_l = validation_audio_active ? validation_audio_l : core_audio_l;
-  assign audio_out_r = validation_audio_active ? validation_audio_r : core_audio_r;
+  assign debug_cpu_pc_axi = G_ENABLE_DEBUG ? debug_cpu_pc_axi_sync : 32'd0;
+  assign debug_cpu_mixed_axi = G_ENABLE_DEBUG ? debug_cpu_mixed_axi_sync : 32'd0;
+  assign debug_irq_axi = G_ENABLE_DEBUG ? debug_irq_axi_sync : 32'd0;
+  assign debug_dma_axi = G_ENABLE_DEBUG ? debug_dma_axi_sync : 32'd0;
+  assign debug_mem_axi = G_ENABLE_DEBUG ? debug_mem_axi_sync : 32'd0;
+  assign audio_out_l = core_audio_l;
+  assign audio_out_r = core_audio_r;
   assign audio_l = audio_out_l;
   assign audio_r = audio_out_r;
-  assign core_fb_newframe = core_pixel_we && (core_pixel_addr == 16'd0);
-  assign dbg_chain_flags_axi = dbg_chain_flags_axi_sync;
-  assign dbg_chain_counts0_axi = dbg_chain_counts0_axi_sync;
-  assign dbg_chain_counts1_axi = dbg_chain_counts1_axi_sync;
-  assign dbg_ch1_first_addr_axi = dbg_ch1_first_addr_axi_sync;
-  assign dbg_ch1_first_meta_axi = dbg_ch1_first_meta_axi_sync;
-  assign dbg_ch1_last_addr_axi = dbg_ch1_last_addr_axi_sync;
-  assign dbg_ch1_last_meta_axi = dbg_ch1_last_meta_axi_sync;
-  assign dbg_ddr_first_addr_axi = dbg_ddr_first_addr_axi_sync;
-  assign dbg_ddr_first_meta_axi = dbg_ddr_first_meta_axi_sync;
-  assign dbg_ddr_last_addr_axi = dbg_ddr_last_addr_axi_sync;
-  assign dbg_ddr_last_meta_axi = dbg_ddr_last_meta_axi_sync;
-  assign dbg_axi_ar_first_addr_axi = dbg_axi_ar_first_addr_axi_sync;
-  assign dbg_axi_ar_first_meta_axi = dbg_axi_ar_first_meta_axi_sync;
-  assign dbg_axi_ar_last_addr_axi = dbg_axi_ar_last_addr_axi_sync;
-  assign dbg_axi_ar_last_meta_axi = dbg_axi_ar_last_meta_axi_sync;
-  assign dbg_axi_r_first_addr_axi = dbg_axi_r_first_addr_axi_sync;
-  assign dbg_axi_r_first_meta_axi = dbg_axi_r_first_meta_axi_sync;
-  assign dbg_axi_r_last_addr_axi = dbg_axi_r_last_addr_axi_sync;
-  assign dbg_axi_r_last_meta_axi = dbg_axi_r_last_meta_axi_sync;
-  assign dbg_done_first_addr_axi = dbg_done_first_addr_axi_sync;
-  assign dbg_done_first_meta_axi = dbg_done_first_meta_axi_sync;
-  assign dbg_done_last_addr_axi = dbg_done_last_addr_axi_sync;
-  assign dbg_done_last_meta_axi = dbg_done_last_meta_axi_sync;
+  // Keep the PS-side frame IRQ aligned with the core's original largeimg frame
+  // boundary. Using pixel_addr==0 fires at the first pixel of a new frame and
+  // can arrive before FB_CAP_SEQ has advanced, so the PS blit path misses the
+  // completed frame.
+  assign core_fb_newframe = unused_core_fb_req && (unused_core_fb_addr[19:0] == 20'd0);
+  assign dbg_chain_flags_axi = G_ENABLE_DEBUG ? dbg_chain_flags_axi_sync : 32'd0;
+  assign dbg_chain_counts0_axi = G_ENABLE_DEBUG ? dbg_chain_counts0_axi_sync : 32'd0;
+  assign dbg_chain_counts1_axi = G_ENABLE_DEBUG ? dbg_chain_counts1_axi_sync : 32'd0;
+  assign dbg_ch1_first_addr_axi = G_ENABLE_DEBUG ? dbg_ch1_first_addr_axi_sync : 32'd0;
+  assign dbg_ch1_first_meta_axi = G_ENABLE_DEBUG ? dbg_ch1_first_meta_axi_sync : 32'd0;
+  assign dbg_ch1_last_addr_axi = G_ENABLE_DEBUG ? dbg_ch1_last_addr_axi_sync : 32'd0;
+  assign dbg_ch1_last_meta_axi = G_ENABLE_DEBUG ? dbg_ch1_last_meta_axi_sync : 32'd0;
+  assign dbg_ddr_first_addr_axi = G_ENABLE_DEBUG ? dbg_ddr_first_addr_axi_sync : 32'd0;
+  assign dbg_ddr_first_meta_axi = G_ENABLE_DEBUG ? dbg_ddr_first_meta_axi_sync : 32'd0;
+  assign dbg_ddr_last_addr_axi = G_ENABLE_DEBUG ? dbg_ddr_last_addr_axi_sync : 32'd0;
+  assign dbg_ddr_last_meta_axi = G_ENABLE_DEBUG ? dbg_ddr_last_meta_axi_sync : 32'd0;
+  assign dbg_axi_ar_first_addr_axi = G_ENABLE_DEBUG ? dbg_axi_ar_first_addr_axi_sync : 32'd0;
+  assign dbg_axi_ar_first_meta_axi = G_ENABLE_DEBUG ? dbg_axi_ar_first_meta_axi_sync : 32'd0;
+  assign dbg_axi_ar_last_addr_axi = G_ENABLE_DEBUG ? dbg_axi_ar_last_addr_axi_sync : 32'd0;
+  assign dbg_axi_ar_last_meta_axi = G_ENABLE_DEBUG ? dbg_axi_ar_last_meta_axi_sync : 32'd0;
+  assign dbg_axi_r_first_addr_axi = G_ENABLE_DEBUG ? dbg_axi_r_first_addr_axi_sync : 32'd0;
+  assign dbg_axi_r_first_meta_axi = G_ENABLE_DEBUG ? dbg_axi_r_first_meta_axi_sync : 32'd0;
+  assign dbg_axi_r_last_addr_axi = G_ENABLE_DEBUG ? dbg_axi_r_last_addr_axi_sync : 32'd0;
+  assign dbg_axi_r_last_meta_axi = G_ENABLE_DEBUG ? dbg_axi_r_last_meta_axi_sync : 32'd0;
+  assign dbg_done_first_addr_axi = G_ENABLE_DEBUG ? dbg_done_first_addr_axi_sync : 32'd0;
+  assign dbg_done_first_meta_axi = G_ENABLE_DEBUG ? dbg_done_first_meta_axi_sync : 32'd0;
+  assign dbg_done_last_addr_axi = G_ENABLE_DEBUG ? dbg_done_last_addr_axi_sync : 32'd0;
+  assign dbg_done_last_meta_axi = G_ENABLE_DEBUG ? dbg_done_last_meta_axi_sync : 32'd0;
+  assign save_status_axi = save_status_axi_sync;
 
   function [7:0] sat_inc8;
     input [7:0] value;
@@ -453,6 +459,9 @@ module zynq_gba_top #(
       dbg_pending_axi_ar_addr <= 32'd0;
       dbg_last_axi_rresp      <= 2'd0;
       dbg_last_axi_rlast      <= 1'b0;
+      save_sram_count_core    <= 8'd0;
+      save_flash_count_core   <= 8'd0;
+      save_eeprom_count_core  <= 8'd0;
     end else begin
       w_core_cfg_sw_reset_meta <= w_axi_cfg_sw_reset;
       w_core_cfg_sw_reset_sync <= w_core_cfg_sw_reset_meta;
@@ -496,7 +505,22 @@ module zynq_gba_top #(
         dbg_pending_axi_ar_addr <= 32'd0;
         dbg_last_axi_rresp      <= 2'd0;
         dbg_last_axi_rlast      <= 1'b0;
+        save_sram_count_core    <= 8'd0;
+        save_flash_count_core   <= 8'd0;
+        save_eeprom_count_core  <= 8'd0;
       end else begin
+        if (unused_save_sram) begin
+          save_sram_count_core <= save_sram_count_core + 8'd1;
+        end
+
+        if (unused_save_flash) begin
+          save_flash_count_core <= save_flash_count_core + 8'd1;
+        end
+
+        if (unused_save_eeprom) begin
+          save_eeprom_count_core <= save_eeprom_count_core + 8'd1;
+        end
+
         if (ch1_req) begin
           dbg_pending_line_addr <= {4'b0011, ch1_addr[27:3], 3'b000};
           dbg_pending_lane <= ch1_addr[2:1];
@@ -667,6 +691,8 @@ module zynq_gba_top #(
       fbcap_frame_seq_axi_sync <= 32'd0;
       fbcap_frame_buf_idx_axi_meta <= 1'b0;
       fbcap_frame_buf_idx_axi_sync <= 1'b0;
+      save_status_axi_meta <= 32'd0;
+      save_status_axi_sync <= 32'd0;
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
       sys_err_pulse_toggle_axi_sync  <= 3'b000;
     end else begin
@@ -742,6 +768,8 @@ module zynq_gba_top #(
       fbcap_frame_seq_axi_sync     <= fbcap_frame_seq_axi_meta;
       fbcap_frame_buf_idx_axi_meta <= fbcap_frame_buf_idx;
       fbcap_frame_buf_idx_axi_sync <= fbcap_frame_buf_idx_axi_meta;
+      save_status_axi_meta         <= {8'd0, save_eeprom_count_core, save_flash_count_core, save_sram_count_core};
+      save_status_axi_sync         <= save_status_axi_meta;
       fb_frame_pulse_toggle_axi_sync <= {fb_frame_pulse_toggle_axi_sync[1:0], fb_frame_pulse_toggle};
       sys_err_pulse_toggle_axi_sync  <= {sys_err_pulse_toggle_axi_sync[1:0], sys_err_pulse_toggle};
     end
@@ -818,7 +846,8 @@ module zynq_gba_top #(
     .cfg_sw_reset        (w_axi_cfg_sw_reset),
     .cfg_commit_toggle   (w_axi_cfg_commit_toggle),
     .stat_fbcap_frame_seq(fbcap_frame_seq_axi_sync),
-    .stat_fbcap_frame_buf_idx(fbcap_frame_buf_idx_axi_sync)
+    .stat_fbcap_frame_buf_idx(fbcap_frame_buf_idx_axi_sync),
+    .stat_save_status    (save_status_axi)
   );
 
   gba_config_mgr u_config_mgr (
@@ -857,16 +886,6 @@ module zynq_gba_top #(
     .sample_ce             (audio_sample_ce)
   );
 
-  audio_validation_tone u_audio_validation_tone (
-    .clk_100               (clk_100),
-    .rst_n                 (rst_n),
-    .enable                (audio_validation_enable),
-    .sample_ce             (audio_sample_ce),
-    .audio_l               (validation_audio_l),
-    .audio_r               (validation_audio_r),
-    .active                (validation_audio_active)
-  );
-
   // 系统统计/指示灯映射
   assign leds[0] = audio_out_l[15];      // 播放活动指示
   assign leds[1] = ddram_busy;           // 内存活动指示
@@ -880,7 +899,7 @@ module zynq_gba_top #(
   
   gba_top #(
     .Softmap_GBA_FLASH_ADDR   (0),
-    .Softmap_GBA_EEPROM_ADDR  (0),
+    .Softmap_GBA_EEPROM_ADDR  (32768),
     .Softmap_GBA_WRam_ADDR    (131072),
     .Softmap_GBA_Gamerom_ADDR (196608),
     .Softmap_SaveState_ADDR   (58720256),

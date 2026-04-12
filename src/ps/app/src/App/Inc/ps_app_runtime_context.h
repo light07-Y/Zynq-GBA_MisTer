@@ -2,6 +2,20 @@
 #define PS_APP_RUNTIME_CONTEXT_H
 
 #include "xuartps.h"
+#if defined(__has_include)
+#if __has_include("xgpiops.h")
+#include "xgpiops.h"
+#define PS_APP_HAS_XGPIOPS_HEADER 1
+#else
+#define PS_APP_HAS_XGPIOPS_HEADER 0
+typedef struct XGpioPs {
+    unsigned int _placeholder;
+} XGpioPs;
+#endif
+#else
+#include "xgpiops.h"
+#define PS_APP_HAS_XGPIOPS_HEADER 1
+#endif
 
 #include "Audio/Inc/ps_audio_codec.h"
 #include "Common/Inc/ps_app_state.h"
@@ -13,6 +27,7 @@ extern "C" {
 #endif
 
 struct PsAppDiagContext;
+struct PsAppSaveContext;
 struct PsAppVideoContext;
 
 typedef struct PsAppRuntimeContext {
@@ -20,11 +35,19 @@ typedef struct PsAppRuntimeContext {
     PsHdmiVdma *vdma;
     PsGbaRegs *regs;
     XUartPs *uart;
+    XGpioPs *ps_gpio;
     PsAppShadowConfig *config;
     PsAppAudioState *audio;
     PsAppVideoState *video;
     PsAppRomState *rom;
+    PsAppSaveState *save;
     PsAppDiagState *diag;
+    u8 ps_gpio_ready;
+    u8 reserved0;
+    u8 reserved1;
+    u8 reserved2;
+    u32 ps_btn_last_mask;
+    struct PsAppSaveContext *save_ctx;
     struct PsAppVideoContext *video_ctx;
     struct PsAppDiagContext *diag_ctx;
 } PsAppRuntimeContext;

@@ -19,6 +19,49 @@
 #define PS_APP_FB_CAP_BRAM_BASE_ADDR 0x44000000U
 #endif
 
+#if defined(XPAR_XAXIVDMA_0_INTERRUPTS) && defined(XPAR_XAXIVDMA_0_INTERRUPT_PARENT)
+#define PS_APP_VDMA_READ_INTR_ID XPAR_XAXIVDMA_0_INTERRUPTS
+#define PS_APP_VDMA_READ_INTR_PARENT XPAR_XAXIVDMA_0_INTERRUPT_PARENT
+#elif defined(XPAR_HDMI_VDMA_INTERRUPTS) && defined(XPAR_HDMI_VDMA_INTERRUPT_PARENT)
+#define PS_APP_VDMA_READ_INTR_ID XPAR_HDMI_VDMA_INTERRUPTS
+#define PS_APP_VDMA_READ_INTR_PARENT XPAR_HDMI_VDMA_INTERRUPT_PARENT
+#else
+#define PS_APP_VDMA_READ_INTR_ID 0U
+#define PS_APP_VDMA_READ_INTR_PARENT 0U
+#endif
+
+/*
+ * HDMI 这里使用的是 MM2S 持续显示链路。
+ * 该场景下必须保持 circular/parking 语义，不能再把 READ 通道切到
+ * FrameCounter 模式，否则 VDMA 会在固定帧数后自动 halted，最终黑屏。
+ * 因此这里只保留 error interrupt，用于故障检测；显示推进仍由现有
+ * VSYNC/服务循环驱动。
+ */
+#define PS_APP_VDMA_READ_IRQ_MASK XAXIVDMA_IXR_ERROR_MASK
+
+static void PsAppVideo_UpdateDisplayFrameState(PsAppVideoContext *ctx) {
+    u32 frame_idx;
+
+    if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
+        return;
+    }
+
+    frame_idx = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
+    if (frame_idx >= ctx->vdma->frame_count) {
+        frame_idx = 0U;
+    }
+
+    if ((ctx->state->pending_frame_idx >= ctx->vdma->frame_count) ||
+        (ctx->state->pending_frame_idx == (u8)frame_idx)) {
+        ctx->state->pending_frame_idx = (u8)frame_idx;
+    }
+
+    if (ctx->state->display_frame_idx != (u8)frame_idx) {
+        ctx->state->display_frame_idx = (u8)frame_idx;
+        PsGbaRegs_SetDisplayFrameIdx(ctx->regs, frame_idx);
+    }
+}
+
 static void PsAppVideo_VdmaGeneralCallback(void *ref, u32 intr_mask) {
     PsAppVideoContext *ctx = (PsAppVideoContext *)ref;
 
@@ -28,6 +71,7 @@ static void PsAppVideo_VdmaGeneralCallback(void *ref, u32 intr_mask) {
 
     ctx->state->vdma_last_intr_mask = intr_mask;
     ctx->state->vdma_irq_count++;
+    PsAppVideo_UpdateDisplayFrameState(ctx);
 }
 
 static void PsAppVideo_VdmaErrorCallback(void *ref, u32 err_mask) {
@@ -182,10 +226,13 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
 }
 
 XStatus PsAppVideo_InitInterrupts(PsAppVideoContext *ctx) {
-    XAxiVdma_Config *cfg;
     XStatus status;
 
     if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
+        return XST_FAILURE;
+    }
+
+    if ((PS_APP_VDMA_READ_INTR_ID == 0U) || (PS_APP_VDMA_READ_INTR_PARENT == 0U)) {
         return XST_FAILURE;
     }
 
@@ -194,15 +241,20 @@ XStatus PsAppVideo_InitInterrupts(PsAppVideoContext *ctx) {
     ctx->state->vdma_last_intr_mask = 0U;
     ctx->state->vdma_last_err_mask = 0U;
 
-    cfg = XAxiVdma_LookupConfig(ctx->vdma->vdma.BaseAddr);
-    if (cfg == NULL) {
-        return XST_FAILURE;
-    }
+    XAxiVdma_IntrDisable(&ctx->vdma->vdma, XAXIVDMA_IXR_ALL_MASK, XAXIVDMA_READ);
+    XAxiVdma_IntrClear(&ctx->vdma->vdma, XAXIVDMA_IXR_ALL_MASK, XAXIVDMA_READ);
 
+    /*
+     * 这里仍然注册 general callback，是因为官方驱动的 ReadIntrHandler()
+     * 会先检查 CompletionCallBack 是否为空；若为空会直接 return，连
+     * error callback 也不会继续分发。
+     * 但我们不会打开 FRMCNT/DELAY completion 中断，只让它作为驱动入口
+     * 的占位回调存在。
+     */
     status = XAxiVdma_SetCallBack(&ctx->vdma->vdma,
                                   XAXIVDMA_HANDLER_GENERAL,
-                                  PsAppVideo_VdmaGeneralCallback,
-                                  ctx,
+                                  (void *)PsAppVideo_VdmaGeneralCallback,
+                                  (void *)ctx,
                                   XAXIVDMA_READ);
     if (status != XST_SUCCESS) {
         return status;
@@ -210,25 +262,31 @@ XStatus PsAppVideo_InitInterrupts(PsAppVideoContext *ctx) {
 
     status = XAxiVdma_SetCallBack(&ctx->vdma->vdma,
                                   XAXIVDMA_HANDLER_ERROR,
-                                  PsAppVideo_VdmaErrorCallback,
-                                  ctx,
+                                  (void *)PsAppVideo_VdmaErrorCallback,
+                                  (void *)ctx,
                                   XAXIVDMA_READ);
     if (status != XST_SUCCESS) {
         return status;
     }
 
+    /*
+     * 不调用 XAxiVdma_SetFrameCounter() / XAxiVdma_StartFrmCntEnable()。
+     * 它们对应的是 frame-count 传输语义，适合测试/计数型中断示例，
+     * 不适合当前 HDMI MM2S 持续输出。
+     */
     status = XSetupInterruptSystem(&ctx->vdma->vdma,
-                                   &XAxiVdma_ReadIntrHandler,
-                                   cfg->IntrId[0],
-                                   cfg->IntrParent,
+                                   (void *)XAxiVdma_ReadIntrHandler,
+                                   PS_APP_VDMA_READ_INTR_ID,
+                                   PS_APP_VDMA_READ_INTR_PARENT,
                                    XINTERRUPT_DEFAULT_PRIORITY);
     if (status != XST_SUCCESS) {
         return status;
     }
 
-    XAxiVdma_IntrDisable(&ctx->vdma->vdma, XAXIVDMA_IXR_ALL_MASK, XAXIVDMA_READ);
     XAxiVdma_IntrClear(&ctx->vdma->vdma, XAXIVDMA_IXR_ALL_MASK, XAXIVDMA_READ);
-    XAxiVdma_IntrEnable(&ctx->vdma->vdma, XAXIVDMA_IXR_ERROR_MASK, XAXIVDMA_READ);
+    XAxiVdma_IntrEnable(&ctx->vdma->vdma, PS_APP_VDMA_READ_IRQ_MASK, XAXIVDMA_READ);
+    PsAppVideo_UpdateDisplayFrameState(ctx);
+    xil_printf("[VDMA] interrupt mode: read error irq enabled\r\n");
     return XST_SUCCESS;
 }
 
@@ -308,33 +366,23 @@ void PsAppVideo_AttemptRecover(PsAppVideoContext *ctx, u32 vdma_status, u32 vdma
     }
 
     if (is_halted != 0U) {
+        /*
+         * 恢复时只重新启动连续输出通道，不要重新打开 FrameCounter。
+         * 之前黑屏的根因就是在 recover 路径里把 FRMCNT_EN 重新拉起，
+         * 导致 VDMA 反复“启动后又按固定帧数停机”。
+         */
         (void)XAxiVdma_DmaStart(&ctx->vdma->vdma, XAXIVDMA_READ);
     }
 
     (void)PsAppVideo_RequestFrame(ctx, 0U);
+    /* 恢复后重新打开 error irq，继续监控真实的 DMA 故障。 */
+    XAxiVdma_IntrClear(&ctx->vdma->vdma, XAXIVDMA_IXR_ALL_MASK, XAXIVDMA_READ);
+    XAxiVdma_IntrEnable(&ctx->vdma->vdma, PS_APP_VDMA_READ_IRQ_MASK, XAXIVDMA_READ);
+    PsAppVideo_UpdateDisplayFrameState(ctx);
 }
 
 void PsAppVideo_SyncDisplayFrame(PsAppVideoContext *ctx) {
-    u32 frame_idx;
-
-    if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
-        return;
-    }
-
-    frame_idx = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
-    if (frame_idx >= ctx->vdma->frame_count) {
-        frame_idx = 0U;
-    }
-
-    if ((ctx->state->pending_frame_idx >= ctx->vdma->frame_count) ||
-        (ctx->state->pending_frame_idx == (u8)frame_idx)) {
-        ctx->state->pending_frame_idx = (u8)frame_idx;
-    }
-
-    if (ctx->state->display_frame_idx != (u8)frame_idx) {
-        ctx->state->display_frame_idx = (u8)frame_idx;
-        PsGbaRegs_SetDisplayFrameIdx(ctx->regs, frame_idx);
-    }
+    PsAppVideo_UpdateDisplayFrameState(ctx);
 }
 
 XStatus PsAppVideo_RenderBootFrames(PsAppVideoContext *ctx) {
@@ -358,6 +406,7 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
     u32 seq0;
     u32 seq1;
     u32 status;
+    static u32 blit_diag_count = 0U;
 
     if ((ctx == NULL) || (ctx->rom->loaded == 0U)) {
         return;
@@ -374,7 +423,24 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
         return;
     }
 
-    (void)PsAppVideo_BlitCapturedFrameToHdmi(ctx, seq1, status & 0x1U);
+    if (blit_diag_count < 5U) {
+        xil_printf("[BLIT] seq=%u last=%u buf=%u\r\n",
+                   (unsigned int)seq1,
+                   (unsigned int)ctx->state->fbcap_last_frame_seq,
+                   (unsigned int)(status & 0x1U));
+    }
+
+    {
+        XStatus rc = PsAppVideo_BlitCapturedFrameToHdmi(ctx, seq1, status & 0x1U);
+        if (blit_diag_count < 5U) {
+            u32 parked = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
+            xil_printf("[BLIT] rc=%d target=%u parked=%u\r\n",
+                       (int)rc,
+                       (unsigned int)ctx->state->fbcap_last_frame_idx,
+                       (unsigned int)parked);
+            blit_diag_count++;
+        }
+    }
 }
 
 u32 PsAppVideo_DefaultCaptureBuffer(PsAppVideoContext *ctx) {

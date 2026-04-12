@@ -37,6 +37,7 @@ int main(void) {
     }
 
     usleep(PS_APP_AUTO_BOOT_AUDIT_DELAY_MS * 1000U);
+    PsAppVideo_PresentCapturedFrameIfReady(&g_app.video_ctx);
     PsAppVideo_SyncDisplayFrame(&g_app.video_ctx);
     PsAppDiag_PrintAutoBootAudit(&g_app.diag_ctx);
 

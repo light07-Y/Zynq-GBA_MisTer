@@ -68,7 +68,7 @@
         "MANAGED": [ { "value": "TRUE" } ],
         "OUTPUTDIR": [ { "value": "../../../../../../Zynq-GBA_MisTer-Vivado.gen/sources_1/bd/zynq_gba_system/ip/zynq_gba_system_hdmi_rgb_pack_0" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
-        "SHAREDDIR": [ { "value": "../../../../../../Zynq-GBA_MisTer-Vivado/src/bd/zynq_gba_system/ipshared" } ],
+        "SHAREDDIR": [ { "value": "../../ipshared" } ],
         "SWVERSION": [ { "value": "2025.2.1" } ],
         "SYNTHESISFLOW": [ { "value": "GLOBAL" } ]
       }

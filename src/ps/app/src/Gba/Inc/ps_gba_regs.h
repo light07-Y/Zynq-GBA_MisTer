@@ -56,7 +56,8 @@ enum {
     GBA_REG_DBG_DONE_LAST_ADDR     = 0x0A0,
     GBA_REG_DBG_DONE_LAST_META     = 0x0A4,
     GBA_REG_FB_CAP_STATUS          = 0x0A8,
-    GBA_REG_FB_CAP_SEQ             = 0x0AC
+    GBA_REG_FB_CAP_SEQ             = 0x0AC,
+    GBA_REG_SAVE_STATUS            = 0x0B0
 };
 
 enum {
@@ -65,7 +66,6 @@ enum {
     GBA_CTRL_CPU_TURBO       = (1U << 2),
     GBA_CTRL_SRAM_FLASH_EN   = (1U << 4),
     GBA_CTRL_MEMORY_REMAP    = (1U << 5),
-    GBA_CTRL_AUDIO_TONE      = (1U << 6),
     GBA_CTRL_ROM_LOADING     = (1U << 8)
 };
 

@@ -41,7 +41,7 @@ void PsGbaRegs_ApplyBootDefaults(PsGbaRegs *ctx) {
     }
 
     ctrl = PsGbaRegs_Read(ctx, GBA_REG_CTRL);
-    ctrl |= (GBA_CTRL_CORE_ON | GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN | GBA_CTRL_AUDIO_TONE);
+    ctrl |= (GBA_CTRL_CORE_ON | GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN);
 
     PsGbaRegs_CommitConfig(ctx,
                            ctrl,

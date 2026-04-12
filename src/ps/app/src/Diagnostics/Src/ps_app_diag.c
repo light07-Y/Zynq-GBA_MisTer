@@ -839,8 +839,6 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
                (unsigned int)ctx->audio->bits_per_sample,
                (unsigned int)ctx->audio->mute,
                (unsigned int)ctx->audio->volume);
-    xil_printf("[DIAG] audio cue=%u\r\n",
-               (unsigned int)ctx->audio->tone_enable);
     xil_printf("[DIAG] rom loaded=%u busy=%u bytes=%u aligned=%u maxpak=0x%08x\r\n",
                (unsigned int)ctx->rom->loaded,
                (unsigned int)(PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS) & 0x1U),
