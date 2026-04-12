@@ -1,4 +1,4 @@
-#include "ps_audio_codec.h"
+#include "Audio/Inc/ps_audio_codec.h"
 
 #include "xil_printf.h"
 

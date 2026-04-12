@@ -27,8 +27,19 @@ collector_create (PROJECT_LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}")
 collector_list (_headers PROJECT_LIB_HEADERS)
 collector_list (_sources PROJECT_LIB_SOURCES)
 
-aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR} current_dir_sources)
-list(APPEND _sources ${current_dir_sources})
+file(GLOB_RECURSE app_headers CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp")
+file(GLOB_RECURSE app_sources CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.S"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.s"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.asm")
+list(APPEND _headers ${app_headers})
+list(APPEND _sources ${app_sources})
 list (APPEND _sources ${USER_COMPILE_SOURCES})
 foreach (source ${_sources})
     get_filename_component(ext ${source} EXT)
@@ -52,7 +63,11 @@ if (CMAKE_EXPORT_COMPILE_COMMANDS AND
     set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
     set(CMAKE_C_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES})
 endif()
-linker_gen("${CMAKE_SOURCE_DIR}/linker_files/")
+if (EXISTS "${CMAKE_SOURCE_DIR}/linker_files/")
+    linker_gen("${CMAKE_SOURCE_DIR}/linker_files/")
+elseif (NOT DEFINED USER_LINKER_SCRIPT OR "${USER_LINKER_SCRIPT}" STREQUAL "")
+    set(USER_LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/lscript.ld")
+endif()
 string(APPEND CMAKE_C_FLAGS ${USER_COMPILE_OPTIONS})
 string(APPEND CMAKE_CXX_FLAGS ${USER_COMPILE_OPTIONS})
 string(APPEND CMAKE_C_LINK_FLAGS ${USER_LINK_OPTIONS})

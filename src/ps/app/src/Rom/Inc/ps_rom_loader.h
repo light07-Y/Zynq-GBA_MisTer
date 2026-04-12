@@ -1,9 +1,10 @@
 #ifndef PS_ROM_LOADER_H
 #define PS_ROM_LOADER_H
 
-#include "ff.h"
 #include "xil_types.h"
 #include "xstatus.h"
+
+#include "Storage/Inc/ps_fatfs_storage.h"
 
 #ifdef __cplusplus
 extern "C" {

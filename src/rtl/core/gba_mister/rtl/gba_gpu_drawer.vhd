@@ -338,7 +338,6 @@ architecture arch of gba_gpu_drawer is
    signal pixeldata_bg1                  : std_logic_vector(15 downto 0);
    signal pixeldata_bg2                  : std_logic_vector(15 downto 0);
    signal pixeldata_bg3                  : std_logic_vector(15 downto 0);
-   signal pixeldata_obj                  : std_logic_vector(18 downto 0);
    signal pixeldata_obj_color            : std_logic_vector(15 downto 0);
    signal pixeldata_obj_color_hd0        : std_logic_vector(15 downto 0);
    signal pixeldata_obj_color_hd1        : std_logic_vector(15 downto 0);
@@ -814,7 +813,6 @@ begin
       OAMRAM_Drawer_data(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
    end generate;  
    goamram_hd0 : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
       signal ram_dout_single2 : std_logic_vector(7 downto 0);
       signal ram_din_single  : std_logic_vector(7 downto 0);
    begin
@@ -846,7 +844,6 @@ begin
       OAMRAM_Drawer_data_hd0(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
    end generate; 
    goamram_hd1 : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
       signal ram_dout_single2 : std_logic_vector(7 downto 0);
       signal ram_din_single  : std_logic_vector(7 downto 0);
    begin
@@ -946,7 +943,6 @@ begin
       PALETTE_OAM_Drawer_data(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2; 
    end generate; 
    gpaletteram_oam_hd0 : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
       signal ram_dout_single2 : std_logic_vector(7 downto 0);
       signal ram_din_single  : std_logic_vector(7 downto 0);
    begin
@@ -978,7 +974,6 @@ begin
       PALETTE_OAM_Drawer_data_hd0(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2; 
    end generate; 
    gpaletteram_oam_hd1 : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
       signal ram_dout_single2 : std_logic_vector(7 downto 0);
       signal ram_din_single  : std_logic_vector(7 downto 0);
    begin

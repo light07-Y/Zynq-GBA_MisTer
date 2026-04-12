@@ -153,8 +153,7 @@ module zynq_gba_top #(
   output        ch1_req,
   output        ch2_req,
   output        ch3_req,
-  output        ch4_req,
-  output        ch5_req
+  output        ch4_req
 );
 
   // ==========================================================================
@@ -189,13 +188,13 @@ module zynq_gba_top #(
   wire [7:0]  ddram_be;
   wire        ddram_we;
 
-  wire [27:1] ch1_addr, ch2_addr, ch4_addr, ch5_addr;
+  wire [27:1] ch1_addr, ch2_addr, ch4_addr;
   wire [24:1] ch3_addr;
-  wire [63:0] ch1_dout, ch1_din, ch2_din, ch4_dout, ch4_din, ch5_din, ch5_dout_unused;
+  wire [63:0] ch1_dout, ch1_din, ch2_din, ch4_dout, ch4_din;
   wire [31:0] ch2_dout;
   wire [15:0] ch3_din, ch3_dout_unused;
-  wire        ch1_ready, ch2_ready, ch3_ready_unused, ch4_ready, ch5_ready;
-  wire        ch1_rnw, ch2_rnw, ch3_rnw, ch4_rnw, ch5_rnw;
+  wire        ch1_ready, ch2_ready, ch3_ready_unused, ch4_ready;
+  wire        ch1_rnw, ch2_rnw, ch3_rnw, ch4_rnw;
   wire [7:0]  ch4_be;
 
   // 4. GBA 核心内存请求接口
@@ -216,12 +215,10 @@ module zynq_gba_top #(
   wire        fb_frame_pulse;
   // fb_frame_idx_unused 已随 frame_tick_480p 一并移除
   wire [1:0]  display_frame_idx_core;
-  wire [27:1] fb_wr_addr;
-  wire [63:0] fb_wr_data;
-  wire        fb_wr_req, fb_wr_ack;
-  wire [25:0] core_fb_addr;
-  wire [63:0] core_fb_data;
-  wire        core_fb_req;
+  wire [31:0] unused_core_fb_base;
+  wire [25:0] unused_core_fb_addr;
+  wire [63:0] unused_core_fb_data;
+  wire        unused_core_fb_req;
   wire        core_fb_done;
   wire        core_fb_newframe;
   wire [15:0] core_pixel_addr;
@@ -271,8 +268,8 @@ module zynq_gba_top #(
 
   (* ASYNC_REG = "TRUE" *) reg        w_core_cfg_sw_reset_meta, w_core_cfg_sw_reset_sync;
   (* ASYNC_REG = "TRUE" *) reg [1:0]  display_frame_idx_core_meta, display_frame_idx_core_sync;
-  (* ASYNC_REG = "TRUE" *) reg [31:0] cycles_missing_axi_meta, cycles_missing_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg [31:0] cycles_vsync_speed_axi_meta, cycles_vsync_speed_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [13:0] cycles_missing_axi_meta, cycles_missing_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [15:0] cycles_vsync_speed_axi_meta, cycles_vsync_speed_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] sys_err_vec_axi_meta, sys_err_vec_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [1:0]  fb_frame_idx_axi_meta, fb_frame_idx_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg        sys_rom_loading_axi_meta, sys_rom_loading_axi_sync;
@@ -308,7 +305,6 @@ module zynq_gba_top #(
   (* ASYNC_REG = "TRUE" *) reg [31:0] fbcap_frame_seq_axi_meta, fbcap_frame_seq_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg        fbcap_frame_buf_idx_axi_meta, fbcap_frame_buf_idx_axi_sync;
 
-  wire [31:0] unused_core_fb_base;
   wire [15:0] unused_core_vcount;
   reg                                  fb_frame_pulse_toggle;
   reg                                  sys_err_pulse_toggle;
@@ -389,7 +385,7 @@ module zynq_gba_top #(
   assign audio_out_r = validation_audio_active ? validation_audio_r : core_audio_r;
   assign audio_l = audio_out_l;
   assign audio_r = audio_out_r;
-  assign core_fb_newframe = core_fb_req && (core_fb_addr[19:0] == 20'd0);
+  assign core_fb_newframe = core_pixel_we && (core_pixel_addr == 16'd0);
   assign dbg_chain_flags_axi = dbg_chain_flags_axi_sync;
   assign dbg_chain_counts0_axi = dbg_chain_counts0_axi_sync;
   assign dbg_chain_counts1_axi = dbg_chain_counts1_axi_sync;
@@ -599,10 +595,10 @@ module zynq_gba_top #(
 
   always @(posedge s_axi_aclk) begin
     if (!s_axi_aresetn) begin
-      cycles_missing_axi_meta      <= 32'd0;
-      cycles_missing_axi_sync      <= 32'd0;
-      cycles_vsync_speed_axi_meta  <= 32'd0;
-      cycles_vsync_speed_axi_sync  <= 32'd0;
+      cycles_missing_axi_meta      <= 14'd0;
+      cycles_missing_axi_sync      <= 14'd0;
+      cycles_vsync_speed_axi_meta  <= 16'd0;
+      cycles_vsync_speed_axi_sync  <= 16'd0;
       sys_err_vec_axi_meta         <= 32'd0;
       sys_err_vec_axi_sync         <= 32'd0;
       fb_frame_idx_axi_meta        <= 2'd0;
@@ -674,9 +670,9 @@ module zynq_gba_top #(
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
       sys_err_pulse_toggle_axi_sync  <= 3'b000;
     end else begin
-      cycles_missing_axi_meta      <= cycles_missing;
+      cycles_missing_axi_meta      <= cycles_missing[13:0];
       cycles_missing_axi_sync      <= cycles_missing_axi_meta;
-      cycles_vsync_speed_axi_meta  <= cycles_vsync_speed;
+      cycles_vsync_speed_axi_meta  <= cycles_vsync_speed[15:0];
       cycles_vsync_speed_axi_sync  <= cycles_vsync_speed_axi_meta;
       sys_err_vec_axi_meta         <= sys_err_vec_w;
       sys_err_vec_axi_sync         <= sys_err_vec_axi_meta;
@@ -684,7 +680,7 @@ module zynq_gba_top #(
       fb_frame_idx_axi_sync        <= fb_frame_idx_axi_meta;
       sys_rom_loading_axi_meta     <= w_core_cfg_ctrl[8];
       sys_rom_loading_axi_sync     <= sys_rom_loading_axi_meta;
-      physical_keys_axi_meta       <= {2'b0, btns[1], btns[0], btns[2], btns[3], sws[3], sws[2], sws[1], sws[0]};
+      physical_keys_axi_meta       <= {(sws[3] & btns[3]), (sws[3] & btns[0]), btns[1], btns[2], (btns[3] & ~sws[3]), (btns[0] & ~sws[3]), sws[2], (sws[3] & ~btns[3] & ~btns[0]), sws[1], sws[0]};
       physical_keys_axi_sync       <= physical_keys_axi_meta;
       debug_cpu_pc_axi_meta        <= unused_debug_cpu_pc;
       debug_cpu_pc_axi_sync        <= debug_cpu_pc_axi_meta;
@@ -778,7 +774,6 @@ module zynq_gba_top #(
     .s_axi_rready        (s_axi_rready),
     .stat_cycles_missing (cycles_missing_axi_sync),
     .stat_cycles_vsync_speed(cycles_vsync_speed_axi_sync),
-    .stat_fb_underflow   (1'b0),
     .stat_fb_frame_idx   (fb_frame_idx_axi_sync),
     .stat_physical_keys  (physical_keys_axi),
     .stat_debug_cpu_pc   (debug_cpu_pc_axi),
@@ -994,9 +989,9 @@ module zynq_gba_top #(
     // 复用 core 内部原生的 largeimg 打包链路，让 framebuffer 写入
     // 与上游 MiSTer 参考实现保持一致。
     .largeimg_out_base     (unused_core_fb_base),
-    .largeimg_out_addr     (core_fb_addr),
-    .largeimg_out_data     (core_fb_data),
-    .largeimg_out_req      (core_fb_req),
+    .largeimg_out_addr     (unused_core_fb_addr),
+    .largeimg_out_data     (unused_core_fb_data),
+    .largeimg_out_req      (unused_core_fb_req),
     .largeimg_out_done     (core_fb_done),
     .largeimg_newframe     (core_fb_newframe),
     .largeimg_singlebuf    (1'b0),
@@ -1066,7 +1061,7 @@ module zynq_gba_top #(
     .ch2_addr(ch2_addr), .ch2_dout(ch2_dout),     .ch2_din(ch2_din[31:0]), .ch2_req(ch2_req), .ch2_rnw(ch2_rnw), .ch2_ready(bus_out_done),
     .ch3_addr(ch3_addr), .ch3_dout(ch3_dout_unused), .ch3_din(ch3_din), .ch3_req(ch3_req), .ch3_rnw(ch3_rnw), .ch3_ready(ch3_ready_unused),
     .ch4_addr(ch4_addr), .ch4_dout(ch4_dout), .ch4_din(ch4_din), .ch4_req(ch4_req), .ch4_rnw(ch4_rnw), .ch4_be(ch4_be), .ch4_ready(save_out_done),
-    .ch5_addr(ch5_addr), .ch5_dout(ch5_dout_unused), .ch5_din(ch5_din), .ch5_req(ch5_req), .ch5_rnw(ch5_rnw), .ch5_ready(ch5_ready)
+    .ch5_addr(27'd0), .ch5_dout(), .ch5_din(64'd0), .ch5_req(1'b0), .ch5_rnw(1'b1), .ch5_ready()
   );
 
   assign sdram_read_data = ch1_dout[31:0];
@@ -1090,39 +1085,7 @@ module zynq_gba_top #(
     .ERR_VEC(sys_err_vec_w), .ERR_PULSE(sys_err_pulse_w)
   );
 
-  // ==========================================================================
-  // --- 第四层：视频时序单元 (Video Sequencer) ---
-  // ==========================================================================
-  // 责任：帧脉冲生成及 framebuffer 到 DDR 的写请求仲裁
-  //
-  // 使用 gba_top 内部的 largeimg 打包链路（已含 2x 垂直缩放和 64-bit 像素
-  // 打包），通过 fb_largeimg_bridge 映射到 Zynq framebuffer 布局，再经
-  // fb_ddr_arbiter 写入 DDR。core_fb_done 连回 wr_ack 以节流 largeimg
-  // 状态机，保证每笔 DDR 写入完成后才发起下一笔。
-
-  // 帧脉冲：由 largeimg 链路检测帧起始（像素地址低 20 位归零）产生，
-  // 替代之前的自由计数器，与实际帧内容同步。
   assign fb_frame_pulse = core_fb_newframe;
-
-  fb_largeimg_bridge u_fb_bridge (
-    .clk              (clk_100),
-    .rst_n            (rst_n),
-    .display_frame_idx(display_frame_idx_core),
-    .largeimg_addr    (core_fb_addr),
-    .largeimg_data    (core_fb_data),
-    .largeimg_req     (1'b0),
-    .wr_addr          (fb_wr_addr),
-    .wr_data          (fb_wr_data),
-    .wr_req           (fb_wr_req)
-  );
-
-  fb_ddr_arbiter u_fb_arb (
-    .clk(clk_100), .rst_n(rst_n),
-    .wr_addr(fb_wr_addr), .wr_data(fb_wr_data), .wr_req(fb_wr_req), .wr_ack(fb_wr_ack),
-    .ch5_addr(ch5_addr), .ch5_din(ch5_din), .ch5_req(ch5_req), .ch5_rnw(ch5_rnw), .ch5_ready(ch5_ready)
-  );
-
-  // 将 DDR 写确认反馈给 gba_top 的 largeimg_out_done，节流状态机。
   assign core_fb_done = 1'b1;
 
 endmodule

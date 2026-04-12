@@ -24,9 +24,8 @@ module axi_lite_ctrl_regs #(
   output logic                 s_axi_rvalid,
   input  logic                 s_axi_rready,
 
-  input  logic [31:0]          stat_cycles_missing,
-  input  logic [31:0]          stat_cycles_vsync_speed,
-  input  logic                 stat_fb_underflow,
+  input  logic [13:0]          stat_cycles_missing,
+  input  logic [15:0]          stat_cycles_vsync_speed,
   input  logic [1:0]           stat_fb_frame_idx,
   input  logic [9:0]           stat_physical_keys,
   input  logic [31:0]          stat_debug_cpu_pc,
@@ -294,7 +293,7 @@ module axi_lite_ctrl_regs #(
           REG_CYCLE_PRECALC: rdata_next = {16'd0, cfg_cycle_precalc};
           REG_RTC_TIMESTAMP: rdata_next = cfg_rtc_timestamp;
           REG_STATUS0:       rdata_next = {22'd0, stat_physical_keys};
-          REG_STATUS1:       rdata_next = {stat_cycles_vsync_speed[15:0], stat_cycles_missing[13:0], stat_fb_frame_idx};
+          REG_STATUS1:       rdata_next = {stat_cycles_vsync_speed, stat_cycles_missing, stat_fb_frame_idx};
           REG_SW_RESET:      rdata_next = {31'd0, cfg_sw_reset};
           REG_ROM_STATUS:    rdata_next = {31'd0, sys_rom_loading};
           REG_ERROR_LATCH:   rdata_next = error_latch;

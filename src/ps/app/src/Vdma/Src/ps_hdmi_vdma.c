@@ -1,4 +1,4 @@
-#include "ps_hdmi_vdma.h"
+#include "Vdma/Inc/ps_hdmi_vdma.h"
 
 #include "xil_cache.h"
 
@@ -63,9 +63,17 @@ XStatus PsHdmiVdma_Init(PsHdmiVdma *ctx,
     setup.HoriSizeInput = ctx->line_stride_bytes;
     setup.Stride = ctx->line_stride_bytes;
     setup.FrameDelay = 0;
+    /*
+     * HDMI 显示是持续输出场景，底层配置必须以 circular mode 启动。
+     * 后续切换显示帧时，再通过 StartParking() 临时切到指定 frame。
+     */
     setup.EnableCircularBuf = 1;
     setup.EnableSync = 0;
     setup.PointNum = 0;
+    /*
+     * 这里必须保持 0。对 MM2S 来说，EnableFrameCounter=1 不是“每帧中断”，
+     * 而是“只传固定数量的 frame 后自动停机”。
+     */
     setup.EnableFrameCounter = 0;
     setup.FixedFrameStoreAddr = 0;
     setup.GenLockRepeat = 0;
@@ -86,6 +94,11 @@ XStatus PsHdmiVdma_Init(PsHdmiVdma *ctx,
         return status;
     }
 
+    /*
+     * 先启动通道，再 park 到一个确定的初始 frame。
+     * 不要把这一步和 EnableFrameCounter 混用，否则会出现每帧自停后
+     * 软件再反复“recover”的假故障现象。
+     */
     status = XAxiVdma_StartParking(&ctx->vdma, 0, XAXIVDMA_READ);
     if (status != XST_SUCCESS) {
         return status;
@@ -103,6 +116,7 @@ XStatus PsHdmiVdma_Park(PsHdmiVdma *ctx, u32 frame_idx) {
         return status;
     }
 
+    /* Park 仅切换当前显示帧，不会改变初始化时的 continuous/circular 策略。 */
     return XAxiVdma_StartParking(&ctx->vdma, (int)frame_idx, XAXIVDMA_READ);
 }
 
@@ -111,6 +125,7 @@ XStatus PsHdmiVdma_EnableCircular(PsHdmiVdma *ctx) {
         return XST_FAILURE;
     }
 
+    /* 退出 park 后恢复 circular mode，让 VDMA 在 frame store 间持续运行。 */
     XAxiVdma_StopParking(&ctx->vdma, XAXIVDMA_READ);
     return XST_SUCCESS;
 }
@@ -152,50 +167,5 @@ XStatus PsHdmiVdma_FillAllFrames(PsHdmiVdma *ctx, u32 color_xrgb8888) {
         }
     }
 
-    return XST_SUCCESS;
-}
-
-XStatus PsHdmiVdma_DrawTestPattern(PsHdmiVdma *ctx, u32 frame_idx, u32 seed) {
-    u32 x;
-    u32 y;
-    u32 width;
-    u32 height;
-    u32 *fb32;
-    XStatus status;
-
-    status = PsHdmiVdma_ValidateFrameIndex(ctx, frame_idx);
-    if (status != XST_SUCCESS) {
-        return status;
-    }
-
-    width = ctx->width;
-    height = ctx->height;
-    fb32 = (u32 *)ctx->frame_addrs[frame_idx];
-
-    for (y = 0U; y < height; ++y) {
-        for (x = 0U; x < width; ++x) {
-            u32 r;
-            u32 g;
-            u32 b;
-            u32 color;
-            u32 index;
-
-            r = (x + (seed * 17U)) & 0xFFU;
-            g = (y + (seed * 31U)) & 0xFFU;
-            b = ((x >> 3U) ^ (y >> 3U) ^ (seed * 11U)) & 0xFFU;
-
-            if ((x < 4U) || (x >= (width - 4U)) || (y < 4U) || (y >= (height - 4U))) {
-                r = 255U;
-                g = 255U;
-                b = 255U;
-            }
-
-            color = ((b & 0xFFU) << 16U) | ((g & 0xFFU) << 8U) | (r & 0xFFU);
-            index = (y * width) + x;
-            fb32[index] = color;
-        }
-    }
-
-    Xil_DCacheFlushRange((INTPTR)ctx->frame_addrs[frame_idx], (INTPTR)ctx->frame_size_bytes);
     return XST_SUCCESS;
 }

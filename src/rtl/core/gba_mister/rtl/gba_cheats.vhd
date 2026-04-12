@@ -86,10 +86,6 @@ architecture arch of gba_cheats is
    signal cheatindex : integer range 0 to CHEATCOUNT - 1 := 0;
    signal cheatdata  : std_logic_vector(127 downto 0);
    
-   signal stop_defragment : integer range 0 to CHEATCOUNT - 1 := 0;
-   
-   signal first_free : integer range 0 to CHEATCOUNT := 0;
-   
    signal skip_next  : std_logic := '0';
    signal oldvalue   : std_logic_vector(31 downto 0);
    

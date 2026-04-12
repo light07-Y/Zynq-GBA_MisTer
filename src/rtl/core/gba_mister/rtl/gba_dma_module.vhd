@@ -226,8 +226,8 @@ begin
                   Repeat             <= CNT_H_DMA_Repeat(CNT_H_DMA_Repeat'left);
                   Transfer_Type_DW   <= CNT_H_DMA_Transfer_Type(CNT_H_DMA_Transfer_Type'left);
    
-                  addr_source <= unsigned(SAD(27 downto 0));
-                  addr_target <= unsigned(DAD(27 downto 0));
+                  addr_source <= resize(unsigned(SAD and x"0FFFFFFF"), addr_source'length);
+                  addr_target <= resize(unsigned(DAD and x"0FFFFFFF"), addr_target'length);
    
                   case (index) is
                      when 0 => addr_source(27) <= '0'; addr_target(27) <= '0';
@@ -237,16 +237,16 @@ begin
                   end case;
                      
                   if (index = 3) then
-                     if (CNT_L(15 downto 0) = (15 downto 0 => '0')) then
+                     if (unsigned(CNT_L) = to_unsigned(0, CNT_L'length)) then
                         count <= '1' & x"0000";
                      else
-                        count <= '0' & unsigned(CNT_L(15 downto 0));
+                        count <= resize(unsigned(CNT_L), count'length);
                      end if;  
                   else
-                     if (CNT_L(13 downto 0) = (13 downto 0 => '0')) then
+                     if ((unsigned(CNT_L) and to_unsigned(16#3FFF#, CNT_L'length)) = to_unsigned(0, CNT_L'length)) then
                         count <= '0' & x"4000";
                      else
-                        count <= "000" & unsigned(CNT_L(13 downto 0));
+                        count <= resize(unsigned(CNT_L) and to_unsigned(16#3FFF#, CNT_L'length), count'length);
                      end if;  
                   end if;
    
@@ -408,21 +408,21 @@ begin
                                  else
                                     
                                     if (index = 3) then
-                                       if (CNT_L(15 downto 0) = (15 downto 0 => '0')) then
+                                       if (unsigned(CNT_L) = to_unsigned(0, CNT_L'length)) then
                                           count <= '1' & x"0000";
                                        else
-                                          count <= '0' & unsigned(CNT_L(15 downto 0));
+                                          count <= resize(unsigned(CNT_L), count'length);
                                        end if;  
                                     else
-                                       if (CNT_L(13 downto 0) = (13 downto 0 => '0')) then
+                                       if ((unsigned(CNT_L) and to_unsigned(16#3FFF#, CNT_L'length)) = to_unsigned(0, CNT_L'length)) then
                                           count <= '0' & x"4000";
                                        else
-                                          count <= "000" & unsigned(CNT_L(13 downto 0));
+                                          count <= resize(unsigned(CNT_L) and to_unsigned(16#3FFF#, CNT_L'length), count'length);
                                        end if;  
                                     end if;
                                     
                                     if (dest_Addr_Control = 3) then
-                                       addr_target <= unsigned(DAD(27 downto 0));
+                                       addr_target <= resize(unsigned(DAD and x"0FFFFFFF"), addr_target'length);
                                        if (index < 3) then
                                           addr_target(27) <= '0';
                                        end if;

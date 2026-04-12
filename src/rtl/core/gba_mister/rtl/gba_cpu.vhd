@@ -227,7 +227,6 @@ architecture arch of gba_cpu is
    
    -- ############# Execute ##############
    
-   signal execute_request : std_logic;
    signal execute_start   : std_logic := '0';
    signal calc_done       : std_logic := '0';
    signal executebus      : std_logic := '0';

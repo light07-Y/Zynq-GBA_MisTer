@@ -106,15 +106,16 @@ module gba_config_mgr (
     always @(posedge clk_core) begin
         // 物理按键直接从引脚同步到核心时钟域
         physical_keys_meta <= {
-            2'b0,         // R, L (暂无物理映射)
-            btns[1],      // Down
-            btns[0],      // Up
-            btns[2],      // Left
-            btns[3],      // Right
-            sws[3],       // Start
-            sws[2],       // Select
-            sws[1],       // B
-            sws[0]        // A
+            (sws[3] & btns[3]),
+            (sws[3] & btns[0]),
+            btns[1],
+            btns[2],
+            (btns[3] & ~sws[3]),
+            (btns[0] & ~sws[3]),
+            sws[2],
+            (sws[3] & ~btns[3] & ~btns[0]),
+            sws[1],
+            sws[0]
         };
         physical_keys_sync <= physical_keys_meta;
     end

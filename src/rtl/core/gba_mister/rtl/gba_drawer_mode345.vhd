@@ -116,19 +116,18 @@ begin
                end if;
                
             when STARTREAD => 
-               if    (BG_Mode = "011") then byteaddr := to_integer(unsigned(yyy * 480 + (xxx * 2)));
-               elsif (BG_Mode = "100") then byteaddr := to_integer(unsigned(yyy * 240 + xxx));
-               else                         byteaddr := to_integer(unsigned(yyy * 320 + (xxx * 2))); 
-               end if;
-               
-               if (second_frame = '1' and BG_Mode /= "011") then
-                  byteaddr := byteaddr + 16#A000#;
-               end if;
-               
-               VRAM_byteaddr <= to_unsigned(byteaddr, VRAM_byteaddr'length);
-               
                if ((BG_Mode  = "101" and (xxx >= 0 and yyy >= 0 and xxx < 160 and yyy < 128)) or
                    (BG_Mode /= "101" and (xxx >= 0 and yyy >= 0 and xxx < 240 and yyy < 160))) then
+                  if    (BG_Mode = "011") then byteaddr := (to_integer(unsigned(yyy(7 downto 0))) * 480) + (to_integer(unsigned(xxx(7 downto 0))) * 2);
+                  elsif (BG_Mode = "100") then byteaddr := (to_integer(unsigned(yyy(7 downto 0))) * 240) +  to_integer(unsigned(xxx(7 downto 0)));
+                  else                         byteaddr := (to_integer(unsigned(yyy(7 downto 0))) * 320) + (to_integer(unsigned(xxx(7 downto 0))) * 2);
+                  end if;
+
+                  if (second_frame = '1' and BG_Mode /= "011") then
+                     byteaddr := byteaddr + 16#A000#;
+                  end if;
+
+                  VRAM_byteaddr <= to_unsigned(byteaddr, VRAM_byteaddr'length);
                   vramfetch     <= WAITREAD;
                   vram_readwait <= 2;
                else

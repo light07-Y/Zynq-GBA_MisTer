@@ -32,7 +32,6 @@ XStatus PsHdmiVdma_Park(PsHdmiVdma *ctx, u32 frame_idx);
 XStatus PsHdmiVdma_EnableCircular(PsHdmiVdma *ctx);
 XStatus PsHdmiVdma_FillFrame(PsHdmiVdma *ctx, u32 frame_idx, u32 color_xrgb8888);
 XStatus PsHdmiVdma_FillAllFrames(PsHdmiVdma *ctx, u32 color_xrgb8888);
-XStatus PsHdmiVdma_DrawTestPattern(PsHdmiVdma *ctx, u32 frame_idx, u32 seed);
 
 #ifdef __cplusplus
 }

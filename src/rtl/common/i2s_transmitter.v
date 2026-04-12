@@ -21,6 +21,7 @@ module i2s_transmitter (
     localparam integer CLK_RATE_HZ            = 100000000;
     localparam integer AUDIO_RATE_HZ          = 48000;
     localparam integer AUDIO_DW               = 16;
+    localparam [4:0]  AUDIO_DW_IDX           = 5'd16;
     localparam integer MCLK_EDGE_RATE_HZ      = AUDIO_RATE_HZ * 512; // 24.576 MHz edge rate for 12.288 MHz square wave
     localparam integer MCLK_EDGES_PER_BCLK    = 8;                  // 24.576 MHz / 8 -> 3.072 MHz BCLK edge rate
 
@@ -35,7 +36,7 @@ module i2s_transmitter (
     reg        sdata_reg = 1'b0;
     reg        msclk = 1'b1;
     reg        sample_ce_reg = 1'b0;
-    reg [7:0]  bit_cnt = 8'd1;
+    reg [4:0]  bit_cnt = 5'd1;
     reg [15:0] left_latched = 16'd0;
     reg [15:0] right_latched = 16'd0;
 
@@ -51,7 +52,7 @@ module i2s_transmitter (
             sdata_reg        <= 1'b0;
             msclk            <= 1'b1;
             sample_ce_reg    <= 1'b0;
-            bit_cnt          <= 8'd1;
+            bit_cnt          <= 5'd1;
             left_latched     <= 16'd0;
             right_latched    <= 16'd0;
         end else begin
@@ -84,8 +85,8 @@ module i2s_transmitter (
                 msclk    <= ~msclk;
 
                 if (msclk) begin
-                    if (bit_cnt >= AUDIO_DW) begin
-                        bit_cnt   <= 8'd1;
+                    if (bit_cnt >= AUDIO_DW_IDX) begin
+                        bit_cnt   <= 5'd1;
                         lrclk_reg <= ~lrclk_reg;
 
                         if (lrclk_reg) begin
@@ -94,10 +95,10 @@ module i2s_transmitter (
                             sample_ce_reg <= 1'b1;
                         end
                     end else begin
-                        bit_cnt <= bit_cnt + 8'd1;
+                        bit_cnt <= bit_cnt + 5'd1;
                     end
 
-                    sdata_reg <= lrclk_reg ? right_latched[AUDIO_DW - bit_cnt] : left_latched[AUDIO_DW - bit_cnt];
+                    sdata_reg <= lrclk_reg ? right_latched[AUDIO_DW_IDX - bit_cnt] : left_latched[AUDIO_DW_IDX - bit_cnt];
                 end
             end
         end

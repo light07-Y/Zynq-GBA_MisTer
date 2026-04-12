@@ -207,7 +207,7 @@ architecture arch of gba_drawer_merge is
    signal pixeldata_bg1_cycle4    : std_logic_vector(15 downto 0) := (others => '0');
    signal pixeldata_bg2_cycle4    : std_logic_vector(15 downto 0) := (others => '0');
    signal pixeldata_bg3_cycle4    : std_logic_vector(15 downto 0) := (others => '0');
-   signal pixeldata_obj_cycle4    : std_logic_vector(18 downto 0) := (others => '0');  
+   signal pixeldata_obj_cycle4    : std_logic_vector(15 downto 0) := (others => '0');
    signal topprio_cycle4          : std_logic_vector(5 downto 0);
    -- new
    signal special_effect_cycle4   : unsigned(1 downto 0) := (others => '0');
@@ -497,7 +497,7 @@ begin
          pixeldata_bg1_cycle4    <= pixeldata_bg1_cycle3;
          pixeldata_bg2_cycle4    <= pixeldata_bg2_cycle3;
          pixeldata_bg3_cycle4    <= pixeldata_bg3_cycle3;
-         pixeldata_obj_cycle4    <= pixeldata_obj_cycle3;
+         pixeldata_obj_cycle4    <= pixeldata_obj_cycle3(15 downto 0);
          topprio_cycle4          <= topprio_cycle3      ;
          
          -- special effect control
@@ -570,9 +570,9 @@ begin
       if rising_edge(clk100) then
 
          pixel_we <= '0';
+         pixeldata_out <= pixeldata_back;
          
          if (enable_cycle4 = '1') then
-         
             if (special_out_cycle4 = '1') then
             
                case (to_integer(special_effect_cycle4)) is
@@ -595,7 +595,7 @@ begin
                end case;
             
             elsif (topprio_cycle4(OBJ) = '1') then
-               pixeldata_out <= pixeldata_obj_cycle4(15 downto 0);
+               pixeldata_out <= pixeldata_obj_cycle4;
             elsif (topprio_cycle4(BG0) = '1') then
                pixeldata_out <= pixeldata_bg0_cycle4;
             elsif (topprio_cycle4(BG1) = '1') then

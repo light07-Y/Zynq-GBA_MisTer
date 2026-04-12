@@ -1,15 +1,15 @@
-#include "ps_rom_loader.h"
+#include "Storage/Inc/ps_fatfs_storage.h"
 
 #include <string.h>
 
 #include "xil_cache.h"
 
-#define PS_ROM_DRIVE_PATH         "0:/"
-#define PS_ROM_READ_CHUNK_BYTES   (128U * 1024U)
+#define PS_FATFS_STORAGE_DRIVE_PATH       "0:/"
+#define PS_FATFS_STORAGE_CHUNK_BYTES      (128U * 1024U)
 
-static FATFS g_rom_fatfs;
+static FATFS g_ps_fatfs;
 
-const char *PsRomLoader_StrError(FRESULT result) {
+const char *PsFatFsStorage_StrError(FRESULT result) {
     switch (result) {
         case FR_OK: return "ok";
         case FR_DISK_ERR: return "disk_err";
@@ -35,32 +35,31 @@ const char *PsRomLoader_StrError(FRESULT result) {
     }
 }
 
-XStatus PsRomLoader_LoadSdFile(const char *path,
-                               UINTPTR ddr_base_addr,
-                               u32 ddr_capacity_bytes,
-                               PsRomLoadResult *result_out) {
+XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
+                                       UINTPTR dst_addr,
+                                       u32 capacity_bytes,
+                                       PsFatFsStorageReadResult *result_out) {
     FIL file;
     FRESULT fs_result;
     FSIZE_t file_size;
     UINT bytes_read;
-    u8 *ddr_ptr;
+    u8 *dst_ptr;
     u32 offset;
-    u32 bytes_aligned;
 
     if (result_out != NULL) {
         memset(result_out, 0, sizeof(*result_out));
-        result_out->ddr_base_addr = ddr_base_addr;
+        result_out->dst_addr = dst_addr;
     }
 
-    if ((path == NULL) || (*path == '\0') || (ddr_capacity_bytes == 0U)) {
+    if ((path == NULL) || (*path == '\0') || (capacity_bytes == 0U)) {
         return XST_INVALID_PARAM;
     }
 
-    ddr_ptr = (u8 *)ddr_base_addr;
+    dst_ptr = (u8 *)dst_addr;
     offset = 0U;
     memset(&file, 0, sizeof(file));
 
-    fs_result = f_mount(&g_rom_fatfs, PS_ROM_DRIVE_PATH, 0);
+    fs_result = f_mount(&g_ps_fatfs, PS_FATFS_STORAGE_DRIVE_PATH, 0);
     if (result_out != NULL) {
         result_out->fs_result = fs_result;
     }
@@ -77,7 +76,7 @@ XStatus PsRomLoader_LoadSdFile(const char *path,
     }
 
     file_size = f_size(&file);
-    if ((file_size == 0U) || (file_size > (FSIZE_t)ddr_capacity_bytes)) {
+    if ((file_size == 0U) || (file_size > (FSIZE_t)capacity_bytes)) {
         (void)f_close(&file);
         return XST_FAILURE;
     }
@@ -86,12 +85,12 @@ XStatus PsRomLoader_LoadSdFile(const char *path,
         u32 chunk_bytes;
 
         chunk_bytes = (u32)file_size - offset;
-        if (chunk_bytes > PS_ROM_READ_CHUNK_BYTES) {
-            chunk_bytes = PS_ROM_READ_CHUNK_BYTES;
+        if (chunk_bytes > PS_FATFS_STORAGE_CHUNK_BYTES) {
+            chunk_bytes = PS_FATFS_STORAGE_CHUNK_BYTES;
         }
 
         bytes_read = 0U;
-        fs_result = f_read(&file, &ddr_ptr[offset], chunk_bytes, &bytes_read);
+        fs_result = f_read(&file, &dst_ptr[offset], chunk_bytes, &bytes_read);
         if (result_out != NULL) {
             result_out->fs_result = fs_result;
         }
@@ -100,22 +99,14 @@ XStatus PsRomLoader_LoadSdFile(const char *path,
             return XST_FAILURE;
         }
 
-        Xil_DCacheFlushRange((INTPTR)&ddr_ptr[offset], bytes_read);
+        Xil_DCacheFlushRange((INTPTR)&dst_ptr[offset], bytes_read);
         offset += bytes_read;
-    }
-
-    bytes_aligned = (offset + 3U) & ~0x3U;
-    if (bytes_aligned > offset) {
-        memset(&ddr_ptr[offset], 0, bytes_aligned - offset);
-        Xil_DCacheFlushRange((INTPTR)&ddr_ptr[offset], bytes_aligned - offset);
     }
 
     (void)f_close(&file);
 
     if (result_out != NULL) {
         result_out->bytes_loaded = (u32)file_size;
-        result_out->bytes_aligned = bytes_aligned;
-        result_out->max_pak_addr = bytes_aligned >> 2;
         result_out->fs_result = FR_OK;
     }
 

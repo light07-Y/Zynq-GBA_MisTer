@@ -79,6 +79,8 @@ void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
 void PsGbaRegs_ApplyBootDefaults(PsGbaRegs *ctx);
 void PsGbaRegs_SetIrqEnable(PsGbaRegs *ctx, u32 irq_mask);
 void PsGbaRegs_ClearIrqStatus(PsGbaRegs *ctx, u32 irq_w1c_bits);
+void PsGbaRegs_ClearErrorLatch(PsGbaRegs *ctx);
+void PsGbaRegs_SetSwReset(PsGbaRegs *ctx, u32 asserted);
 void PsGbaRegs_SetDisplayFrameIdx(PsGbaRegs *ctx, u32 frame_idx);
 
 u32 PsGbaRegs_Read(PsGbaRegs *ctx, u32 reg_offset);

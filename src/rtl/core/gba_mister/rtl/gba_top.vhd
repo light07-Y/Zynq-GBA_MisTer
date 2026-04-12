@@ -255,10 +255,6 @@ architecture arch of gba_top is
    signal GPIO_addr            : std_logic_vector(1 downto 0);
    
    signal gbaon                : std_logic := '0';
-   signal gpu_out_active       : std_logic;
-   
-   signal Linetimerdebug : unsigned(8 downto 0);
-   signal LineCountdebug : unsigned(7 downto 0);
    
    signal dma_on         : std_logic;
    signal CPU_bus_idle   : std_logic;

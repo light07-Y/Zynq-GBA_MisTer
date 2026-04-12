@@ -1,4 +1,4 @@
-#include "ps_gba_regs.h"
+#include "Gba/Inc/ps_gba_regs.h"
 
 void PsGbaRegs_Init(PsGbaRegs *ctx, UINTPTR base_addr) {
     if (ctx == 0) {
@@ -65,6 +65,20 @@ void PsGbaRegs_ClearIrqStatus(PsGbaRegs *ctx, u32 irq_w1c_bits) {
         return;
     }
     Xil_Out32(ctx->base_addr + GBA_REG_IRQ_STS, irq_w1c_bits & 0x3U);
+}
+
+void PsGbaRegs_ClearErrorLatch(PsGbaRegs *ctx) {
+    if (ctx == 0) {
+        return;
+    }
+    Xil_Out32(ctx->base_addr + GBA_REG_ERROR_LATCH, 1U);
+}
+
+void PsGbaRegs_SetSwReset(PsGbaRegs *ctx, u32 asserted) {
+    if (ctx == 0) {
+        return;
+    }
+    Xil_Out32(ctx->base_addr + GBA_REG_SW_RESET, asserted & 0x1U);
 }
 
 void PsGbaRegs_SetDisplayFrameIdx(PsGbaRegs *ctx, u32 frame_idx) {

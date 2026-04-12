@@ -2661,9 +2661,6 @@
           },
           "ch4_req": {
             "direction": "O"
-          },
-          "ch5_req": {
-            "direction": "O"
           }
         },
         "addressing": {
