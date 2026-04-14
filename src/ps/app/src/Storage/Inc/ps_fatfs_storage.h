@@ -15,6 +15,11 @@ typedef struct {
     FRESULT fs_result;
 } PsFatFsStorageReadResult;
 
+typedef void (*PsFatFsStorageReadChunkCallback)(const u8 *chunk_ptr,
+                                                u32 chunk_offset,
+                                                u32 chunk_bytes,
+                                                void *user_ctx);
+
 typedef struct {
     u32 bytes_written;
     UINTPTR src_addr;
@@ -25,6 +30,12 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
                                        UINTPTR dst_addr,
                                        u32 capacity_bytes,
                                        PsFatFsStorageReadResult *result_out);
+XStatus PsFatFsStorage_ReadFileToMemoryEx(const char *path,
+                                         UINTPTR dst_addr,
+                                         u32 capacity_bytes,
+                                         PsFatFsStorageReadResult *result_out,
+                                         PsFatFsStorageReadChunkCallback chunk_callback,
+                                         void *user_ctx);
 
 XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
                                         UINTPTR src_addr,

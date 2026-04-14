@@ -51,14 +51,25 @@ static u8 PsAppDiag_ComputeGbaHeaderChecksum(const u8 *rom) {
 
     return (u8)checksum;
 }
+static u32 PsAppDiag_ClampWordOffset(u32 offset, u32 limit_bytes) {
+    if (limit_bytes < 4U) {
+        return 0U;
+    }
+    if (offset >= limit_bytes) {
+        offset = limit_bytes - 4U;
+    }
+    return offset & ~0x3U;
+}
 static void PsAppDiag_PrintCtrlDecode(u32 ctrl) {
-    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u tone=%u rom_loading=%u\r\n",
+    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u flash1m=%u gpio=%u tilt=%u rom_loading=%u\r\n",
                (unsigned int)((ctrl >> 0) & 0x1U),
                (unsigned int)((ctrl >> 1) & 0x1U),
                (unsigned int)((ctrl >> 2) & 0x1U),
                (unsigned int)((ctrl >> 4) & 0x1U),
                (unsigned int)((ctrl >> 5) & 0x1U),
-               (unsigned int)((ctrl >> 6) & 0x1U),
+               (unsigned int)((ctrl >> 9) & 0x1U),
+               (unsigned int)((ctrl >> 10) & 0x1U),
+               (unsigned int)((ctrl >> 11) & 0x1U),
                (unsigned int)((ctrl >> 8) & 0x1U));
 }
 
@@ -563,6 +574,110 @@ void PsAppDiag_PrintRomHeader(PsAppDiagContext *ctx) {
                (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + 0x0A4U));
 }
 
+void PsAppDiag_PrintRomProbe(PsAppDiagContext *ctx) {
+    char title[13];
+    char game_code[5];
+    char maker_code[3];
+    u32 size_bytes;
+    u32 size_aligned;
+    u32 pad_bytes;
+    u32 maxpak_dword;
+    u32 maxpak_bytes;
+    u32 q1_off;
+    u32 q2_off;
+    u32 q3_off;
+    u32 tail16_off;
+    u32 tail4_off;
+    u32 pad_off;
+    u32 ctrl;
+    const char *save_guess;
+
+    if ((ctx == NULL) || (ctx->rom == NULL) || (ctx->rom->loaded == 0U)) {
+        xil_printf("[ROMPROBE] no rom loaded\r\n");
+        return;
+    }
+
+    size_bytes = ctx->rom->size_bytes;
+    size_aligned = ctx->rom->size_aligned;
+    pad_bytes = (size_aligned >= size_bytes) ? (size_aligned - size_bytes) : 0U;
+    maxpak_dword = ctx->config->max_pak_addr & 0x1FFFFFFU;
+    maxpak_bytes = maxpak_dword << 2;
+    ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+
+    Xil_DCacheInvalidateRange((INTPTR)PS_APP_GBA_ROM_REGION_BASE_ADDR, 0xC0U);
+    PsAppDiag_SanitizeAsciiField(title, sizeof(title), (const u8 *)(PS_APP_GBA_ROM_REGION_BASE_ADDR + 0xA0U), 12U);
+    PsAppDiag_SanitizeAsciiField(game_code, sizeof(game_code), (const u8 *)(PS_APP_GBA_ROM_REGION_BASE_ADDR + 0xACU), 4U);
+    PsAppDiag_SanitizeAsciiField(maker_code, sizeof(maker_code), (const u8 *)(PS_APP_GBA_ROM_REGION_BASE_ADDR + 0xB0U), 2U);
+
+    if (ctx->rom->sig_flash1m != 0U) save_guess = "FLASH1M";
+    else if (ctx->rom->sig_flash != 0U) save_guess = "FLASH";
+    else if (ctx->rom->sig_sram != 0U) save_guess = "SRAM";
+    else if (ctx->rom->sig_eeprom != 0U) save_guess = "EEPROM";
+    else save_guess = "UNKNOWN";
+
+    q1_off = PsAppDiag_ClampWordOffset(size_bytes / 4U, size_bytes);
+    q2_off = PsAppDiag_ClampWordOffset(size_bytes / 2U, size_bytes);
+    q3_off = PsAppDiag_ClampWordOffset((size_bytes * 3U) / 4U, size_bytes);
+    tail16_off = PsAppDiag_ClampWordOffset((size_aligned >= 16U) ? (size_aligned - 16U) : 0U,
+                                           size_aligned);
+    tail4_off = PsAppDiag_ClampWordOffset((size_aligned >= 4U) ? (size_aligned - 4U) : 0U,
+                                          size_aligned);
+    pad_off = PsAppDiag_ClampWordOffset(size_bytes, size_aligned);
+
+    PsAppDiag_PrintRomHeader(ctx);
+    xil_printf("[ROMPROBE] path=%s\r\n",
+               ctx->rom->path[0] != '\0' ? ctx->rom->path : "(none)");
+    xil_printf("[ROMPROBE] title='%s' code='%s' maker='%s' bytes=%u aligned=%u pad=%u maxpak_dw=0x%08x maxpak_bytes=0x%08x remap_ctrl=%u\r\n",
+               title,
+               game_code,
+               maker_code,
+               (unsigned int)size_bytes,
+               (unsigned int)size_aligned,
+               (unsigned int)pad_bytes,
+               (unsigned int)maxpak_dword,
+               (unsigned int)maxpak_bytes,
+               (unsigned int)((ctrl >> 5) & 0x1U));
+    xil_printf("[ROMPROBE] sig_hits flash1m=%u flash=%u sram=%u eeprom=%u save_guess=%s\r\n",
+               (unsigned int)ctx->rom->sig_flash1m,
+               (unsigned int)ctx->rom->sig_flash,
+               (unsigned int)ctx->rom->sig_sram,
+               (unsigned int)ctx->rom->sig_eeprom,
+               save_guess);
+    if (ctx->rom->flash1m_offset != 0xFFFFFFFFU) {
+        xil_printf("[ROMPROBE] sig FLASH1M_V @0x%08x\r\n", (unsigned int)ctx->rom->flash1m_offset);
+    }
+    if (ctx->rom->flash_offset != 0xFFFFFFFFU) {
+        xil_printf("[ROMPROBE] sig FLASH_V   @0x%08x\r\n", (unsigned int)ctx->rom->flash_offset);
+    }
+    if (ctx->rom->sram_offset != 0xFFFFFFFFU) {
+        xil_printf("[ROMPROBE] sig SRAM_V    @0x%08x\r\n", (unsigned int)ctx->rom->sram_offset);
+    }
+    if (ctx->rom->eeprom_offset != 0xFFFFFFFFU) {
+        xil_printf("[ROMPROBE] sig EEPROM_V  @0x%08x\r\n", (unsigned int)ctx->rom->eeprom_offset);
+    }
+    xil_printf("[ROMPROBE] quirk_guess remap=%u sram=%u gpio=%u tilt=%u solar=%u flash1m=%u\r\n",
+               (unsigned int)ctx->rom->quirk_remap,
+               (unsigned int)ctx->rom->quirk_sram_disable,
+               (unsigned int)ctx->rom->quirk_gpio,
+               (unsigned int)ctx->rom->quirk_tilt,
+               (unsigned int)ctx->rom->quirk_solar,
+               (unsigned int)ctx->rom->sig_flash1m);
+    xil_printf("[ROMPROBE] sample q1@0x%08x=0x%08x q2@0x%08x=0x%08x q3@0x%08x=0x%08x\r\n",
+               (unsigned int)q1_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + q1_off),
+               (unsigned int)q2_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + q2_off),
+               (unsigned int)q3_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + q3_off));
+    xil_printf("[ROMPROBE] tail t16@0x%08x=0x%08x t4@0x%08x=0x%08x pad@0x%08x=0x%08x\r\n",
+               (unsigned int)tail16_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + tail16_off),
+               (unsigned int)tail4_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + tail4_off),
+               (unsigned int)pad_off,
+               (unsigned int)Xil_In32(PS_APP_GBA_ROM_REGION_BASE_ADDR + pad_off));
+}
+
 void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     u32 ctrl;
     u32 keys;
@@ -646,7 +761,7 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
                (unsigned int)gpu_disp_low);
 
     PsAppDiag_PrintCtrlDecode(ctrl);
-    PsAppDiag_PrintRomHeader(ctx);
+    PsAppDiag_PrintRomProbe(ctx);
     PsAppDiag_PrintVdmaSnapshot(ctx, "probe");
     PsAppDiag_PrintFramebufferProbe(ctx);
 }

@@ -15,6 +15,7 @@ void PsAppDiag_PrintConfigReadback(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintChainSnapshot(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintVdmaSnapshot(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintRomHeader(PsAppDiagContext *ctx);
+void PsAppDiag_PrintRomProbe(PsAppDiagContext *ctx);
 void PsAppDiag_PrintAutoBootAudit(PsAppDiagContext *ctx);
 void PsAppDiag_MaybePrintStallAudit(PsAppDiagContext *ctx,
                                     u32 status1,

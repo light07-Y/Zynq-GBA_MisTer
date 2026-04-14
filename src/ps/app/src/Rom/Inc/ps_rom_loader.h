@@ -14,6 +14,12 @@ typedef struct {
     u32 bytes_loaded;
     u32 bytes_aligned;
     u32 max_pak_addr;
+    u32 flash1m_offset;
+    u32 flash_offset;
+    u32 sram_offset;
+    u32 eeprom_offset;
+    char game_code[5];
+    char maker_code[3];
     UINTPTR ddr_base_addr;
     FRESULT fs_result;
 } PsRomLoadResult;

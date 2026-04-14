@@ -90,6 +90,7 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  audio vol <0-100>\r\n");
     xil_printf("  audio fmt <sample_rate_hz> <bits>\r\n");
     xil_printf("  rom status\r\n");
+    xil_printf("  rom probe\r\n");
     xil_printf("  rom load [path]\r\n");
     xil_printf("  hdmi park <0|1|2>\r\n");
     xil_printf("  hdmi fill <idx|all> <hex>\r\n");
@@ -522,13 +523,18 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
             return;
         }
 
+        if ((a1 != NULL) && (strcmp(a1, "probe") == 0)) {
+            PsAppDiag_PrintRomProbe(diag);
+            return;
+        }
+
         if ((a1 != NULL) && (strcmp(a1, "load") == 0)) {
             if (PsAppRuntime_LoadRomFromSd(app, a2) == XST_SUCCESS) xil_printf("[CMD] rom load ok\r\n");
             else xil_printf("[CMD] rom load failed\r\n");
             return;
         }
 
-        xil_printf("[CMD] usage: rom status | rom load [path]\r\n");
+        xil_printf("[CMD] usage: rom status | rom probe | rom load [path]\r\n");
         return;
     }
 

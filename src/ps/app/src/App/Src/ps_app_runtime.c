@@ -55,6 +55,139 @@ static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
     dst[src_len] = '\0';
 }
 
+static u8 PsAppRuntime_Code3Eq(const char *code, const char *prefix3) {
+    if ((code == NULL) || (prefix3 == NULL)) {
+        return 0U;
+    }
+    return (memcmp(code, prefix3, 3U) == 0) ? 1U : 0U;
+}
+
+static u8 PsAppRuntime_Code4Eq(const char *code, const char *exact4) {
+    if ((code == NULL) || (exact4 == NULL)) {
+        return 0U;
+    }
+    return (memcmp(code, exact4, 4U) == 0) ? 1U : 0U;
+}
+
+static u8 PsAppRuntime_Code4InList(const char *code,
+                                   const char *const *list,
+                                   size_t count) {
+    size_t idx;
+
+    if ((code == NULL) || (list == NULL)) {
+        return 0U;
+    }
+
+    for (idx = 0U; idx < count; ++idx) {
+        if (PsAppRuntime_Code4Eq(code, list[idx]) != 0U) {
+            return 1U;
+        }
+    }
+
+    return 0U;
+}
+
+static void PsAppRuntime_ApplyRomDetection(PsAppRuntimeContext *ctx,
+                                           const PsRomLoadResult *load_result) {
+    static const char *const s_remap_codes[] = {
+        "FBME", "FADE", "FDKE", "FDME", "FEBE", "FICE", "FMRE", "FP7E",
+        "FSME", "FZLE", "FXVE", "FLBE", "FSRJ", "FGZJ", "FSDJ", "FADJ",
+        "FM2J", "FGGJ", "FTWJ", "FMKJ", "FTBJ", "FDDJ", "FDMJ", "FWCJ",
+        "FVFJ", "FCLJ", "FMBJ", "FSOJ", "FBMJ", "FMPJ", "FXVJ", "FZLJ",
+        "FEBJ", "FICJ", "FDKJ", "FSMJ"
+    };
+    const char *game_code;
+    u8 quirk_remap;
+    u8 quirk_sram_disable;
+    u8 quirk_gpio;
+    u8 quirk_tilt;
+    u8 quirk_solar;
+
+    if ((ctx == NULL) || (load_result == NULL)) {
+        return;
+    }
+
+    game_code = load_result->game_code;
+
+    ctx->rom->sig_flash1m = (load_result->flash1m_offset != 0xFFFFFFFFU) ? 1U : 0U;
+    ctx->rom->sig_flash = (load_result->flash_offset != 0xFFFFFFFFU) ? 1U : 0U;
+    ctx->rom->sig_sram = (load_result->sram_offset != 0xFFFFFFFFU) ? 1U : 0U;
+    ctx->rom->sig_eeprom = (load_result->eeprom_offset != 0xFFFFFFFFU) ? 1U : 0U;
+    ctx->rom->flash1m_offset = load_result->flash1m_offset;
+    ctx->rom->flash_offset = load_result->flash_offset;
+    ctx->rom->sram_offset = load_result->sram_offset;
+    ctx->rom->eeprom_offset = load_result->eeprom_offset;
+    PsAppRuntime_CopyText(ctx->rom->game_code, sizeof(ctx->rom->game_code), load_result->game_code);
+    PsAppRuntime_CopyText(ctx->rom->maker_code, sizeof(ctx->rom->maker_code), load_result->maker_code);
+
+    quirk_remap = PsAppRuntime_Code4InList(game_code,
+                                           s_remap_codes,
+                                           sizeof(s_remap_codes) / sizeof(s_remap_codes[0]));
+    quirk_sram_disable =
+        PsAppRuntime_Code3Eq(game_code, "AR8") || PsAppRuntime_Code3Eq(game_code, "ARO") ||
+        PsAppRuntime_Code3Eq(game_code, "ALG") || PsAppRuntime_Code3Eq(game_code, "ALF") ||
+        PsAppRuntime_Code3Eq(game_code, "BLF") || PsAppRuntime_Code3Eq(game_code, "BDB") ||
+        PsAppRuntime_Code3Eq(game_code, "BG3") || PsAppRuntime_Code3Eq(game_code, "BDV") ||
+        PsAppRuntime_Code3Eq(game_code, "A2Y") || PsAppRuntime_Code3Eq(game_code, "AI2") ||
+        PsAppRuntime_Code3Eq(game_code, "BT4") || quirk_remap;
+    quirk_gpio =
+        PsAppRuntime_Code3Eq(game_code, "BPE") || PsAppRuntime_Code3Eq(game_code, "AXV") ||
+        PsAppRuntime_Code3Eq(game_code, "AXP") || PsAppRuntime_Code3Eq(game_code, "RZW") ||
+        PsAppRuntime_Code3Eq(game_code, "BKA") || PsAppRuntime_Code3Eq(game_code, "BR4") ||
+        PsAppRuntime_Code3Eq(game_code, "V49") || PsAppRuntime_Code3Eq(game_code, "2GB") ||
+        PsAppRuntime_Code3Eq(game_code, "U3I") || PsAppRuntime_Code3Eq(game_code, "U32") ||
+        PsAppRuntime_Code3Eq(game_code, "U33");
+    quirk_tilt =
+        PsAppRuntime_Code3Eq(game_code, "KHP") || PsAppRuntime_Code3Eq(game_code, "KYG");
+    quirk_solar =
+        PsAppRuntime_Code3Eq(game_code, "U3I") ||
+        PsAppRuntime_Code3Eq(game_code, "U32") ||
+        PsAppRuntime_Code3Eq(game_code, "U33");
+
+    ctx->rom->quirk_remap = quirk_remap;
+    ctx->rom->quirk_sram_disable = quirk_sram_disable;
+    ctx->rom->quirk_gpio = quirk_gpio;
+    ctx->rom->quirk_tilt = quirk_tilt;
+    ctx->rom->quirk_solar = quirk_solar;
+
+    ctx->config->ctrl &= ~(GBA_CTRL_MEMORY_REMAP |
+                           GBA_CTRL_FLASH_1M |
+                           GBA_CTRL_SPECIAL_GPIO |
+                           GBA_CTRL_TILT);
+    ctx->config->ctrl |= GBA_CTRL_SRAM_FLASH_EN;
+
+    if (quirk_remap != 0U) {
+        ctx->config->ctrl |= GBA_CTRL_MEMORY_REMAP;
+    }
+    if (ctx->rom->sig_flash1m != 0U) {
+        ctx->config->ctrl |= GBA_CTRL_FLASH_1M;
+    }
+    if (quirk_gpio != 0U) {
+        ctx->config->ctrl |= GBA_CTRL_SPECIAL_GPIO;
+    }
+    if (quirk_tilt != 0U) {
+        ctx->config->ctrl |= GBA_CTRL_TILT;
+    }
+    if (quirk_sram_disable != 0U) {
+        ctx->config->ctrl &= ~GBA_CTRL_SRAM_FLASH_EN;
+    }
+
+    xil_printf("[ROMCFG] code=%s maker=%s sig flash1m=%u flash=%u sram=%u eeprom=%u\r\n",
+               ctx->rom->game_code[0] != '\0' ? ctx->rom->game_code : "....",
+               ctx->rom->maker_code[0] != '\0' ? ctx->rom->maker_code : "..",
+               (unsigned int)ctx->rom->sig_flash1m,
+               (unsigned int)ctx->rom->sig_flash,
+               (unsigned int)ctx->rom->sig_sram,
+               (unsigned int)ctx->rom->sig_eeprom);
+    xil_printf("[ROMCFG] quirk remap=%u sram_dis=%u gpio=%u tilt=%u solar=%u ctrl=0x%08x\r\n",
+               (unsigned int)ctx->rom->quirk_remap,
+               (unsigned int)ctx->rom->quirk_sram_disable,
+               (unsigned int)ctx->rom->quirk_gpio,
+               (unsigned int)ctx->rom->quirk_tilt,
+               (unsigned int)ctx->rom->quirk_solar,
+               (unsigned int)ctx->config->ctrl);
+}
+
 static int PsAppRuntime_ResolveRomPath(const char *input,
                                        char *resolved_path,
                                        size_t resolved_path_size) {
@@ -353,8 +486,23 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
 
     ctx->rom->loaded = 0U;
     ctx->rom->is_loading = 0U;
+    ctx->rom->sig_flash1m = 0U;
+    ctx->rom->sig_flash = 0U;
+    ctx->rom->sig_sram = 0U;
+    ctx->rom->sig_eeprom = 0U;
+    ctx->rom->quirk_remap = 0U;
+    ctx->rom->quirk_sram_disable = 0U;
+    ctx->rom->quirk_gpio = 0U;
+    ctx->rom->quirk_tilt = 0U;
+    ctx->rom->quirk_solar = 0U;
     ctx->rom->size_bytes = 0U;
     ctx->rom->size_aligned = 0U;
+    ctx->rom->flash1m_offset = 0xFFFFFFFFU;
+    ctx->rom->flash_offset = 0xFFFFFFFFU;
+    ctx->rom->sram_offset = 0xFFFFFFFFU;
+    ctx->rom->eeprom_offset = 0xFFFFFFFFU;
+    ctx->rom->game_code[0] = '\0';
+    ctx->rom->maker_code[0] = '\0';
     ctx->rom->path[0] = '\0';
 
     ctx->save->event_counters = 0U;
@@ -470,6 +618,21 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     ctx->rom->loaded = 0U;
     ctx->rom->size_bytes = 0U;
     ctx->rom->size_aligned = 0U;
+    ctx->rom->sig_flash1m = 0U;
+    ctx->rom->sig_flash = 0U;
+    ctx->rom->sig_sram = 0U;
+    ctx->rom->sig_eeprom = 0U;
+    ctx->rom->quirk_remap = 0U;
+    ctx->rom->quirk_sram_disable = 0U;
+    ctx->rom->quirk_gpio = 0U;
+    ctx->rom->quirk_tilt = 0U;
+    ctx->rom->quirk_solar = 0U;
+    ctx->rom->flash1m_offset = 0xFFFFFFFFU;
+    ctx->rom->flash_offset = 0xFFFFFFFFU;
+    ctx->rom->sram_offset = 0xFFFFFFFFU;
+    ctx->rom->eeprom_offset = 0xFFFFFFFFU;
+    ctx->rom->game_code[0] = '\0';
+    ctx->rom->maker_code[0] = '\0';
     ctx->diag->stall_last_pc = 0U;
     ctx->diag->stall_last_mem = 0U;
     ctx->diag->stall_last_dma = 0U;
@@ -514,6 +677,7 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     ctx->config->max_pak_addr = load_result.max_pak_addr & 0x1FFFFFFU;
     ctx->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
     ctx->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED);
+    PsAppRuntime_ApplyRomDetection(ctx, &load_result);
     PsAppRuntime_ApplyShadowConfig(ctx);
     (void)PsHdmiVdma_FillAllFrames(ctx->vdma, 0x00000000U);
     (void)PsAppVideo_RequestFrame(ctx->video_ctx, 0U);
@@ -539,7 +703,7 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
                (unsigned int)ctx->rom->size_aligned,
                (unsigned int)ctx->config->max_pak_addr,
                (unsigned int)PS_APP_GBA_ROM_REGION_BASE_ADDR);
-    PsAppDiag_PrintRomHeader(ctx->diag_ctx);
+    PsAppDiag_PrintRomProbe(ctx->diag_ctx);
 
     return XST_SUCCESS;
 }

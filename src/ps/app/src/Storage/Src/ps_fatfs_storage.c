@@ -39,10 +39,12 @@ const char *PsFatFsStorage_StrError(FRESULT result) {
     }
 }
 
-XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
-                                       UINTPTR dst_addr,
-                                       u32 capacity_bytes,
-                                       PsFatFsStorageReadResult *result_out) {
+XStatus PsFatFsStorage_ReadFileToMemoryEx(const char *path,
+                                         UINTPTR dst_addr,
+                                         u32 capacity_bytes,
+                                         PsFatFsStorageReadResult *result_out,
+                                         PsFatFsStorageReadChunkCallback chunk_callback,
+                                         void *user_ctx) {
     FIL file;
     FRESULT fs_result;
     FSIZE_t file_size;
@@ -104,6 +106,9 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
         }
 
         Xil_DCacheFlushRange((INTPTR)&dst_ptr[offset], bytes_read);
+        if (chunk_callback != NULL) {
+            chunk_callback(&dst_ptr[offset], offset, bytes_read, user_ctx);
+        }
         offset += bytes_read;
     }
 
@@ -115,6 +120,18 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
     }
 
     return XST_SUCCESS;
+}
+
+XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
+                                       UINTPTR dst_addr,
+                                       u32 capacity_bytes,
+                                       PsFatFsStorageReadResult *result_out) {
+    return PsFatFsStorage_ReadFileToMemoryEx(path,
+                                             dst_addr,
+                                             capacity_bytes,
+                                             result_out,
+                                             NULL,
+                                             NULL);
 }
 
 XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,

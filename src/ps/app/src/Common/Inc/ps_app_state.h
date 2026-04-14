@@ -47,8 +47,23 @@ typedef struct {
 typedef struct {
     u8 loaded;
     u8 is_loading;
+    u8 sig_flash1m;
+    u8 sig_flash;
+    u8 sig_sram;
+    u8 sig_eeprom;
+    u8 quirk_remap;
+    u8 quirk_sram_disable;
+    u8 quirk_gpio;
+    u8 quirk_tilt;
+    u8 quirk_solar;
     u32 size_bytes;
     u32 size_aligned;
+    u32 flash1m_offset;
+    u32 flash_offset;
+    u32 sram_offset;
+    u32 eeprom_offset;
+    char game_code[5];
+    char maker_code[3];
     char path[PS_APP_ROM_PATH_MAX_CHARS];
 } PsAppRomState;
 

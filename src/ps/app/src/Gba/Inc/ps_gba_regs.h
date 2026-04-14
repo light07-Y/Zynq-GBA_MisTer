@@ -66,7 +66,10 @@ enum {
     GBA_CTRL_CPU_TURBO       = (1U << 2),
     GBA_CTRL_SRAM_FLASH_EN   = (1U << 4),
     GBA_CTRL_MEMORY_REMAP    = (1U << 5),
-    GBA_CTRL_ROM_LOADING     = (1U << 8)
+    GBA_CTRL_ROM_LOADING     = (1U << 8),
+    GBA_CTRL_FLASH_1M        = (1U << 9),
+    GBA_CTRL_SPECIAL_GPIO    = (1U << 10),
+    GBA_CTRL_TILT            = (1U << 11)
 };
 
 void PsGbaRegs_Init(PsGbaRegs *ctx, UINTPTR base_addr);
