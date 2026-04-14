@@ -27,6 +27,13 @@ set(USER_UNDEFINED_SYMBOLS
 # Example 3: Adding ${CMAKE_SOURCE_DIR}/data/include to add data/include from this project.
 
 set(USER_INCLUDE_DIRECTORIES
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/common
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/core
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/class/hub
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/class/vendor/xbox
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/port/ehci
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/osal
 )
 
 #Add any source below, they will be added as Compile sources.

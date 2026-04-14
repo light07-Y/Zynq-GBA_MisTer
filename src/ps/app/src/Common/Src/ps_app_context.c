@@ -26,6 +26,11 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->save_ctx.state = &ctx->save;
     ctx->save_ctx.rom = &ctx->rom;
 
+    ctx->usb_host_ctx.state = &ctx->usb_host;
+    ctx->usb_host_ctx.input = &ctx->input_ctx;
+
+    ctx->input_ctx.state = &ctx->input;
+
     ctx->runtime_ctx.codec = &ctx->codec;
     ctx->runtime_ctx.vdma = &ctx->vdma;
     ctx->runtime_ctx.regs = &ctx->regs;
@@ -37,7 +42,11 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->runtime_ctx.rom = &ctx->rom;
     ctx->runtime_ctx.save = &ctx->save;
     ctx->runtime_ctx.diag = &ctx->diag;
+    ctx->runtime_ctx.usb_host = &ctx->usb_host;
+    ctx->runtime_ctx.input = &ctx->input;
     ctx->runtime_ctx.save_ctx = &ctx->save_ctx;
+    ctx->runtime_ctx.input_ctx = &ctx->input_ctx;
+    ctx->runtime_ctx.usb_host_ctx = &ctx->usb_host_ctx;
     ctx->runtime_ctx.video_ctx = &ctx->video_ctx;
     ctx->runtime_ctx.diag_ctx = &ctx->diag_ctx;
 

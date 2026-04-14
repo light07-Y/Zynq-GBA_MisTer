@@ -101,6 +101,71 @@ typedef struct {
     u32 fbscan_last_anomaly_tick;
 } PsAppDiagState;
 
+typedef struct {
+    u8 enabled;
+    u8 initialized;
+    u8 irq_connected;
+    u8 device_present;
+    u8 xbox_interface_active;
+    u8 bus_id;
+    u8 interface_number;
+    u8 port_speed;
+    u16 vendor_id;
+    u16 product_id;
+    u8 interface_class;
+    u8 interface_subclass;
+    u8 interface_protocol;
+    u8 ep_in_addr;
+    u8 ep_out_addr;
+    u8 reserved0;
+    u32 irq_count;
+    u32 event_count;
+    u32 attach_count;
+    u32 detach_count;
+    u32 in_report_count;
+    u32 in_report_error_count;
+    u32 out_report_count;
+    u32 out_report_error_count;
+} PsAppUsbHostState;
+
+typedef struct {
+    u8 enabled;
+    u8 active;
+    u8 release_pending;
+    u8 report_valid;
+    u8 protocol_is_xinput;
+    u8 output_capable;
+    u8 reserved0;
+    u8 reserved1;
+    u16 vendor_id;
+    u16 product_id;
+    u8 interface_number;
+    u8 interface_class;
+    u8 interface_subclass;
+    u8 interface_protocol;
+    u8 ep_in_addr;
+    u8 ep_out_addr;
+    u8 ep_in_interval_ms;
+    u8 ep_out_interval_ms;
+    u16 buttons;
+    u8 lt;
+    u8 rt;
+    s16 lx;
+    s16 ly;
+    s16 rx;
+    s16 ry;
+    u32 mapped_keys;
+    u32 last_committed_keys;
+    u32 report_count;
+    u32 parse_error_count;
+    u32 unsupported_report_count;
+    u8 last_report_len;
+    u8 reserved2;
+    u8 reserved3;
+    u8 reserved4;
+    u8 last_report[32];
+} PsAppInputState;
+
 #ifdef __cplusplus
 }
 #endif

@@ -12,9 +12,11 @@
 #include "xil_printf.h"
 
 #include "Diagnostics/Inc/ps_app_diag.h"
+#include "Input/Inc/ps_app_input.h"
 #include "Save/Inc/ps_app_save.h"
 #include "Video/Inc/ps_app_video.h"
 #include "Rom/Inc/ps_rom_loader.h"
+#include "UsbHost/Inc/ps_app_usbhost.h"
 
 /*
  * 这里显式保留 MIO50/MIO51 的 SLCR 地址，是为了在应用启动阶段兜底覆盖
@@ -533,6 +535,60 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->diag->fbscan_tick = 0U;
     ctx->diag->fbscan_dump_count = 0U;
     ctx->diag->fbscan_last_anomaly_tick = 0U;
+
+    ctx->usb_host->enabled = (u8)((PS_APP_USBHOST_ENABLE_DEFAULT != 0U) ? 1U : 0U);
+    ctx->usb_host->initialized = 0U;
+    ctx->usb_host->irq_connected = 0U;
+    ctx->usb_host->device_present = 0U;
+    ctx->usb_host->xbox_interface_active = 0U;
+    ctx->usb_host->bus_id = 0U;
+    ctx->usb_host->interface_number = 0U;
+    ctx->usb_host->port_speed = 0U;
+    ctx->usb_host->vendor_id = 0U;
+    ctx->usb_host->product_id = 0U;
+    ctx->usb_host->interface_class = 0U;
+    ctx->usb_host->interface_subclass = 0U;
+    ctx->usb_host->interface_protocol = 0U;
+    ctx->usb_host->ep_in_addr = 0U;
+    ctx->usb_host->ep_out_addr = 0U;
+    ctx->usb_host->irq_count = 0U;
+    ctx->usb_host->event_count = 0U;
+    ctx->usb_host->attach_count = 0U;
+    ctx->usb_host->detach_count = 0U;
+    ctx->usb_host->in_report_count = 0U;
+    ctx->usb_host->in_report_error_count = 0U;
+    ctx->usb_host->out_report_count = 0U;
+    ctx->usb_host->out_report_error_count = 0U;
+
+    ctx->input->enabled = (u8)((PS_APP_INPUT_ENABLE_DEFAULT != 0U) ? 1U : 0U);
+    ctx->input->active = 0U;
+    ctx->input->release_pending = 0U;
+    ctx->input->report_valid = 0U;
+    ctx->input->protocol_is_xinput = 0U;
+    ctx->input->output_capable = 0U;
+    ctx->input->vendor_id = 0U;
+    ctx->input->product_id = 0U;
+    ctx->input->interface_number = 0U;
+    ctx->input->interface_class = 0U;
+    ctx->input->interface_subclass = 0U;
+    ctx->input->interface_protocol = 0U;
+    ctx->input->ep_in_addr = 0U;
+    ctx->input->ep_out_addr = 0U;
+    ctx->input->ep_in_interval_ms = 0U;
+    ctx->input->ep_out_interval_ms = 0U;
+    ctx->input->buttons = 0U;
+    ctx->input->lt = 0U;
+    ctx->input->rt = 0U;
+    ctx->input->lx = 0;
+    ctx->input->ly = 0;
+    ctx->input->rx = 0;
+    ctx->input->ry = 0;
+    ctx->input->mapped_keys = 0U;
+    ctx->input->last_committed_keys = 0U;
+    ctx->input->report_count = 0U;
+    ctx->input->parse_error_count = 0U;
+    ctx->input->unsupported_report_count = 0U;
+    ctx->input->last_report_len = 0U;
     ctx->ps_gpio_ready = 0U;
     ctx->ps_btn_last_mask = 0U;
 }
@@ -797,6 +853,24 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
     }
 
     xil_printf("[INIT] 8.1: input map BTN3/2/1/0=left/up/down/right SW3/2/1/0=select(start-mod)/start/b/a SW3+BTN3=L SW3+BTN0=R\r\n");
+    xil_printf("[INIT] 8.2: xinput parser init\r\n");
+    PsAppInput_Init(ctx->input_ctx);
+#if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
+    xil_printf("[INIT] 8.2: gba map A<=B(right) B<=A(bottom) deadzone=%d trig=%u\r\n",
+               (int)PS_APP_INPUT_LSTICK_DEADZONE,
+               (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
+#else
+    xil_printf("[INIT] 8.2: gba map A<=A(bottom) B<=B(right) deadzone=%d trig=%u\r\n",
+               (int)PS_APP_INPUT_LSTICK_DEADZONE,
+               (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
+#endif
+    xil_printf("[INIT] 8.3: usb host init\r\n");
+    if (PsAppUsbHost_Init(ctx->usb_host_ctx) != XST_SUCCESS) {
+        xil_printf("[INIT] 8.3 warning: usb host unavailable\r\n");
+    } else {
+        PsAppUsbHost_PrintStatus(ctx->usb_host_ctx);
+    }
+
     xil_printf("[INIT] 9: rom autoload\r\n");
     if (PsAppRuntime_AutoloadDefaultRom(ctx) != XST_SUCCESS) {
         xil_printf("[INIT] 9 warning: ROM autoload skipped\r\n");
@@ -819,9 +893,34 @@ void PsAppRuntime_Service(PsAppRuntimeContext *ctx) {
     u32 physical_keys;
     u32 ps_btn_mask;
     u32 pressed_ps_btns;
+    u32 mapped_keys;
+    u8 input_override;
 
     if (ctx == NULL) {
         return;
+    }
+
+    PsAppUsbHost_Service(ctx->usb_host_ctx);
+    PsAppInput_Service(ctx->input_ctx);
+    input_override = PsAppInput_ShouldOverrideKeys(ctx->input_ctx);
+    if (input_override != 0U) {
+        mapped_keys = PsAppInput_GetMappedKeys(ctx->input_ctx) & 0x3FFU;
+        if ((ctx->config->keys != mapped_keys) ||
+            (PsAppInput_IsReleasePending(ctx->input_ctx) != 0U)) {
+            ctx->config->keys = mapped_keys;
+            PsAppRuntime_ApplyShadowConfig(ctx);
+            if (ctx->input->last_committed_keys != mapped_keys) {
+                xil_printf("[INPUT] gba_keys=0x%03x btn=0x%04x lt=%u rt=%u lx=%d ly=%d\r\n",
+                           (unsigned int)mapped_keys,
+                           (unsigned int)ctx->input->buttons,
+                           (unsigned int)ctx->input->lt,
+                           (unsigned int)ctx->input->rt,
+                           (int)ctx->input->lx,
+                           (int)ctx->input->ly);
+            }
+            ctx->input->last_committed_keys = mapped_keys;
+        }
+        PsAppInput_ClearReleasePending(ctx->input_ctx);
     }
 
     status0 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS0);

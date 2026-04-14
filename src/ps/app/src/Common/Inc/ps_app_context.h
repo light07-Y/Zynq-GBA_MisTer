@@ -3,7 +3,9 @@
 
 #include "App/Inc/ps_app_runtime_context.h"
 #include "Diagnostics/Inc/ps_app_diag_context.h"
+#include "Input/Inc/ps_app_input_context.h"
 #include "Save/Inc/ps_app_save_context.h"
+#include "UsbHost/Inc/ps_app_usbhost_context.h"
 #include "Video/Inc/ps_app_video_context.h"
 
 #ifdef __cplusplus
@@ -22,9 +24,13 @@ typedef struct {
     PsAppRomState rom;
     PsAppSaveState save;
     PsAppDiagState diag;
+    PsAppUsbHostState usb_host;
+    PsAppInputState input;
     PsAppVideoContext video_ctx;
     PsAppDiagContext diag_ctx;
     PsAppSaveContext save_ctx;
+    PsAppUsbHostContext usb_host_ctx;
+    PsAppInputContext input_ctx;
     PsAppRuntimeContext runtime_ctx;
     PsAppConsoleContext console_ctx;
 } PsAppContext;

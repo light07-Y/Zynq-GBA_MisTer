@@ -152,33 +152,46 @@ if {[llength $fb_cap_mem_seg] > 0} {
 }
 
 # Ensure PS-side mandatory peripherals for this project:
-# - USB0 on MIO (for FreeRTOS USB stack usage)
+# - USB0 on MIO (for FreeRTOS USB host stack usage)
+# - USB PHY reset on MIO46 (matches Zybo Z7-20 board preset)
 # - BTN4/BTN5 on MIO50/51 via PS GPIO
+# - Ethernet/MDIO disabled because this project does not use GEM0
 # - F2P interrupt path enabled
 set ps_core_cell [get_bd_cells -quiet ps_core]
 if {[llength $ps_core_cell] > 0} {
-    set_property CONFIG.PCW_EN_USB0 {1} $ps_core_cell
-    set_property CONFIG.PCW_USB0_PERIPHERAL_ENABLE {1} $ps_core_cell
-    set_property CONFIG.PCW_USB0_USB0_IO {MIO 28 .. 39} $ps_core_cell
-    set_property CONFIG.PCW_EN_GPIO {1} $ps_core_cell
-    set_property CONFIG.PCW_GPIO_PERIPHERAL_ENABLE {1} $ps_core_cell
-    set_property CONFIG.PCW_GPIO_MIO_GPIO_ENABLE {1} $ps_core_cell
-    set_property CONFIG.PCW_GPIO_MIO_GPIO_IO {MIO} $ps_core_cell
+    set_property -dict [list \
+        CONFIG.PCW_EN_USB0 {1} \
+        CONFIG.PCW_EN_USB1 {0} \
+        CONFIG.PCW_USB0_PERIPHERAL_ENABLE {1} \
+        CONFIG.PCW_USB1_PERIPHERAL_ENABLE {0} \
+        CONFIG.PCW_USB0_USB0_IO {MIO 28 .. 39} \
+        CONFIG.PCW_USB0_RESET_ENABLE {1} \
+        CONFIG.PCW_USB0_RESET_IO {MIO 46} \
+        CONFIG.PCW_USB_RESET_ENABLE {1} \
+        CONFIG.PCW_USB_RESET_POLARITY {Active Low} \
+        CONFIG.PCW_USB_RESET_SELECT {Share reset pin} \
+        CONFIG.PCW_ENET0_GRP_MDIO_ENABLE {0} \
+        CONFIG.PCW_ENET0_PERIPHERAL_ENABLE {0} \
+        CONFIG.PCW_ENET1_PERIPHERAL_ENABLE {0} \
+        CONFIG.PCW_ENET_RESET_ENABLE {0} \
+        CONFIG.PCW_EN_ENET0 {0} \
+        CONFIG.PCW_EN_ENET1 {0} \
+        CONFIG.PCW_EN_GPIO {1} \
+        CONFIG.PCW_GPIO_PERIPHERAL_ENABLE {1} \
+        CONFIG.PCW_GPIO_MIO_GPIO_ENABLE {1} \
+        CONFIG.PCW_GPIO_MIO_GPIO_IO {MIO} \
+    ] $ps_core_cell
     # BTN4/BTN5 对应 MIO50/MIO51。这里必须关闭内部 pull-up，
-    # 否则旧 platform/ps7_init 可能把按键输入长期钉在错误电平，
+    # 否则 platform/ps7_init 可能把按键输入长期钉在错误电平，
     # 最终表现为 PS 端 raw50/raw51 不变化、UART 无按键日志。
     set_property CONFIG.PCW_MIO_50_PULLUP {disabled} $ps_core_cell
     set_property CONFIG.PCW_MIO_51_PULLUP {disabled} $ps_core_cell
-    # NOTE: USB reset select/io knobs are disabled in current PS7 IP profile
-    # (Vivado 2025.2.1 for this board setup), so no dedicated USB reset pin
-    # can be configured here from BD.
     set_property CONFIG.PCW_IRQ_F2P_INTR {1} $ps_core_cell
 }
 
 if {[llength [get_bd_cells -quiet hdmi_rgb_pack]] > 0} {
     delete_bd_objs [get_bd_cells hdmi_rgb_pack]
 }
-
 create_bd_cell -type ip -vlnv xilinx.com:ip:axis_subset_converter:1.1 hdmi_rgb_pack
 set_property -dict [list \
     CONFIG.S_TDATA_NUM_BYTES {4} \

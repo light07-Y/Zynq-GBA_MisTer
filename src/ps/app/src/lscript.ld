@@ -73,6 +73,13 @@ SECTIONS
    __rodata1_end = .;
 } > ps7_ddr_0_memory_0
 
+.usbh_class_info : {
+   . = ALIGN(4);
+   __usbh_class_info_start__ = .;
+   KEEP(*(.usbh_class_info))
+   __usbh_class_info_end__ = .;
+} > ps7_ddr_0_memory_0
+
 .sdata2 : {
    __sdata2_start = .;
    *(.sdata2)

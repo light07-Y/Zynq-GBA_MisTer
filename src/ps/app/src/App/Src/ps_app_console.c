@@ -9,6 +9,8 @@
 
 #include "Diagnostics/Inc/ps_app_diag.h"
 #include "App/Inc/ps_app_runtime.h"
+#include "Input/Inc/ps_app_input.h"
+#include "UsbHost/Inc/ps_app_usbhost.h"
 #include "Video/Inc/ps_app_video.h"
 
 static int PsAppConsole_ParseOnOff(const char *s, u32 *value_out) {
@@ -56,6 +58,66 @@ static int PsAppConsole_KeyBitFromName(const char *name) {
     return -1;
 }
 
+static int PsAppConsole_HexNibble(char ch) {
+    if ((ch >= '0') && (ch <= '9')) {
+        return (int)(ch - '0');
+    }
+    if ((ch >= 'a') && (ch <= 'f')) {
+        return 10 + (int)(ch - 'a');
+    }
+    if ((ch >= 'A') && (ch <= 'F')) {
+        return 10 + (int)(ch - 'A');
+    }
+    return -1;
+}
+
+static int PsAppConsole_ParseHexBytes(const char *text,
+                                      u8 *out_buf,
+                                      u32 out_buf_size,
+                                      u32 *out_len) {
+    int high_nibble;
+    int nibble;
+    u32 count;
+    char ch;
+
+    if ((text == NULL) || (out_buf == NULL) || (out_len == NULL)) {
+        return -1;
+    }
+
+    high_nibble = -1;
+    count = 0U;
+    while ((ch = *text++) != '\0') {
+        if ((ch == ' ') || (ch == ':') || (ch == '-') || (ch == '_')) {
+            continue;
+        }
+
+        nibble = PsAppConsole_HexNibble(ch);
+        if (nibble < 0) {
+            return -1;
+        }
+
+        if (high_nibble < 0) {
+            high_nibble = nibble;
+        } else {
+            if (count >= out_buf_size) {
+                return -1;
+            }
+            out_buf[count++] = (u8)(((u8)high_nibble << 4) | (u8)nibble);
+            high_nibble = -1;
+        }
+    }
+
+    if (high_nibble >= 0) {
+        return -1;
+    }
+    if (count == 0U) {
+        return -1;
+    }
+
+    *out_len = count;
+    return 0;
+}
+
 static void PsAppConsole_PrintHelp(void) {
     xil_printf("Commands:\r\n");
     xil_printf("  help\r\n");
@@ -76,6 +138,15 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  key <name> on|off   (a/b/select/start/right/left/up/down/r/l)\r\n");
     xil_printf("  keymask <hex>\r\n");
     xil_printf("  btn status           (PS-side BTN4/BTN5 on MIO50/51)\r\n");
+    xil_printf("  input status\r\n");
+    xil_printf("  input inject <hex>   (xinput report hex, allow separators : - _ space)\r\n");
+    xil_printf("  input detach\r\n");
+    xil_printf("  usb status\r\n");
+    xil_printf("  usb kick\r\n");
+    xil_printf("  usb portreset\r\n");
+    xil_printf("  usb ulpi\r\n");
+    xil_printf("  usb vbus on|off\r\n");
+    xil_printf("  usb rumble <large 0-255> <small 0-255>\r\n");
     xil_printf("  rtc <hex>\r\n");
     xil_printf("  cycle <dec>\r\n");
     xil_printf("  maxpak <hex>\r\n");
@@ -320,6 +391,122 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         }
 
         xil_printf("[CMD] usage: btn status\r\n");
+        return;
+    }
+
+    if (strcmp(cmd, "input") == 0) {
+        u8 report[PS_XINPUT_MAX_REPORT_BYTES];
+        u32 report_len;
+
+        a1 = strtok(NULL, " \t");
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            PsAppInput_PrintStatus(app->input_ctx);
+            return;
+        }
+
+        if (strcmp(a1, "detach") == 0) {
+            PsAppInput_OnUsbDetached(app->input_ctx);
+            xil_printf("[CMD] input detached\r\n");
+            return;
+        }
+
+        if (strcmp(a1, "inject") == 0) {
+            a2 = strtok(NULL, "\r\n");
+            if ((a2 == NULL) ||
+                (PsAppConsole_ParseHexBytes(a2,
+                                            report,
+                                            sizeof(report),
+                                            &report_len) != 0)) {
+                xil_printf("[CMD] usage: input inject <hex>\r\n");
+                xil_printf("[CMD] eg: input inject 0014000000000000000000000000000000000000\r\n");
+                return;
+            }
+
+            if (PsAppInput_InjectRawReport(app->input_ctx, report, report_len) == XST_SUCCESS) {
+                xil_printf("[CMD] input inject ok, bytes=%u\r\n", (unsigned int)report_len);
+            } else {
+                xil_printf("[CMD] input inject failed\r\n");
+            }
+            return;
+        }
+
+        xil_printf("[CMD] usage: input status|inject <hex>|detach\r\n");
+        return;
+    }
+
+    if (strcmp(cmd, "usb") == 0) {
+        u32 on_off;
+
+        a1 = strtok(NULL, " \t");
+
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            PsAppUsbHost_PrintStatus(app->usb_host_ctx);
+            return;
+        }
+
+        if (strcmp(a1, "kick") == 0) {
+            PsAppUsbHost_ForceRootHubScan(app->usb_host_ctx);
+            xil_printf("[CMD] usb kick requested\r\n");
+            return;
+        }
+
+        if (strcmp(a1, "portreset") == 0) {
+            if (PsAppUsbHost_PortReset(app->usb_host_ctx) == XST_SUCCESS) {
+                xil_printf("[CMD] usb portreset ok\r\n");
+            } else {
+                xil_printf("[CMD] usb portreset failed\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(a1, "ulpi") == 0) {
+            if (PsAppUsbHost_DumpUlpi(app->usb_host_ctx) == XST_SUCCESS) {
+                xil_printf("[CMD] usb ulpi ok\r\n");
+            } else {
+                xil_printf("[CMD] usb ulpi failed\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(a1, "vbus") == 0) {
+            a2 = strtok(NULL, " \t");
+            if (PsAppConsole_ParseOnOff(a2, &on_off) != 0) {
+                xil_printf("[CMD] usage: usb vbus on|off\r\n");
+                return;
+            }
+            if (PsAppUsbHost_SetVbusDrive(app->usb_host_ctx, (u8)on_off) == XST_SUCCESS) {
+                xil_printf("[CMD] usb vbus=%u\r\n", (unsigned int)on_off);
+            } else {
+                xil_printf("[CMD] usb vbus set failed\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(a1, "rumble") == 0) {
+            u32 large_motor;
+            u32 small_motor;
+
+            a2 = strtok(NULL, " \t");
+            a3 = strtok(NULL, " \t");
+            if ((a2 == NULL) || (a3 == NULL) ||
+                (PsAppConsole_ParseU32Value(a2, &large_motor) != 0) ||
+                (PsAppConsole_ParseU32Value(a3, &small_motor) != 0) ||
+                (large_motor > 255U) || (small_motor > 255U)) {
+                xil_printf("[CMD] usage: usb rumble <large 0-255> <small 0-255>\r\n");
+                return;
+            }
+
+            if (PsAppUsbHost_SetRumble(app->usb_host_ctx, (u8)large_motor, (u8)small_motor) == XST_SUCCESS) {
+                xil_printf("[CMD] usb rumble ok L=%u S=%u\r\n",
+                           (unsigned int)large_motor,
+                           (unsigned int)small_motor);
+            } else {
+                xil_printf("[CMD] usb rumble failed\r\n");
+            }
+            return;
+        }
+
+        xil_printf("[CMD] usage: usb status|kick|portreset|ulpi|vbus on|off|rumble <large 0-255> <small 0-255>\r\n");
         return;
     }
 

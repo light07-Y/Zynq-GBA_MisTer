@@ -351,7 +351,7 @@
             "value": "10.158730"
           },
           "PCW_ACT_ENET0_PERIPHERAL_FREQMHZ": {
-            "value": "125.000000"
+            "value": "10.000000"
           },
           "PCW_ACT_ENET1_PERIPHERAL_FREQMHZ": {
             "value": "10.000000"
@@ -503,37 +503,16 @@
           "PCW_DQ_WIDTH": {
             "value": "32"
           },
-          "PCW_ENET0_BASEADDR": {
-            "value": "0xE000B000"
-          },
-          "PCW_ENET0_ENET0_IO": {
-            "value": "MIO 16 .. 27"
-          },
-          "PCW_ENET0_GRP_MDIO_ENABLE": {
-            "value": "1"
-          },
-          "PCW_ENET0_GRP_MDIO_IO": {
-            "value": "MIO 52 .. 53"
-          },
-          "PCW_ENET0_HIGHADDR": {
-            "value": "0xE000BFFF"
-          },
           "PCW_ENET0_PERIPHERAL_CLKSRC": {
             "value": "IO PLL"
           },
           "PCW_ENET0_PERIPHERAL_ENABLE": {
-            "value": "1"
-          },
-          "PCW_ENET0_PERIPHERAL_FREQMHZ": {
-            "value": "1000 Mbps"
+            "value": "0"
           },
           "PCW_ENET1_PERIPHERAL_CLKSRC": {
             "value": "IO PLL"
           },
           "PCW_ENET1_PERIPHERAL_ENABLE": {
-            "value": "0"
-          },
-          "PCW_ENET_RESET_ENABLE": {
             "value": "0"
           },
           "PCW_ENET_RESET_POLARITY": {
@@ -651,7 +630,7 @@
             "value": "0"
           },
           "PCW_EN_ENET0": {
-            "value": "1"
+            "value": "0"
           },
           "PCW_EN_ENET1": {
             "value": "0"
@@ -1312,12 +1291,13 @@
           },
           "PCW_MIO_TREE_PERIPHERALS": {
             "value": [
-              "GPIO#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#GPIO#Quad SPI Flash#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#Enet 0#Enet 0#Enet 0#Enet 0#Enet 0#Enet 0#Enet",
-              "0#Enet 0#Enet 0#Enet 0#Enet 0#Enet 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#SD 0#SD 0#SD 0#SD 0#SD 0#SD 0#GPIO#SD 0#UART 1#UART 1#GPIO#GPIO#Enet 0#Enet 0"
+              "GPIO#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#Quad SPI Flash#GPIO#Quad SPI",
+              "Flash#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#GPIO#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#USB 0#SD 0#SD 0#SD 0#SD 0#SD 0#SD",
+              "0#USB Reset#SD 0#UART 1#UART 1#GPIO#GPIO#GPIO#GPIO"
             ]
           },
           "PCW_MIO_TREE_SIGNALS": {
-            "value": "gpio[0]#qspi0_ss_b#qspi0_io[0]#qspi0_io[1]#qspi0_io[2]#qspi0_io[3]/HOLD_B#qspi0_sclk#gpio[7]#qspi_fbclk#gpio[9]#gpio[10]#gpio[11]#gpio[12]#gpio[13]#gpio[14]#gpio[15]#tx_clk#txd[0]#txd[1]#txd[2]#txd[3]#tx_ctl#rx_clk#rxd[0]#rxd[1]#rxd[2]#rxd[3]#rx_ctl#data[4]#dir#stp#nxt#data[0]#data[1]#data[2]#data[3]#clk#data[5]#data[6]#data[7]#clk#cmd#data[0]#data[1]#data[2]#data[3]#gpio[46]#cd#tx#rx#gpio[50]#gpio[51]#mdc#mdio"
+            "value": "gpio[0]#qspi0_ss_b#qspi0_io[0]#qspi0_io[1]#qspi0_io[2]#qspi0_io[3]/HOLD_B#qspi0_sclk#gpio[7]#qspi_fbclk#gpio[9]#gpio[10]#gpio[11]#gpio[12]#gpio[13]#gpio[14]#gpio[15]#gpio[16]#gpio[17]#gpio[18]#gpio[19]#gpio[20]#gpio[21]#gpio[22]#gpio[23]#gpio[24]#gpio[25]#gpio[26]#gpio[27]#data[4]#dir#stp#nxt#data[0]#data[1]#data[2]#data[3]#clk#data[5]#data[6]#data[7]#clk#cmd#data[0]#data[1]#data[2]#data[3]#reset#cd#tx#rx#gpio[50]#gpio[51]#gpio[52]#gpio[53]"
           },
           "PCW_M_AXI_GP0_ENABLE_STATIC_REMAP": {
             "value": "0"
@@ -1437,9 +1417,6 @@
             "value": "0"
           },
           "PCW_OVERRIDE_BASIC_CLOCK": {
-            "value": "0"
-          },
-          "PCW_P2F_ENET0_INTR": {
             "value": "0"
           },
           "PCW_P2F_GPIO_INTR": {
@@ -1925,6 +1902,12 @@
           "PCW_USB0_PERIPHERAL_ENABLE": {
             "value": "1"
           },
+          "PCW_USB0_RESET_ENABLE": {
+            "value": "1"
+          },
+          "PCW_USB0_RESET_IO": {
+            "value": "MIO 46"
+          },
           "PCW_USB0_USB0_IO": {
             "value": "MIO 28 .. 39"
           },
@@ -1932,10 +1915,13 @@
             "value": "0"
           },
           "PCW_USB_RESET_ENABLE": {
-            "value": "0"
+            "value": "1"
           },
           "PCW_USB_RESET_POLARITY": {
             "value": "Active Low"
+          },
+          "PCW_USB_RESET_SELECT": {
+            "value": "Share reset pin"
           },
           "PCW_USE_AXI_FABRIC_IDLE": {
             "value": "0"
@@ -3905,8 +3891,8 @@
       "hdmi_rgb_pack": {
         "vlnv": "xilinx.com:ip:axis_subset_converter:1.1",
         "ip_revision": "36",
-        "xci_name": "zynq_gba_system_hdmi_rgb_pack_10",
-        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_10\\zynq_gba_system_hdmi_rgb_pack_10.xci",
+        "xci_name": "zynq_gba_system_hdmi_rgb_pack_14",
+        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_14\\zynq_gba_system_hdmi_rgb_pack_14.xci",
         "inst_hier_path": "hdmi_rgb_pack",
         "has_run_ip_tcl": "true",
         "parameters": {

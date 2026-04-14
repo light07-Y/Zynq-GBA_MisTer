@@ -28,6 +28,8 @@ extern "C" {
 
 struct PsAppDiagContext;
 struct PsAppSaveContext;
+struct PsAppInputContext;
+struct PsAppUsbHostContext;
 struct PsAppVideoContext;
 
 typedef struct PsAppRuntimeContext {
@@ -42,12 +44,16 @@ typedef struct PsAppRuntimeContext {
     PsAppRomState *rom;
     PsAppSaveState *save;
     PsAppDiagState *diag;
+    PsAppUsbHostState *usb_host;
+    PsAppInputState *input;
     u8 ps_gpio_ready;
     u8 reserved0;
     u8 reserved1;
     u8 reserved2;
     u32 ps_btn_last_mask;
     struct PsAppSaveContext *save_ctx;
+    struct PsAppInputContext *input_ctx;
+    struct PsAppUsbHostContext *usb_host_ctx;
     struct PsAppVideoContext *video_ctx;
     struct PsAppDiagContext *diag_ctx;
 } PsAppRuntimeContext;
