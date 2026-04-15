@@ -83,6 +83,48 @@ static void PsAppSave_CopyText(char *dst, size_t dst_size, const char *src) {
     dst[src_len] = '\0';
 }
 
+static void PsAppSave_CopyTextBounded(char *dst,
+                                      size_t dst_size,
+                                      const char *src,
+                                      size_t src_max_len) {
+    size_t src_len;
+
+    if ((dst == NULL) || (dst_size == 0U)) {
+        return;
+    }
+
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+
+    src_len = 0U;
+    while ((src_len < src_max_len) && (src[src_len] != '\0')) {
+        src_len++;
+    }
+    if (src_len >= dst_size) {
+        src_len = dst_size - 1U;
+    }
+
+    memcpy(dst, src, src_len);
+    dst[src_len] = '\0';
+}
+
+static void PsAppSave_SanitizeAsciiInPlace(char *text) {
+    size_t idx;
+
+    if (text == NULL) {
+        return;
+    }
+
+    for (idx = 0U; text[idx] != '\0'; ++idx) {
+        unsigned char ch = (unsigned char)text[idx];
+        if ((ch < 0x20U) || (ch > 0x7EU)) {
+            text[idx] = '?';
+        }
+    }
+}
+
 static void PsAppSave_RomStem(const char *rom_path, char *stem_out, size_t stem_size) {
     const char *name_ptr;
     const char *dot_ptr;
@@ -280,6 +322,8 @@ void PsAppSave_Reset(PsAppSaveContext *ctx) {
 }
 
 XStatus PsAppSave_PrepareForRom(PsAppSaveContext *ctx, const char *rom_path) {
+    char log_path[PS_APP_ROM_PATH_MAX_CHARS];
+    const char *print_path;
     u8 loaded;
 
     if ((ctx == NULL) || (ctx->state == NULL)) {
@@ -295,6 +339,20 @@ XStatus PsAppSave_PrepareForRom(PsAppSaveContext *ctx, const char *rom_path) {
         return XST_FAILURE;
     }
 
+    if ((ctx->rom != NULL) && (ctx->rom->path[0] != '\0')) {
+        PsAppSave_CopyTextBounded(log_path,
+                                  sizeof(log_path),
+                                  ctx->rom->path,
+                                  sizeof(log_path) - 1U);
+    } else {
+        PsAppSave_CopyTextBounded(log_path,
+                                  sizeof(log_path),
+                                  rom_path,
+                                  sizeof(log_path) - 1U);
+    }
+    PsAppSave_SanitizeAsciiInPlace(log_path);
+    print_path = (log_path[0] != '\0') ? log_path : "(unknown)";
+
     loaded = 0U;
     if (PsAppSave_TryLoadKind(ctx, rom_path, PS_APP_SAVE_KIND_FLASH, &loaded) != XST_SUCCESS) {
         (void)PsAppSave_TryLoadKind(ctx, rom_path, PS_APP_SAVE_KIND_SRAM, &loaded);
@@ -305,7 +363,7 @@ XStatus PsAppSave_PrepareForRom(PsAppSaveContext *ctx, const char *rom_path) {
     if (loaded != 0U) {
         xil_printf("[SAVE] preload %s\r\n", ctx->state->path);
     } else {
-        xil_printf("[SAVE] no existing save for %s\r\n", rom_path);
+        xil_printf("[SAVE] no existing save for %s\r\n", print_path);
     }
 
     return XST_SUCCESS;

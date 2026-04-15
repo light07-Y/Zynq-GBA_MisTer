@@ -1,13 +1,12 @@
 #include "Video/Inc/ps_app_video.h"
 
-#include <string.h>
-
 #include "FreeRTOS.h"
 #include "portmacro.h"
 #include "task.h"
 #include "xaxivdma_hw.h"
 #include "xil_cache.h"
 #include "xil_printf.h"
+#include "xiltimer.h"
 #include "xinterrupt_wrap.h"
 #include "xparameters.h"
 
@@ -38,6 +37,12 @@
  * VSYNC/服务循环驱动。
  */
 #define PS_APP_VDMA_READ_IRQ_MASK XAXIVDMA_IXR_ERROR_MASK
+
+static u16 s_capture_shadow[PS_APP_GBA_FRAME_WIDTH * PS_APP_GBA_FRAME_HEIGHT];
+static u16 s_scale_x_lut[PS_APP_HDMI_WIDTH];
+static u16 s_scale_y_lut[PS_APP_HDMI_HEIGHT];
+static u32 s_scale_lut_w = 0U;
+static u32 s_scale_lut_h = 0U;
 
 static void PsAppVideo_UpdateDisplayFrameState(PsAppVideoContext *ctx) {
     u32 frame_idx;
@@ -133,22 +138,116 @@ static u32 PsAppVideo_SelectSafeFrame(PsAppVideoContext *ctx, u32 current_frame)
     return current_frame;
 }
 
+static void PsAppVideo_LoadCaptureShadowFromBram(u32 buf_idx) {
+    volatile const u32 *src_words;
+    u32 word_idx;
+    u32 pixel_idx;
+
+    src_words = (volatile const u32 *)(PS_APP_FB_CAP_BRAM_BASE_ADDR +
+                                       ((buf_idx & 0x1U) * PS_APP_GBA_FB_CAPTURE_FRAME_BYTES));
+    pixel_idx = 0U;
+    for (word_idx = 0U; word_idx < PS_APP_GBA_FB_CAPTURE_WORDS; ++word_idx) {
+        u32 packed = src_words[word_idx];
+        s_capture_shadow[pixel_idx++] = (u16)(packed & 0xFFFFU);
+        s_capture_shadow[pixel_idx++] = (u16)((packed >> 16) & 0xFFFFU);
+    }
+}
+
+static void PsAppVideo_UpdateScaleLut(u32 dst_w, u32 dst_h) {
+    u32 dst_px;
+    u32 dst_py;
+
+    if (dst_w > PS_APP_HDMI_WIDTH) {
+        dst_w = PS_APP_HDMI_WIDTH;
+    }
+    if (dst_h > PS_APP_HDMI_HEIGHT) {
+        dst_h = PS_APP_HDMI_HEIGHT;
+    }
+    if ((dst_w == s_scale_lut_w) && (dst_h == s_scale_lut_h)) {
+        return;
+    }
+
+    for (dst_px = 0U; dst_px < dst_w; ++dst_px) {
+        u32 src_x = (dst_px * PS_APP_GBA_FRAME_WIDTH) / dst_w;
+        if (src_x >= PS_APP_GBA_FRAME_WIDTH) {
+            src_x = PS_APP_GBA_FRAME_WIDTH - 1U;
+        }
+        s_scale_x_lut[dst_px] = (u16)src_x;
+    }
+
+    for (dst_py = 0U; dst_py < dst_h; ++dst_py) {
+        u32 src_y = (dst_py * PS_APP_GBA_FRAME_HEIGHT) / dst_h;
+        if (src_y >= PS_APP_GBA_FRAME_HEIGHT) {
+            src_y = PS_APP_GBA_FRAME_HEIGHT - 1U;
+        }
+        s_scale_y_lut[dst_py] = (u16)src_y;
+    }
+
+    s_scale_lut_w = dst_w;
+    s_scale_lut_h = dst_h;
+}
+
+static u32 PsAppVideo_TicksToUs(u64 ticks) {
+#if defined(COUNTS_PER_SECOND) && (COUNTS_PER_SECOND != 0)
+    u64 scaled = (ticks * 1000000ULL) + ((u64)COUNTS_PER_SECOND / 2ULL);
+    return (u32)(scaled / (u64)COUNTS_PER_SECOND);
+#else
+    return (u32)ticks;
+#endif
+}
+
+static void PsAppVideo_UpdateBlitStats(PsAppVideoContext *ctx,
+                                       u32 prev_frame_seq,
+                                       u32 frame_seq,
+                                       u32 blit_us) {
+    u32 seq_gap;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    if (ctx->state->blit_count < 0xFFFFFFFFU) {
+        ctx->state->blit_count++;
+    }
+    ctx->state->blit_last_us = blit_us;
+    if (blit_us > ctx->state->blit_max_us) {
+        ctx->state->blit_max_us = blit_us;
+    }
+    if ((0xFFFFFFFFU - ctx->state->blit_total_us) < blit_us) {
+        ctx->state->blit_total_us = 0xFFFFFFFFU;
+    } else {
+        ctx->state->blit_total_us += blit_us;
+    }
+
+    if ((prev_frame_seq != 0U) && (frame_seq > prev_frame_seq)) {
+        seq_gap = frame_seq - prev_frame_seq;
+        if (seq_gap > ctx->state->blit_seq_gap_max) {
+            ctx->state->blit_seq_gap_max = seq_gap;
+        }
+    }
+}
+
 static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 frame_seq, u32 buf_idx) {
     u32 current_frame;
     u32 target_frame;
     u32 *fb32;
-    volatile const u32 *src_words;
+    u32 prev_frame_seq;
     u32 dst_x;
     u32 dst_y;
     u32 dst_w;
     u32 dst_h;
     u32 dst_py;
-    u32 src_y;
-    u32 src_y_acc;
+    XTime tick_begin;
+    XTime tick_end;
+    UINTPTR flush_base_addr;
+    u32 flush_bytes;
 
     if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
         return XST_FAILURE;
     }
+
+    XTime_GetTime(&tick_begin);
+    prev_frame_seq = ctx->state->fbcap_last_frame_seq;
 
     current_frame = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
     if (current_frame >= ctx->vdma->frame_count) {
@@ -161,64 +260,42 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
     }
 
     fb32 = (u32 *)ctx->vdma->frame_addrs[target_frame];
-    src_words = (volatile const u32 *)(PS_APP_FB_CAP_BRAM_BASE_ADDR +
-                                       (buf_idx * PS_APP_GBA_FB_CAPTURE_FRAME_BYTES));
-
     PsAppVideo_ComputeDisplayWindow(ctx, &dst_x, &dst_y, &dst_w, &dst_h);
     if ((dst_w == 0U) || (dst_h == 0U)) {
         return XST_FAILURE;
     }
 
-    memset(fb32, 0, ctx->vdma->frame_size_bytes);
+    PsAppVideo_LoadCaptureShadowFromBram(buf_idx);
+    PsAppVideo_UpdateScaleLut(dst_w, dst_h);
 
-    src_y = 0U;
-    src_y_acc = 0U;
     for (dst_py = 0U; dst_py < dst_h; ++dst_py) {
-        UINTPTR line_base = (UINTPTR)fb32 +
-                            ((((dst_y + dst_py) * ctx->vdma->width) + dst_x) * sizeof(u32));
-        volatile u32 *line_ptr = (volatile u32 *)line_base;
-        u32 src_row_base = src_y * PS_APP_GBA_FB_CAPTURE_ROW_WORDS;
-        u32 src_x = 0U;
-        u32 src_x_acc = 0U;
+        UINTPTR line_base =
+            (UINTPTR)fb32 +
+            (((dst_y + dst_py) * ctx->vdma->line_stride_bytes) + (dst_x * sizeof(u32)));
+        u32 *line_ptr = (u32 *)line_base;
+        const u16 *src_row = &s_capture_shadow[s_scale_y_lut[dst_py] * PS_APP_GBA_FRAME_WIDTH];
         u32 dst_px;
 
         for (dst_px = 0U; dst_px < dst_w; ++dst_px) {
-            u32 packed;
-            u32 color;
-
-            packed = src_words[src_row_base + (src_x >> 1)];
-            if ((src_x & 0x1U) != 0U) {
-                color = PsAppVideo_ConvertRgb565ToXrgb8888((u16)((packed >> 16) & 0xFFFFU));
-            } else {
-                color = PsAppVideo_ConvertRgb565ToXrgb8888((u16)(packed & 0xFFFFU));
-            }
-
-            line_ptr[dst_px] = color;
-
-            src_x_acc += PS_APP_GBA_FRAME_WIDTH;
-            while (src_x_acc >= dst_w) {
-                src_x_acc -= dst_w;
-                if (src_x < (PS_APP_GBA_FRAME_WIDTH - 1U)) {
-                    src_x++;
-                }
-            }
-        }
-
-        src_y_acc += PS_APP_GBA_FRAME_HEIGHT;
-        while (src_y_acc >= dst_h) {
-            src_y_acc -= dst_h;
-            if (src_y < (PS_APP_GBA_FRAME_HEIGHT - 1U)) {
-                src_y++;
-            }
+            line_ptr[dst_px] =
+                PsAppVideo_ConvertRgb565ToXrgb8888(src_row[s_scale_x_lut[dst_px]]);
         }
     }
 
-    Xil_DCacheFlushRange((INTPTR)ctx->vdma->frame_addrs[target_frame],
-                         (INTPTR)ctx->vdma->frame_size_bytes);
+    flush_base_addr = (UINTPTR)fb32 +
+                      ((dst_y * ctx->vdma->line_stride_bytes) + (dst_x * sizeof(u32)));
+    flush_bytes = ((dst_h - 1U) * ctx->vdma->line_stride_bytes) + (dst_w * sizeof(u32));
+    Xil_DCacheFlushRange((INTPTR)flush_base_addr, (INTPTR)flush_bytes);
+
     if (PsAppVideo_RequestFrame(ctx, target_frame) != XST_SUCCESS) {
         return XST_FAILURE;
     }
 
+    XTime_GetTime(&tick_end);
+    PsAppVideo_UpdateBlitStats(ctx,
+                               prev_frame_seq,
+                               frame_seq,
+                               PsAppVideo_TicksToUs((u64)(tick_end - tick_begin)));
     ctx->state->fbcap_last_frame_seq = frame_seq;
     ctx->state->fbcap_last_buf_idx = (u8)(buf_idx & 0x1U);
     ctx->state->fbcap_last_frame_idx = (u8)target_frame;
@@ -406,7 +483,9 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
     u32 seq0;
     u32 seq1;
     u32 status;
-    static u32 blit_diag_count = 0U;
+    u32 last_seq;
+    u32 sampled_buf_idx;
+    static u32 blit_fail_log_count = 0U;
 
     if ((ctx == NULL) || (ctx->rom->loaded == 0U)) {
         return;
@@ -418,27 +497,23 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
     if (seq1 != seq0) {
         status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
     }
-
-    if ((seq1 == 0U) || (seq1 == ctx->state->fbcap_last_frame_seq)) {
+    sampled_buf_idx = status & 0x1U;
+    last_seq = ctx->state->fbcap_last_frame_seq;
+    if ((seq1 == 0U) || (seq1 == last_seq)) {
         return;
     }
-
-    if (blit_diag_count < 5U) {
-        xil_printf("[BLIT] seq=%u last=%u buf=%u\r\n",
-                   (unsigned int)seq1,
-                   (unsigned int)ctx->state->fbcap_last_frame_seq,
-                   (unsigned int)(status & 0x1U));
+    if ((last_seq != 0U) && (seq1 < last_seq)) {
+        if (ctx->state->blit_seq_glitch_drop < 0xFFFFFFFFU) {
+            ctx->state->blit_seq_glitch_drop++;
+        }
     }
 
-    {
-        XStatus rc = PsAppVideo_BlitCapturedFrameToHdmi(ctx, seq1, status & 0x1U);
-        if (blit_diag_count < 5U) {
-            u32 parked = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
-            xil_printf("[BLIT] rc=%d target=%u parked=%u\r\n",
-                       (int)rc,
-                       (unsigned int)ctx->state->fbcap_last_frame_idx,
-                       (unsigned int)parked);
-            blit_diag_count++;
+    if (PsAppVideo_BlitCapturedFrameToHdmi(ctx, seq1, sampled_buf_idx) != XST_SUCCESS) {
+        if (blit_fail_log_count < 5U) {
+            xil_printf("[BLIT] fail seq=%u buf=%u\r\n",
+                       (unsigned int)seq1,
+                       (unsigned int)sampled_buf_idx);
+            blit_fail_log_count++;
         }
     }
 }

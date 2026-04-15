@@ -585,6 +585,12 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->video->fbcap_last_frame_seq = 0U;
     ctx->video->fbcap_last_buf_idx = 0xFFU;
     ctx->video->fbcap_last_frame_idx = 0xFFU;
+    ctx->video->blit_count = 0U;
+    ctx->video->blit_last_us = 0U;
+    ctx->video->blit_max_us = 0U;
+    ctx->video->blit_total_us = 0U;
+    ctx->video->blit_seq_gap_max = 0U;
+    ctx->video->blit_seq_glitch_drop = 0U;
 
     ctx->rom->loaded = 0U;
     ctx->rom->is_loading = 0U;
@@ -630,6 +636,8 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->diag->stall_same_sample_count = 0U;
     ctx->diag->auto_boot_audit_printed = 0U;
     ctx->diag->auto_stall_audit_printed = 0U;
+    ctx->diag->log_input_delta_enable = 0U;
+    ctx->diag->log_fbscan_auto_enable = 0U;
     ctx->diag->delayed_chain_tick = 0U;
     ctx->diag->delayed_chain_printed = 0U;
     ctx->diag->fbscan_tick = 0U;
@@ -789,6 +797,14 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     ctx->rom->eeprom_offset = 0xFFFFFFFFU;
     ctx->rom->game_code[0] = '\0';
     ctx->rom->maker_code[0] = '\0';
+    ctx->video->fbcap_last_buf_idx = 0xFFU;
+    ctx->video->fbcap_last_frame_idx = 0xFFU;
+    ctx->video->blit_count = 0U;
+    ctx->video->blit_last_us = 0U;
+    ctx->video->blit_max_us = 0U;
+    ctx->video->blit_total_us = 0U;
+    ctx->video->blit_seq_gap_max = 0U;
+    ctx->video->blit_seq_glitch_drop = 0U;
     ctx->diag->stall_last_pc = 0U;
     ctx->diag->stall_last_mem = 0U;
     ctx->diag->stall_last_dma = 0U;
@@ -808,11 +824,11 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     usleep(2000U);
     PsAppDiag_PrintConfigReadback(ctx->diag_ctx, "reset-assert");
 
-    xil_printf("[ROM] load %s\r\n", resolved_path);
+    xil_printf("[ROM] load %s\r\n", ctx->rom->path);
     xil_printf("[ROM] target addr=0x%08x limit=%u\r\n",
                (unsigned int)PS_APP_GBA_ROM_REGION_BASE_ADDR,
                (unsigned int)PS_APP_GBA_ROM_REGION_MAX_BYTES);
-    status = PsRomLoader_LoadSdFile(resolved_path,
+    status = PsRomLoader_LoadSdFile(ctx->rom->path,
                                     (UINTPTR)PS_APP_GBA_ROM_REGION_BASE_ADDR,
                                     PS_APP_GBA_ROM_REGION_MAX_BYTES,
                                     &load_result);
@@ -826,7 +842,7 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
         return status;
     }
 
-    if (PsAppSave_PrepareForRom(ctx->save_ctx, resolved_path) != XST_SUCCESS) {
+    if (PsAppSave_PrepareForRom(ctx->save_ctx, ctx->rom->path) != XST_SUCCESS) {
         xil_printf("[SAVE] preload skipped\r\n");
     }
 
@@ -1009,7 +1025,7 @@ static void PsAppRuntime_ServiceInputFast(PsAppRuntimeContext *ctx) {
             ctx->config->keys = mapped_keys;
             PsAppRuntime_ApplyShadowConfig(ctx);
         }
-        if (log_needed != 0U) {
+        if ((log_needed != 0U) && (ctx->diag->log_input_delta_enable != 0U)) {
             PsAppRuntime_PrintInputDelta(ctx,
                                          prev_pad_source_mask,
                                          curr_pad_source_mask,
@@ -1139,18 +1155,7 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
         ctx->diag->warn_last_vdma_errs = 0U;
     }
 
-    // FB_CAP_SEQ is the authoritative "a full capture frame is ready" signal.
-    // Poll it every service tick so the BRAM->PS->VDMA path still advances even
-    // if the VSYNC IRQ edge is missed or arrives before PS starts servicing.
-    if (ctx->rom->loaded != 0U) {
-        PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
-    }
-
     if (irq_sts != 0U) {
-        if ((irq_sts & PS_APP_IRQ_MASK_VSYNC) != 0U) {
-            PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
-        }
-
         if ((irq_sts & ~PS_APP_IRQ_MASK_VSYNC) != 0U) {
             if (ctx->diag->last_runtime_irq_sts != irq_sts) {
                 xil_printf("[IRQ] sts=0x%x\r\n", (unsigned int)irq_sts);
@@ -1200,7 +1205,9 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
         }
     }
 
-    if (ctx->rom->loaded && ctx->diag->delayed_chain_tick > 200U) {
+    if (ctx->rom->loaded &&
+        (ctx->diag->log_fbscan_auto_enable != 0U) &&
+        (ctx->diag->delayed_chain_tick > 200U)) {
         ctx->diag->fbscan_tick++;
         if ((ctx->diag->fbscan_tick % PS_APP_FBSCAN_INTERVAL_TICKS) == 0U) {
             if (ctx->diag->fbscan_dump_count < PS_APP_FBSCAN_MAX_DUMPS) {
@@ -1241,5 +1248,22 @@ void PsAppMonitorTask(void *arg) {
         }
         slow_tick_accum++;
         vTaskDelay(fast_delay_ticks);
+    }
+}
+
+void PsAppVideoPresentTask(void *arg) {
+    PsAppRuntimeContext *ctx = (PsAppRuntimeContext *)arg;
+    TickType_t present_delay_ticks;
+
+    present_delay_ticks = pdMS_TO_TICKS(PS_APP_VIDEO_PRESENT_INTERVAL_MS);
+    if (present_delay_ticks == 0U) {
+        present_delay_ticks = 1U;
+    }
+
+    for (;;) {
+        if ((ctx != NULL) && (ctx->rom != NULL) && (ctx->rom->loaded != 0U)) {
+            PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
+        }
+        vTaskDelay(present_delay_ticks);
     }
 }

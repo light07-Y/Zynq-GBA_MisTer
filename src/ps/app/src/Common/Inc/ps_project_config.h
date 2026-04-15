@@ -28,6 +28,8 @@ extern "C" {
 
 #define PS_APP_SYS_TASK_STACK_WORDS       (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_SYS_TASK_PRIORITY          (tskIDLE_PRIORITY + 3U)
+#define PS_APP_VIDEO_TASK_STACK_WORDS     (configMINIMAL_STACK_SIZE * 8U)
+#define PS_APP_VIDEO_TASK_PRIORITY        (tskIDLE_PRIORITY + 2U)
 #define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 8U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
 #define PS_APP_UART_BAUDRATE              115200U
@@ -39,6 +41,7 @@ extern "C" {
 #define PS_APP_IRQ_MASK_ERROR             0x2U
 #define PS_APP_IRQ_MASK_DEFAULT           (PS_APP_IRQ_MASK_VSYNC | PS_APP_IRQ_MASK_ERROR)
 #define PS_APP_MONITOR_INTERVAL_MS        10U
+#define PS_APP_VIDEO_PRESENT_INTERVAL_MS  1U
 /* USB/XInput 报告通常在 1ms 量级到达；按键提交若仍跟 10ms 慢轮询绑定，
  * 短按会随机表现成漏按或多按，因此单独给输入路径更高的服务频率。 */
 #define PS_APP_INPUT_SERVICE_INTERVAL_MS  1U

@@ -42,6 +42,12 @@ typedef struct {
     volatile u32 vdma_err_count;
     volatile u32 vdma_last_intr_mask;
     volatile u32 vdma_last_err_mask;
+    u32 blit_count;
+    u32 blit_last_us;
+    u32 blit_max_us;
+    u32 blit_total_us;
+    u32 blit_seq_gap_max;
+    u32 blit_seq_glitch_drop;
 } PsAppVideoState;
 
 typedef struct {
@@ -94,6 +100,8 @@ typedef struct {
     u32 stall_same_sample_count;
     u8 auto_boot_audit_printed;
     u8 auto_stall_audit_printed;
+    u8 log_input_delta_enable;
+    u8 log_fbscan_auto_enable;
     u32 delayed_chain_tick;
     u8 delayed_chain_printed;
     u32 fbscan_tick;

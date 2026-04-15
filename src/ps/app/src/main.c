@@ -55,6 +55,17 @@ int main(void) {
         return 1;
     }
 
+    ok = xTaskCreate(PsAppVideoPresentTask,
+                     "video",
+                     PS_APP_VIDEO_TASK_STACK_WORDS,
+                     &g_app.runtime_ctx,
+                     PS_APP_VIDEO_TASK_PRIORITY,
+                     NULL);
+    if (ok != pdPASS) {
+        xil_printf("[PS] failed to create video task\r\n");
+        return 1;
+    }
+
     ok = xTaskCreate(PsAppConsoleTask,
                      "cons",
                      PS_APP_CONSOLE_TASK_STACK_WORDS,

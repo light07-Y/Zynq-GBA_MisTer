@@ -28,6 +28,7 @@ void PsAppRuntime_ReadPsButtonRawLevels(PsAppRuntimeContext *ctx,
 u32 PsAppRuntime_ReadPsButtonMask(PsAppRuntimeContext *ctx);
 void PsAppRuntime_Service(PsAppRuntimeContext *ctx);
 void PsAppMonitorTask(void *arg);
+void PsAppVideoPresentTask(void *arg);
 
 #ifdef __cplusplus
 }

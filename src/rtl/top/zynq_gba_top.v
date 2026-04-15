@@ -304,8 +304,19 @@ module zynq_gba_top #(
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_first_meta_axi_meta, dbg_done_first_meta_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_last_addr_axi_meta, dbg_done_last_addr_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_done_last_meta_axi_meta, dbg_done_last_meta_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg [31:0] fbcap_frame_seq_axi_meta, fbcap_frame_seq_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        fbcap_frame_buf_idx_axi_meta, fbcap_frame_buf_idx_axi_sync;
+  reg [31:0]                          fbcap_frame_seq_axi_sync;
+  reg                                 fbcap_frame_buf_idx_axi_sync;
+  reg [31:0]                          fbcap_shadow_seq_core;
+  reg                                 fbcap_shadow_buf_core;
+  reg                                 fbcap_shadow_req_tgl_core;
+  reg                                 fbcap_shadow_ack_tgl_axi;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  fbcap_shadow_req_sync_axi;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  fbcap_shadow_ack_sync_core;
+  reg [31:0]                          fbcap_shadow_seq_axi_s1;
+  reg [31:0]                          fbcap_shadow_seq_axi_s2;
+  reg                                 fbcap_shadow_buf_axi_s1;
+  reg                                 fbcap_shadow_buf_axi_s2;
+  reg [1:0]                           fbcap_shadow_sample_cnt;
   (* ASYNC_REG = "TRUE" *) reg [31:0] save_status_axi_meta, save_status_axi_sync;
 
   wire [15:0] unused_core_vcount;
@@ -617,6 +628,25 @@ module zynq_gba_top #(
     end
   end
 
+  // Multi-bit FB capture status CDC: snapshot in core clock domain, transfer
+  // to AXI domain with toggle handshake.
+  always @(posedge clk_100) begin
+    if (!rst_n) begin
+      fbcap_shadow_seq_core <= 32'd0;
+      fbcap_shadow_buf_core <= 1'b0;
+      fbcap_shadow_req_tgl_core <= 1'b0;
+      fbcap_shadow_ack_sync_core <= 3'b000;
+    end else begin
+      fbcap_shadow_ack_sync_core <= {fbcap_shadow_ack_sync_core[1:0], fbcap_shadow_ack_tgl_axi};
+      if ((fbcap_frame_seq != fbcap_shadow_seq_core) &&
+          (fbcap_shadow_req_tgl_core == fbcap_shadow_ack_sync_core[2])) begin
+        fbcap_shadow_seq_core <= fbcap_frame_seq;
+        fbcap_shadow_buf_core <= fbcap_frame_buf_idx;
+        fbcap_shadow_req_tgl_core <= ~fbcap_shadow_req_tgl_core;
+      end
+    end
+  end
+
   always @(posedge s_axi_aclk) begin
     if (!s_axi_aresetn) begin
       cycles_missing_axi_meta      <= 14'd0;
@@ -687,10 +717,15 @@ module zynq_gba_top #(
       dbg_done_last_addr_axi_sync <= 32'd0;
       dbg_done_last_meta_axi_meta <= 32'd0;
       dbg_done_last_meta_axi_sync <= 32'd0;
-      fbcap_frame_seq_axi_meta <= 32'd0;
       fbcap_frame_seq_axi_sync <= 32'd0;
-      fbcap_frame_buf_idx_axi_meta <= 1'b0;
       fbcap_frame_buf_idx_axi_sync <= 1'b0;
+      fbcap_shadow_ack_tgl_axi <= 1'b0;
+      fbcap_shadow_req_sync_axi <= 3'b000;
+      fbcap_shadow_seq_axi_s1 <= 32'd0;
+      fbcap_shadow_seq_axi_s2 <= 32'd0;
+      fbcap_shadow_buf_axi_s1 <= 1'b0;
+      fbcap_shadow_buf_axi_s2 <= 1'b0;
+      fbcap_shadow_sample_cnt <= 2'd0;
       save_status_axi_meta <= 32'd0;
       save_status_axi_sync <= 32'd0;
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
@@ -764,10 +799,23 @@ module zynq_gba_top #(
       dbg_done_last_addr_axi_sync <= dbg_done_last_addr_axi_meta;
       dbg_done_last_meta_axi_meta <= dbg_done_last_meta_core;
       dbg_done_last_meta_axi_sync <= dbg_done_last_meta_axi_meta;
-      fbcap_frame_seq_axi_meta     <= fbcap_frame_seq;
-      fbcap_frame_seq_axi_sync     <= fbcap_frame_seq_axi_meta;
-      fbcap_frame_buf_idx_axi_meta <= fbcap_frame_buf_idx;
-      fbcap_frame_buf_idx_axi_sync <= fbcap_frame_buf_idx_axi_meta;
+      fbcap_shadow_req_sync_axi <= {fbcap_shadow_req_sync_axi[1:0], fbcap_shadow_req_tgl_core};
+      if (fbcap_shadow_req_sync_axi[2] ^ fbcap_shadow_req_sync_axi[1]) begin
+        // Need three destination cycles before commit:
+        // 1) sample s1, 2) propagate to s2, 3) commit old s2 (NBA order).
+        fbcap_shadow_sample_cnt <= 2'd3;
+      end else if (fbcap_shadow_sample_cnt != 2'd0) begin
+        fbcap_shadow_seq_axi_s1 <= fbcap_shadow_seq_core;
+        fbcap_shadow_seq_axi_s2 <= fbcap_shadow_seq_axi_s1;
+        fbcap_shadow_buf_axi_s1 <= fbcap_shadow_buf_core;
+        fbcap_shadow_buf_axi_s2 <= fbcap_shadow_buf_axi_s1;
+        fbcap_shadow_sample_cnt <= fbcap_shadow_sample_cnt - 2'd1;
+        if (fbcap_shadow_sample_cnt == 2'd1) begin
+          fbcap_frame_seq_axi_sync <= fbcap_shadow_seq_axi_s2;
+          fbcap_frame_buf_idx_axi_sync <= fbcap_shadow_buf_axi_s2;
+          fbcap_shadow_ack_tgl_axi <= ~fbcap_shadow_ack_tgl_axi;
+        end
+      end
       save_status_axi_meta         <= {8'd0, save_eeprom_count_core, save_flash_count_core, save_sram_count_core};
       save_status_axi_sync         <= save_status_axi_meta;
       fb_frame_pulse_toggle_axi_sync <= {fb_frame_pulse_toggle_axi_sync[1:0], fb_frame_pulse_toggle};

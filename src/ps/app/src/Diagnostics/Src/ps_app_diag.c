@@ -851,6 +851,7 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
     u32 parked;
     u32 vdma_status;
     u32 vdma_errs;
+    u32 blit_avg_us;
 
     if (ctx == NULL) {
         return;
@@ -869,6 +870,9 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
     frame_idx = (status1 & 0x3U);
     cycles_missing = (status1 >> 2) & 0x3FFFU;
     cycles_vsync_speed = (status1 >> 16) & 0xFFFFU;
+    blit_avg_us = (ctx->video->state->blit_count != 0U) ?
+                      (ctx->video->state->blit_total_us / ctx->video->state->blit_count) :
+                      0U;
 
     xil_printf("[STAT] frame=%u miss=%u vsync=%u rom=%u busy=%u irq=0x%x err=0x%08x park=%u vdma_sr=0x%08x vdma_irq=%u vdma_err=%u dma_err=0x%03x cap_seq=%u cap_buf=%u\r\n",
                (unsigned int)frame_idx,
@@ -885,6 +889,15 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
                (unsigned int)vdma_errs,
                (unsigned int)fbcap_seq,
                (unsigned int)(fbcap_status & 0x1U));
+    xil_printf("[STAT] blit count=%u last_us=%u max_us=%u avg_us=%u seq_gap_max=%u seq_glitch_drop=%u log_input=%u log_fbscan=%u\r\n",
+               (unsigned int)ctx->video->state->blit_count,
+               (unsigned int)ctx->video->state->blit_last_us,
+               (unsigned int)ctx->video->state->blit_max_us,
+               (unsigned int)blit_avg_us,
+               (unsigned int)ctx->video->state->blit_seq_gap_max,
+               (unsigned int)ctx->video->state->blit_seq_glitch_drop,
+               (unsigned int)(ctx->diag->log_input_delta_enable != 0U),
+               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U));
 
     if ((irq_sts & 0x3U) != 0U) {
         PsGbaRegs_ClearIrqStatus(ctx->regs, irq_sts & 0x3U);
@@ -909,6 +922,7 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
     u32 dbg_mem;
     u32 gpu_vcount;
     u32 gpu_disp_low;
+    u32 blit_avg_us;
 
     if (ctx == NULL) {
         return;
@@ -929,6 +943,9 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
     dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
     gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
+    blit_avg_us = (ctx->video->state->blit_count != 0U) ?
+                      (ctx->video->state->blit_total_us / ctx->video->state->blit_count) :
+                      0U;
 
     xil_printf("[DIAG] ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x irq_en=0x%x reset=%u\r\n",
                (unsigned int)ctrl,
@@ -970,6 +987,16 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
                (unsigned int)ctx->vdma->line_stride_bytes,
                (unsigned int)ctx->vdma->frame_size_bytes,
                (unsigned int)ctx->vdma->frame_addrs[0]);
+    xil_printf("[DIAG] blit count=%u last_us=%u max_us=%u avg_us=%u seq_gap_max=%u seq_glitch_drop=%u\r\n",
+               (unsigned int)ctx->video->state->blit_count,
+               (unsigned int)ctx->video->state->blit_last_us,
+               (unsigned int)ctx->video->state->blit_max_us,
+               (unsigned int)blit_avg_us,
+               (unsigned int)ctx->video->state->blit_seq_gap_max,
+               (unsigned int)ctx->video->state->blit_seq_glitch_drop);
+    xil_printf("[DIAG] log input=%u fbscan=%u\r\n",
+               (unsigned int)(ctx->diag->log_input_delta_enable != 0U),
+               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U));
 
     PsAppDiag_PrintVdmaSnapshot(ctx, "diag");
 }

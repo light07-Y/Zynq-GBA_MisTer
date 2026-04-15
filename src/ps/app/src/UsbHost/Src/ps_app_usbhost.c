@@ -107,6 +107,8 @@ static u32 g_ps_usbhost_recover_cooldown = 0U;
 static u8 g_ps_usbhost_recover_attempts = 0U;
 static u8 g_ps_usbhost_ulpi_recovering = 0U;
 static u32 g_ps_usbhost_no_report_ticks = 0U;
+static u32 g_ps_usbhost_startup_sideband_log_count = 0U;
+static u32 g_ps_usbhost_retry_sideband_log_count = 0U;
 
 static void PsAppUsbHost_ApplyPortKick(UINTPTR base_addr);
 static void PsAppUsbHost_PrintSlcrSummary(void);
@@ -567,7 +569,13 @@ static XStatus PsAppUsbHost_Send8BitDoStartupSequence(struct usbh_xbox *xbox_cla
         return status;
     }
 
-    xil_printf("[USBH] 8BitDo startup sideband sent\r\n");
+    if ((g_ps_usbhost_startup_sideband_log_count < 3U) ||
+        ((g_ps_usbhost_startup_sideband_log_count % 64U) == 0U)) {
+        xil_printf("[USBH] 8BitDo startup sideband sent\r\n");
+    }
+    if (g_ps_usbhost_startup_sideband_log_count < 0xFFFFFFFFU) {
+        g_ps_usbhost_startup_sideband_log_count++;
+    }
     return XST_SUCCESS;
 }
 
@@ -882,6 +890,8 @@ XStatus PsAppUsbHost_Init(PsAppUsbHostContext *ctx)
     state->out_report_count = 0U;
     state->out_report_error_count = 0U;
     g_ps_usbhost_no_report_ticks = 0U;
+    g_ps_usbhost_startup_sideband_log_count = 0U;
+    g_ps_usbhost_retry_sideband_log_count = 0U;
 
     PsAppUsbHost_ForceSlcrUsb0Config();
     PsAppUsbHost_PulsePhyReset();
@@ -970,7 +980,13 @@ void PsAppUsbHost_Service(PsAppUsbHostContext *ctx)
          * 3 字节 startup sideband 做轻量恢复，先不要急着整口复位。 */
         if (g_ps_usbhost_no_report_ticks >= PS_APP_USBHOST_8BITDO_REPORT_TIMEOUT_TICKS) {
             if (PsAppUsbHost_Send8BitDoStartupSequence(g_ps_active_xbox) == XST_SUCCESS) {
-                xil_printf("[USBH] 8BitDo sideband retry after no input\r\n");
+                if ((g_ps_usbhost_retry_sideband_log_count < 3U) ||
+                    ((g_ps_usbhost_retry_sideband_log_count % 32U) == 0U)) {
+                    xil_printf("[USBH] 8BitDo sideband retry after no input\r\n");
+                }
+                if (g_ps_usbhost_retry_sideband_log_count < 0xFFFFFFFFU) {
+                    g_ps_usbhost_retry_sideband_log_count++;
+                }
             }
             g_ps_usbhost_no_report_ticks = 0U;
         }
