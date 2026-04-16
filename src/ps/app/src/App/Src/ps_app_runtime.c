@@ -32,11 +32,13 @@
 #define PS_APP_MIO50_CFG_ADDR          0xF80007C8U
 #define PS_APP_MIO51_CFG_ADDR          0xF80007CCU
 #define PS_APP_MIO_GPIO_INPUT_CFG      0x00000200U
+/* UI 音量参数（百分比域）：0..100，按键步进 5，默认开机 45。 */
 #define PS_APP_AUDIO_VOLUME_MAX        100U
 #define PS_APP_AUDIO_VOLUME_STEP       5U
-#define PS_APP_AUDIO_DEFAULT_VOLUME    95U
-#define PS_APP_AUDIO_CODEC_MIN_VOLUME  0x5FU
-#define PS_APP_AUDIO_CODEC_MAX_VOLUME  0x7FU
+#define PS_APP_AUDIO_DEFAULT_VOLUME    45U
+/* SSM2603 音量寄存器边界：0x30=-73 dB，0x79=0 dB(unity gain)。 */
+#define PS_APP_AUDIO_CODEC_MIN_DB_VOL  0x30U
+#define PS_APP_AUDIO_CODEC_UNITY_VOL   0x79U
 
 static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
     size_t src_len;
@@ -517,6 +519,7 @@ static void PsAppRuntime_PrintPsButtons(u32 ps_btn_mask) {
 }
 
 static u8 PsAppRuntime_ClampAudioVolumePercent(u32 volume_percent) {
+    /* 所有外部入口统一钳制到 0..100，避免异常值进入 codec 映射。 */
     if (volume_percent > PS_APP_AUDIO_VOLUME_MAX) {
         return (u8)PS_APP_AUDIO_VOLUME_MAX;
     }
@@ -527,18 +530,21 @@ static u8 PsAppRuntime_EncodeCodecVolume(u8 volume_percent) {
     u32 codec_range;
 
     if (volume_percent == 0U) {
-        return PS_APP_AUDIO_CODEC_MIN_VOLUME;
+        return PS_APP_AUDIO_CODEC_MIN_DB_VOL;
     }
 
     /*
-     * 这个板子的 codec 实际可用听感主要集中在较高的耳机音量寄存器区间。
-     * 如果把 0-100 线性映射到整个 0x00-0x7F，像 volume=45 这样的中档位
-     * 会过早落到几乎听不见的衰减区。因此这里改为：
-     * 1) volume=0 仍由上层静音逻辑处理；
-     * 2) volume=1..100 只映射到更实用的可听区间 [0x5F, 0x7F]。
+     * SSM2603 (Rev.D) R2/R3 音量控制定义：
+     * - 0x30 = -73 dB
+     * - 0x79 = 0 dB (默认)
+     * - 0x7F = +6 dB
+     *
+     * 行业常见做法是把 UI 的 100% 定义为 0 dB（unity gain），
+     * 只在“增益/Boost”场景才进入 >0 dB 区间，避免默认档位过驱和失真风险。
+     * 因此这里将 1..100 映射到 [-73 dB, 0 dB] => [0x30, 0x79]。
      */
-    codec_range = (u32)PS_APP_AUDIO_CODEC_MAX_VOLUME - (u32)PS_APP_AUDIO_CODEC_MIN_VOLUME;
-    return (u8)((u32)PS_APP_AUDIO_CODEC_MIN_VOLUME +
+    codec_range = (u32)PS_APP_AUDIO_CODEC_UNITY_VOL - (u32)PS_APP_AUDIO_CODEC_MIN_DB_VOL;
+    return (u8)((u32)PS_APP_AUDIO_CODEC_MIN_DB_VOL +
                 (((u32)volume_percent * codec_range) + (PS_APP_AUDIO_VOLUME_MAX / 2U)) /
                     PS_APP_AUDIO_VOLUME_MAX);
 }
@@ -654,10 +660,12 @@ XStatus PsAppRuntime_ApplyAudioOutputState(PsAppRuntimeContext *ctx) {
     }
 
     ctx->audio->volume = PsAppRuntime_ClampAudioVolumePercent(ctx->audio->volume);
+    /* codec 尚未就绪时仅保留状态，不报错，后续 ProgramAudio 会重新下发。 */
     if ((ctx->codec == NULL) || (ctx->codec->is_ready == 0U)) {
         return XST_SUCCESS;
     }
 
+    /* 先下发音量，再根据 mute/volume=0 统一决定静音位。 */
     codec_volume = PsAppRuntime_EncodeCodecVolume(ctx->audio->volume);
     status = PsAudioCodec_SetHeadphoneVolume(ctx->codec, codec_volume);
     if (status != XST_SUCCESS) {
@@ -742,6 +750,7 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->audio->sample_rate_hz = 48000U;
     ctx->audio->bits_per_sample = 16U;
     ctx->audio->mute = 0U;
+    /* 默认音量：开机即为用户可接受的中档位。 */
     ctx->audio->volume = (u8)PS_APP_AUDIO_DEFAULT_VOLUME;
 
     ctx->video->display_frame_idx = 0xFFU;
