@@ -1,6 +1,7 @@
 #ifndef PS_GBA_REGS_H
 #define PS_GBA_REGS_H
 
+#include "xstatus.h"
 #include "xil_io.h"
 #include "xil_types.h"
 
@@ -57,7 +58,11 @@ enum {
     GBA_REG_DBG_DONE_LAST_META     = 0x0A4,
     GBA_REG_FB_CAP_STATUS          = 0x0A8,
     GBA_REG_FB_CAP_SEQ             = 0x0AC,
-    GBA_REG_SAVE_STATUS            = 0x0B0
+    GBA_REG_SAVE_STATUS            = 0x0B0,
+    GBA_REG_BIOS_WR_ADDR           = 0x0B4,
+    GBA_REG_BIOS_WR_DATA           = 0x0B8,
+    GBA_REG_BIOS_WR_REQ            = 0x0BC,
+    GBA_REG_BIOS_WR_ACK            = 0x0C0
 };
 
 enum {
@@ -69,7 +74,8 @@ enum {
     GBA_CTRL_ROM_LOADING     = (1U << 8),
     GBA_CTRL_FLASH_1M        = (1U << 9),
     GBA_CTRL_SPECIAL_GPIO    = (1U << 10),
-    GBA_CTRL_TILT            = (1U << 11)
+    GBA_CTRL_TILT            = (1U << 11),
+    GBA_CTRL_SRAM_32K_MIRROR_TEST = (1U << 13)
 };
 
 void PsGbaRegs_Init(PsGbaRegs *ctx, UINTPTR base_addr);
@@ -85,6 +91,10 @@ void PsGbaRegs_ClearIrqStatus(PsGbaRegs *ctx, u32 irq_w1c_bits);
 void PsGbaRegs_ClearErrorLatch(PsGbaRegs *ctx);
 void PsGbaRegs_SetSwReset(PsGbaRegs *ctx, u32 asserted);
 void PsGbaRegs_SetDisplayFrameIdx(PsGbaRegs *ctx, u32 frame_idx);
+u32 PsGbaRegs_ReadBiosAckSeq(PsGbaRegs *ctx);
+void PsGbaRegs_StageBiosWord(PsGbaRegs *ctx, u32 word_addr, u32 word_data);
+void PsGbaRegs_RequestBiosWrite(PsGbaRegs *ctx);
+XStatus PsGbaRegs_WriteBiosWord(PsGbaRegs *ctx, u32 word_addr, u32 word_data, u32 timeout_loops);
 
 u32 PsGbaRegs_Read(PsGbaRegs *ctx, u32 reg_offset);
 

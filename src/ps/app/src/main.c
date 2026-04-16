@@ -55,6 +55,17 @@ int main(void) {
         return 1;
     }
 
+    ok = xTaskCreate(PsAppSaveTask,
+                     "save",
+                     PS_APP_SAVE_TASK_STACK_WORDS,
+                     &g_app.save_ctx,
+                     PS_APP_SAVE_TASK_PRIORITY,
+                     NULL);
+    if (ok != pdPASS) {
+        xil_printf("[PS] failed to create save task\r\n");
+        return 1;
+    }
+
     ok = xTaskCreate(PsAppVideoPresentTask,
                      "video",
                      PS_APP_VIDEO_TASK_STACK_WORDS,
@@ -81,5 +92,32 @@ int main(void) {
 
     for (;;) {
         usleep(1000000U);
+    }
+}
+
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+    (void)xTask;
+    xil_printf("\r\n[RTOS][FATAL] stack overflow task=%s\r\n",
+               (pcTaskName != NULL) ? pcTaskName : "(null)");
+    taskDISABLE_INTERRUPTS();
+    for (;;) {
+    }
+}
+
+void vApplicationMallocFailedHook(void) {
+    xil_printf("\r\n[RTOS][FATAL] malloc failed free=%u min=%u\r\n",
+               (unsigned int)xPortGetFreeHeapSize(),
+               (unsigned int)xPortGetMinimumEverFreeHeapSize());
+    taskDISABLE_INTERRUPTS();
+    for (;;) {
+    }
+}
+
+void vApplicationAssert(const char *pcFile, uint32_t ulLine) {
+    xil_printf("\r\n[RTOS][FATAL] assert %s:%lu\r\n",
+               (pcFile != NULL) ? pcFile : "(null)",
+               (unsigned long)ulLine);
+    taskDISABLE_INTERRUPTS();
+    for (;;) {
     }
 }

@@ -60,6 +60,18 @@ static int PsAppConsole_KeyBitFromName(const char *name) {
     return -1;
 }
 
+static const char *PsAppConsole_BiosModeName(u8 bios_mode) {
+    switch ((PsAppBiosMode)bios_mode) {
+        case PS_APP_BIOS_MODE_EXTERNAL:
+            return "external";
+        case PS_APP_BIOS_MODE_FALLBACK:
+            return "fallback";
+        case PS_APP_BIOS_MODE_INTERNAL:
+        default:
+            return "internal";
+    }
+}
+
 static u32 PsAppConsole_TicksToMs(u64 ticks) {
 #if defined(COUNTS_PER_SECOND) && (COUNTS_PER_SECOND != 0)
     u64 scaled = (ticks * 1000ULL) + ((u64)COUNTS_PER_SECOND / 2ULL);
@@ -300,6 +312,7 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  turbo on|off\r\n");
     xil_printf("  lock on|off\r\n");
     xil_printf("  remap on|off\r\n");
+    xil_printf("  unsafe on|off\r\n");
     xil_printf("  key <name> on|off   (a/b/select/start/right/left/up/down/r/l)\r\n");
     xil_printf("  keymask <hex>\r\n");
     xil_printf("  btn status           (PS-side BTN4/BTN5 on MIO50/51)\r\n");
@@ -743,7 +756,8 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
     }
 
     if ((strcmp(cmd, "core") == 0) || (strcmp(cmd, "turbo") == 0) ||
-        (strcmp(cmd, "lock") == 0) || (strcmp(cmd, "remap") == 0)) {
+        (strcmp(cmd, "lock") == 0) || (strcmp(cmd, "remap") == 0) ||
+        (strcmp(cmd, "unsafe") == 0)) {
         u32 bit;
         a1 = strtok(NULL, " \t");
         if (PsAppConsole_ParseOnOff(a1, &v) != 0) {
@@ -754,7 +768,8 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         if (strcmp(cmd, "core") == 0) bit = 0U;
         else if (strcmp(cmd, "lock") == 0) bit = 1U;
         else if (strcmp(cmd, "turbo") == 0) bit = 2U;
-        else bit = 5U;
+        else if (strcmp(cmd, "remap") == 0) bit = 5U;
+        else bit = 13U;
 
         if (v != 0U) app->config->ctrl |= (1UL << bit);
         else app->config->ctrl &= ~(1UL << bit);
@@ -937,6 +952,11 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
                        (unsigned int)app->rom->size_bytes,
                        (unsigned int)app->rom->size_aligned,
                        (unsigned int)app->config->max_pak_addr);
+            xil_printf("[CMD] bios mode=%s ext=%u load_ok=%u bytes=%u\r\n",
+                       PsAppConsole_BiosModeName(app->rom->bios_mode),
+                       (unsigned int)app->rom->bios_external_present,
+                       (unsigned int)app->rom->bios_load_ok,
+                       (unsigned int)app->rom->bios_bytes_loaded);
             xil_printf("[CMD] rom path=%s\r\n",
                        app->rom->path[0] != '\0' ? app->rom->path : "(none)");
             return;
@@ -1017,8 +1037,10 @@ void PsAppConsoleTask(void *arg) {
     PsAppConsoleContext *ctx = (PsAppConsoleContext *)arg;
     char line[192];
     u32 len;
+    u32 idle_cycles;
 
     len = 0U;
+    idle_cycles = 0U;
     memset(line, 0, sizeof(line));
 
     xil_printf("[PS] Console ready, type 'help'\r\n> ");
@@ -1029,6 +1051,7 @@ void PsAppConsoleTask(void *arg) {
 
         n = XUartPs_Recv(ctx->uart, &ch, 1U);
         if (n == 1U) {
+            idle_cycles = 0U;
             if ((ch == '\r') || (ch == '\n')) {
                 xil_printf("\r\n");
                 line[len] = '\0';
@@ -1049,6 +1072,15 @@ void PsAppConsoleTask(void *arg) {
                 }
             }
         } else {
+            idle_cycles++;
+            if (idle_cycles >= 100U) {
+                /* Defensive recovery: if RX/TX got disabled by unexpected side effects,
+                 * periodically re-enable UART and reset RX timeout path. */
+                XUartPs_EnableUart(ctx->uart);
+                XUartPs_SetOptions(ctx->uart,
+                                   (u16)(XUARTPS_OPTION_RESET_RX | XUARTPS_OPTION_RESET_TMOUT));
+                idle_cycles = 0U;
+            }
             vTaskDelay(pdMS_TO_TICKS(10));
         }
     }

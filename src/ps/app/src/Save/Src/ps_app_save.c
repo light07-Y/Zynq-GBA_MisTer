@@ -6,6 +6,70 @@
 #include "xil_cache.h"
 #include "xil_printf.h"
 
+#define PS_APP_SAVE_ENABLE_POSTWRITE_CHECKSUM 0U
+
+/* 关键防坑：
+ * 保存数据先快照到 PS DDR 常驻缓冲，再交给 FatFs 写盘，避免写盘过程中直接反复访问
+ * 0x10000000 保存窗口带来的时序/总线耦合风险。
+ * 64B 对齐用于配合 DCache 维护，降低缓存行边界副作用。 */
+static u8 s_ps_app_save_snapshot[PS_APP_GBA_SAVE_REGION_MAX_BYTES] __attribute__((aligned(64)));
+
+static int PsAppSave_IsPtrInDdr(const void *ptr) {
+    UINTPTR addr;
+    addr = (UINTPTR)ptr;
+    return (addr >= 0x00100000U) && (addr < 0x40000000U);
+}
+
+static XStatus PsAppSave_SnapshotWindow(PsAppSaveContext *ctx,
+                                        UINTPTR base_addr,
+                                        u32 bytes,
+                                        UINTPTR *snapshot_addr_out) {
+    xil_printf("[SAVE] snapshot enter base=0x%08x bytes=%u\r\n",
+               (unsigned int)base_addr,
+               (unsigned int)bytes);
+    xil_printf("[SAVE] snapshot ctx=0x%08x regs_ptr=0x%08x\r\n",
+               (unsigned int)(UINTPTR)ctx,
+               (unsigned int)(UINTPTR)((ctx != NULL) ? ctx->regs : NULL));
+    if ((ctx == NULL) || (ctx->regs == NULL) || (snapshot_addr_out == NULL)) {
+        xil_printf("[SAVE] snapshot invalid ctx\r\n");
+        return XST_FAILURE;
+    }
+    if ((!PsAppSave_IsPtrInDdr(ctx)) ||
+        (!PsAppSave_IsPtrInDdr(ctx->state)) ||
+        (!PsAppSave_IsPtrInDdr(ctx->rom)) ||
+        (!PsAppSave_IsPtrInDdr(ctx->regs))) {
+        /* 关键防坑：
+         * 一旦上下文指针跑飞，继续执行通常会直接硬挂。这里先 fail-fast 打印，便于现场定位。 */
+        xil_printf("[SAVE] snapshot ptr invalid ctx=0x%08x state=0x%08x rom=0x%08x regs=0x%08x\r\n",
+                   (unsigned int)(UINTPTR)ctx,
+                   (unsigned int)(UINTPTR)ctx->state,
+                   (unsigned int)(UINTPTR)ctx->rom,
+                   (unsigned int)(UINTPTR)ctx->regs);
+        return XST_FAILURE;
+    }
+    if ((base_addr == 0U) || (bytes == 0U) || (bytes > sizeof(s_ps_app_save_snapshot))) {
+        xil_printf("[SAVE] snapshot invalid range\r\n");
+        return XST_INVALID_PARAM;
+    }
+
+    /* 关键防坑：
+     * 保存热路径不再读/改 SW_RESET。历史上该路径出现过读寄存器后系统停滞，
+     * 因此保持“只做窗口快照，不碰控制寄存器”更稳妥。 */
+    xil_printf("[SAVE] snapshot step skip reset toggle\r\n");
+
+    xil_printf("[SAVE] snapshot step dcache inv\r\n");
+    Xil_DCacheInvalidateRange((INTPTR)base_addr, bytes);
+    xil_printf("[SAVE] snapshot step memcpy begin\r\n");
+    memcpy(s_ps_app_save_snapshot, (const void *)base_addr, bytes);
+    xil_printf("[SAVE] snapshot step memcpy done\r\n");
+    Xil_DCacheFlushRange((INTPTR)s_ps_app_save_snapshot, bytes);
+    xil_printf("[SAVE] snapshot step dcache flush done\r\n");
+
+    *snapshot_addr_out = (UINTPTR)s_ps_app_save_snapshot;
+    xil_printf("[SAVE] snapshot exit ok\r\n");
+    return XST_SUCCESS;
+}
+
 static UINTPTR PsAppSave_BaseAddr(PsAppSaveKind kind) {
     switch (kind) {
         case PS_APP_SAVE_KIND_SRAM:
@@ -199,7 +263,7 @@ static void PsAppSave_ClearWindow(PsAppSaveKind kind) {
         return;
     }
 
-    memset((void *)base_addr, 0, bytes);
+    memset((void *)base_addr, 0xFF, bytes);
     Xil_DCacheFlushRange((INTPTR)base_addr, bytes);
 }
 
@@ -271,6 +335,7 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
     PsFatFsStorageWriteResult write_result;
     char path[PS_APP_ROM_PATH_MAX_CHARS];
     UINTPTR base_addr;
+    UINTPTR snapshot_addr;
     u32 bytes;
 
     if ((ctx == NULL) || (ctx->state == NULL) || (ctx->rom == NULL)) {
@@ -285,14 +350,32 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
         return XST_INVALID_PARAM;
     }
 
-    if (PsFatFsStorage_EnsureDirectory(PS_APP_SAVE_SD_DIR) != XST_SUCCESS) {
+    base_addr = PsAppSave_BaseAddr(kind);
+    bytes = PsAppSave_ByteCount(kind);
+    xil_printf("[SAVE] flush begin %s bytes=%u\r\n", path, (unsigned int)bytes);
+    if (PsAppSave_SnapshotWindow(ctx, base_addr, bytes, &snapshot_addr) != XST_SUCCESS) {
+        xil_printf("[SAVE] snapshot failed base=0x%08x bytes=%u\r\n",
+                   (unsigned int)base_addr,
+                   (unsigned int)bytes);
+        return XST_FAILURE;
+    }
+    xil_printf("[SAVE] snapshot done bytes=%u\r\n", (unsigned int)bytes);
+    memset(&write_result, 0, sizeof(write_result));
+    if (PsFatFsStorage_WriteMemoryToFile(path, snapshot_addr, bytes, &write_result) != XST_SUCCESS) {
+        xil_printf("[SAVE] flush failed %s fs=%s\r\n",
+                   path,
+                   PsFatFsStorage_StrError(write_result.fs_result));
         return XST_FAILURE;
     }
 
-    base_addr = PsAppSave_BaseAddr(kind);
-    bytes = PsAppSave_ByteCount(kind);
-    memset(&write_result, 0, sizeof(write_result));
-    if (PsFatFsStorage_WriteMemoryToFile(path, base_addr, bytes, &write_result) != XST_SUCCESS) {
+    if ((!PsAppSave_IsPtrInDdr(ctx)) ||
+        (!PsAppSave_IsPtrInDdr(ctx->state)) ||
+        (!PsAppSave_IsPtrInDdr(ctx->rom))) {
+        /* 写盘返回后再次校验，防止后续 state 写回把系统带崩。 */
+        xil_printf("[SAVE] postwrite ptr invalid ctx=0x%08x state=0x%08x rom=0x%08x\r\n",
+                   (unsigned int)(UINTPTR)ctx,
+                   (unsigned int)(UINTPTR)ctx->state,
+                   (unsigned int)(UINTPTR)ctx->rom);
         return XST_FAILURE;
     }
 
@@ -301,9 +384,12 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
     ctx->state->quiet_ticks = 0U;
     ctx->state->active_kind = (u8)kind;
     ctx->state->last_bytes = write_result.bytes_written;
+#if PS_APP_SAVE_ENABLE_POSTWRITE_CHECKSUM
     ctx->state->last_checksum = PsAppSave_Checksum(base_addr, bytes);
+#else
+    ctx->state->last_checksum = 0U;
+#endif
     PsAppSave_CopyText(ctx->state->path, sizeof(ctx->state->path), path);
-
     xil_printf("[SAVE] flush %s bytes=%u checksum=0x%08x\r\n",
                path,
                (unsigned int)ctx->state->last_bytes,

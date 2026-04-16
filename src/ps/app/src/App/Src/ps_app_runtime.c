@@ -15,7 +15,9 @@
 #include "Input/Inc/ps_app_input.h"
 #include "Save/Inc/ps_app_save.h"
 #include "Video/Inc/ps_app_video.h"
+#include "Hdmi/Inc/ps_app_hdmi_link.h"
 #include "Rom/Inc/ps_rom_loader.h"
+#include "Storage/Inc/ps_fatfs_storage.h"
 #include "UsbHost/Inc/ps_app_usbhost.h"
 
 /*
@@ -55,6 +57,168 @@ static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
 
     memcpy(dst, src, src_len);
     dst[src_len] = '\0';
+}
+
+static const char *PsAppRuntime_BiosModeName(u8 bios_mode) {
+    switch ((PsAppBiosMode)bios_mode) {
+        case PS_APP_BIOS_MODE_EXTERNAL:
+            return "external";
+        case PS_APP_BIOS_MODE_FALLBACK:
+            return "fallback";
+        case PS_APP_BIOS_MODE_INTERNAL:
+        default:
+            return "internal";
+    }
+}
+
+static u32 PsAppRuntime_ReadLe32(const u8 *data) {
+    if (data == NULL) {
+        return 0U;
+    }
+
+    return ((u32)data[0]) |
+           ((u32)data[1] << 8) |
+           ((u32)data[2] << 16) |
+           ((u32)data[3] << 24);
+}
+
+static int PsAppRuntime_LoadExternalBios(PsAppRuntimeContext *ctx,
+                                         u8 *external_present_out,
+                                         u32 *bytes_loaded_out,
+                                         const char **reason_out) {
+    static u8 s_bios_image[PS_APP_GBA_BIOS_BYTES];
+    PsFatFsStorageReadResult read_result;
+    XStatus status;
+    u32 word_idx;
+    u8 external_present;
+
+    if (external_present_out != NULL) {
+        *external_present_out = 0U;
+    }
+    if (bytes_loaded_out != NULL) {
+        *bytes_loaded_out = 0U;
+    }
+    if (reason_out != NULL) {
+        *reason_out = "none";
+    }
+
+    if ((ctx == NULL) || (ctx->regs == NULL)) {
+        if (reason_out != NULL) {
+            *reason_out = "invalid_ctx";
+        }
+        return -1;
+    }
+
+    memset(&read_result, 0, sizeof(read_result));
+    status = PsFatFsStorage_ReadFileToMemory(PS_APP_BIOS_SD_PATH,
+                                             (UINTPTR)s_bios_image,
+                                             PS_APP_GBA_BIOS_BYTES,
+                                             &read_result);
+    if (status != XST_SUCCESS) {
+        const char *read_reason;
+
+        external_present = (u8)(((read_result.fs_result != FR_NO_FILE) &&
+                                 (read_result.fs_result != FR_NO_PATH)) ? 1U : 0U);
+        read_reason = PsFatFsStorage_StrError(read_result.fs_result);
+        if ((external_present != 0U) && (read_result.fs_result == FR_OK)) {
+            read_reason = "size_invalid";
+        }
+        if (external_present_out != NULL) {
+            *external_present_out = external_present;
+        }
+        if (reason_out != NULL) {
+            *reason_out = read_reason;
+        }
+        return 0;
+    }
+
+    if (external_present_out != NULL) {
+        *external_present_out = 1U;
+    }
+    if (bytes_loaded_out != NULL) {
+        *bytes_loaded_out = read_result.bytes_loaded;
+    }
+    if (read_result.bytes_loaded != PS_APP_GBA_BIOS_BYTES) {
+        if (reason_out != NULL) {
+            *reason_out = "size_invalid";
+        }
+        return 0;
+    }
+
+    for (word_idx = 0U; word_idx < PS_APP_GBA_BIOS_WORDS; ++word_idx) {
+        const u8 *word_ptr;
+        u32 word_data;
+
+        word_ptr = &s_bios_image[word_idx * 4U];
+        word_data = PsAppRuntime_ReadLe32(word_ptr);
+        status = PsGbaRegs_WriteBiosWord(ctx->regs,
+                                         word_idx,
+                                         word_data,
+                                         PS_APP_GBA_BIOS_WRITE_TIMEOUT_LOOPS);
+        if (status != XST_SUCCESS) {
+            if (reason_out != NULL) {
+                *reason_out = "pl_ack_timeout";
+            }
+            return -1;
+        }
+    }
+
+    if (reason_out != NULL) {
+        *reason_out = "ok";
+    }
+    return 1;
+}
+
+static XStatus PsAppRuntime_PrepareBiosForRom(PsAppRuntimeContext *ctx) {
+    int load_result;
+    u8 external_present;
+    u32 bytes_loaded;
+    const char *reason;
+
+    if ((ctx == NULL) || (ctx->rom == NULL)) {
+        return XST_FAILURE;
+    }
+
+    ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_INTERNAL;
+    ctx->rom->bios_load_ok = 0U;
+    ctx->rom->bios_external_present = 0U;
+    ctx->rom->bios_bytes_loaded = 0U;
+
+    external_present = 0U;
+    bytes_loaded = 0U;
+    reason = "none";
+    load_result = PsAppRuntime_LoadExternalBios(ctx,
+                                                &external_present,
+                                                &bytes_loaded,
+                                                &reason);
+
+    ctx->rom->bios_external_present = external_present;
+    ctx->rom->bios_bytes_loaded = bytes_loaded;
+
+    if (load_result > 0) {
+        ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_EXTERNAL;
+        ctx->rom->bios_load_ok = 1U;
+        xil_printf("[BIOS] mode=%s path=%s bytes=%u\r\n",
+                   PsAppRuntime_BiosModeName(ctx->rom->bios_mode),
+                   PS_APP_BIOS_SD_PATH,
+                   (unsigned int)ctx->rom->bios_bytes_loaded);
+        return XST_SUCCESS;
+    }
+
+    ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_FALLBACK;
+    ctx->rom->bios_load_ok = 0U;
+    if (load_result == 0) {
+        xil_printf("[BIOS] mode=%s path=%s reason=%s (use internal BIOS)\r\n",
+                   PsAppRuntime_BiosModeName(ctx->rom->bios_mode),
+                   PS_APP_BIOS_SD_PATH,
+                   (reason != NULL) ? reason : "unknown");
+        return XST_SUCCESS;
+    }
+
+    xil_printf("[BIOS] mode=%s fatal reason=%s\r\n",
+               PsAppRuntime_BiosModeName(ctx->rom->bios_mode),
+               (reason != NULL) ? reason : "unknown");
+    return XST_FAILURE;
 }
 
 static u8 PsAppRuntime_Code3Eq(const char *code, const char *prefix3) {
@@ -603,6 +767,10 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->rom->quirk_gpio = 0U;
     ctx->rom->quirk_tilt = 0U;
     ctx->rom->quirk_solar = 0U;
+    ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_INTERNAL;
+    ctx->rom->bios_load_ok = 0U;
+    ctx->rom->bios_external_present = 0U;
+    ctx->rom->bios_bytes_loaded = 0U;
     ctx->rom->size_bytes = 0U;
     ctx->rom->size_aligned = 0U;
     ctx->rom->flash1m_offset = 0xFFFFFFFFU;
@@ -697,6 +865,29 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->input->parse_error_count = 0U;
     ctx->input->unsupported_report_count = 0U;
     ctx->input->last_report_len = 0U;
+
+    ctx->hdmi->initialized = 0U;
+    ctx->hdmi->irq_connected = 0U;
+    ctx->hdmi->hpd_level = 0U;
+    ctx->hdmi->present_enable = 0U;
+    ctx->hdmi->hpd_pending = 0U;
+    ctx->hdmi->edid_valid = 0U;
+    ctx->hdmi->edid_refresh_pending = 0U;
+    ctx->hdmi->blank_frame_pending = 0U;
+    ctx->hdmi->preferred_is_640x480p60 = 0U;
+    ctx->hdmi->preferred_timing_valid = 0U;
+    ctx->hdmi->preferred_vic = 0U;
+    ctx->hdmi->vendor_id = 0U;
+    ctx->hdmi->product_code = 0U;
+    ctx->hdmi->hpd_rise_count = 0U;
+    ctx->hdmi->hpd_fall_count = 0U;
+    ctx->hdmi->edid_read_ok_count = 0U;
+    ctx->hdmi->edid_read_fail_count = 0U;
+    ctx->hdmi->last_error = 0U;
+    ctx->hdmi->last_service_tick = 0U;
+    ctx->hdmi->last_hpd_change_tick = 0U;
+    memset(ctx->hdmi->edid_block0, 0, sizeof(ctx->hdmi->edid_block0));
+
     ctx->ps_gpio_ready = 0U;
     ctx->ps_btn_last_mask = 0U;
 }
@@ -791,6 +982,10 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     ctx->rom->quirk_gpio = 0U;
     ctx->rom->quirk_tilt = 0U;
     ctx->rom->quirk_solar = 0U;
+    ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_INTERNAL;
+    ctx->rom->bios_load_ok = 0U;
+    ctx->rom->bios_external_present = 0U;
+    ctx->rom->bios_bytes_loaded = 0U;
     ctx->rom->flash1m_offset = 0xFFFFFFFFU;
     ctx->rom->flash_offset = 0xFFFFFFFFU;
     ctx->rom->sram_offset = 0xFFFFFFFFU;
@@ -842,6 +1037,17 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
         return status;
     }
 
+    status = PsAppRuntime_PrepareBiosForRom(ctx);
+    if (status != XST_SUCCESS) {
+        ctx->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
+        ctx->config->max_pak_addr = 0U;
+        PsAppRuntime_ApplyShadowConfig(ctx);
+        PsGbaRegs_SetSwReset(ctx->regs, 1U);
+        ctx->rom->is_loading = 0U;
+        xil_printf("[ROM] aborted: BIOS prepare failed\r\n");
+        return status;
+    }
+
     if (PsAppSave_PrepareForRom(ctx->save_ctx, ctx->rom->path) != XST_SUCCESS) {
         xil_printf("[SAVE] preload skipped\r\n");
     }
@@ -875,6 +1081,11 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
                (unsigned int)ctx->rom->size_aligned,
                (unsigned int)ctx->config->max_pak_addr,
                (unsigned int)PS_APP_GBA_ROM_REGION_BASE_ADDR);
+    xil_printf("[ROM] bios mode=%s ext=%u load_ok=%u bytes=%u\r\n",
+               PsAppRuntime_BiosModeName(ctx->rom->bios_mode),
+               (unsigned int)ctx->rom->bios_external_present,
+               (unsigned int)ctx->rom->bios_load_ok,
+               (unsigned int)ctx->rom->bios_bytes_loaded);
     PsAppDiag_PrintRomProbe(ctx->diag_ctx);
 
     return XST_SUCCESS;
@@ -968,21 +1179,28 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
         PsAppRuntime_PrintPsButtons(ctx->ps_btn_last_mask);
     }
 
-    xil_printf("[INIT] 8.1: input map BTN3/2/1/0=left/up/down/right SW3/2/1/0=select(start-mod)/start/b/a SW3+BTN3=L SW3+BTN0=R\r\n");
-    xil_printf("[INIT] 8.2: xinput parser init\r\n");
+    xil_printf("[INIT] 8.1: hdmi hpd/ddc init (HPD=GPIO54, DDC=IIC1)\r\n");
+    status = PsAppHdmiLink_Init(ctx->hdmi_ctx);
+    if (status != XST_SUCCESS) {
+        xil_printf("[INIT] 8.1 warning: hdmi link init failed: %d (keep fixed 640x480@60)\r\n",
+                   status);
+    }
+
+    xil_printf("[INIT] 8.2: input map BTN3/2/1/0=left/up/down/right SW3/2/1/0=select(start-mod)/start/b/a SW3+BTN3=L SW3+BTN0=R\r\n");
+    xil_printf("[INIT] 8.3: xinput parser init\r\n");
     PsAppInput_Init(ctx->input_ctx);
 #if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
-    xil_printf("[INIT] 8.2: gba map A<=B(right) B<=A(bottom) deadzone=%d trig=%u\r\n",
+    xil_printf("[INIT] 8.3: gba map A<=B(right) B<=A(bottom) deadzone=%d trig=%u\r\n",
                (int)PS_APP_INPUT_LSTICK_DEADZONE,
                (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
 #else
-    xil_printf("[INIT] 8.2: gba map A<=A(bottom) B<=B(right) deadzone=%d trig=%u\r\n",
+    xil_printf("[INIT] 8.3: gba map A<=A(bottom) B<=B(right) deadzone=%d trig=%u\r\n",
                (int)PS_APP_INPUT_LSTICK_DEADZONE,
                (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
 #endif
-    xil_printf("[INIT] 8.3: usb host init\r\n");
+    xil_printf("[INIT] 8.4: usb host init\r\n");
     if (PsAppUsbHost_Init(ctx->usb_host_ctx) != XST_SUCCESS) {
-        xil_printf("[INIT] 8.3 warning: usb host unavailable\r\n");
+        xil_printf("[INIT] 8.4 warning: usb host unavailable\r\n");
     } else {
         PsAppUsbHost_PrintStatus(ctx->usb_host_ctx);
     }
@@ -1097,6 +1315,14 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
         ctx->ps_btn_last_mask = ps_btn_mask;
     }
 
+    PsAppHdmiLink_Service(ctx->hdmi_ctx);
+    if ((ctx->hdmi != NULL) && (ctx->hdmi->blank_frame_pending != 0U)) {
+        (void)PsHdmiVdma_FillAllFrames(ctx->vdma, 0x00000000U);
+        (void)PsAppVideo_RequestFrame(ctx->video_ctx, 0U);
+        PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
+        ctx->hdmi->blank_frame_pending = 0U;
+    }
+
     if (ctx->rom->is_loading != 0U) {
         PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);
         return;
@@ -1173,7 +1399,6 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
     PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
     PsAppDiag_MaybePrintStallAudit(ctx->diag_ctx, status1, dbg_pc, dbg_mem, dbg_dma);
     PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);
-    PsAppSave_Service(ctx->save_ctx);
 
     /* 早期 BRAM 捕获诊断：ROM 加载后约 1 秒触发一次 */
     if (ctx->rom->loaded && ctx->diag->delayed_chain_printed == 0U &&
@@ -1251,6 +1476,25 @@ void PsAppMonitorTask(void *arg) {
     }
 }
 
+void PsAppSaveTask(void *arg) {
+    /* 关键防坑：
+     * 这里使用 static 保存任务上下文，避免在异常栈压力下局部变量被破坏，
+     * 进而把无效指针传入保存流程导致“写盘完成后整机卡死”。 */
+    static PsAppSaveContext *s_save_task_ctx;
+    TickType_t save_delay_ticks;
+
+    s_save_task_ctx = (PsAppSaveContext *)arg;
+    save_delay_ticks = pdMS_TO_TICKS(PS_APP_MONITOR_INTERVAL_MS);
+    if (save_delay_ticks == 0U) {
+        save_delay_ticks = 1U;
+    }
+
+    for (;;) {
+        PsAppSave_Service(s_save_task_ctx);
+        vTaskDelay(save_delay_ticks);
+    }
+}
+
 void PsAppVideoPresentTask(void *arg) {
     PsAppRuntimeContext *ctx = (PsAppRuntimeContext *)arg;
     TickType_t present_delay_ticks;
@@ -1261,7 +1505,10 @@ void PsAppVideoPresentTask(void *arg) {
     }
 
     for (;;) {
-        if ((ctx != NULL) && (ctx->rom != NULL) && (ctx->rom->loaded != 0U)) {
+        if ((ctx != NULL) &&
+            (ctx->rom != NULL) &&
+            (ctx->rom->loaded != 0U) &&
+            ((ctx->hdmi == NULL) || (ctx->hdmi->present_enable != 0U))) {
             PsAppVideo_PresentCapturedFrameIfReady(ctx->video_ctx);
         }
         vTaskDelay(present_delay_ticks);

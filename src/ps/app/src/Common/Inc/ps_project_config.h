@@ -25,13 +25,24 @@ extern "C" {
 #define PS_APP_ROM_PATH_MAX_CHARS       128U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/bjg.gba"
 #define PS_APP_SAVE_SD_DIR              "0:/saves"
+#define PS_APP_BIOS_SD_PATH             "0:/boot.rom"
+#define PS_APP_GBA_BIOS_BYTES           (16U * 1024U)
+#define PS_APP_GBA_BIOS_WORDS           (PS_APP_GBA_BIOS_BYTES / 4U)
+#define PS_APP_GBA_BIOS_WRITE_TIMEOUT_LOOPS 2000000U
 
 #define PS_APP_SYS_TASK_STACK_WORDS       (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_SYS_TASK_PRIORITY          (tskIDLE_PRIORITY + 3U)
 #define PS_APP_VIDEO_TASK_STACK_WORDS     (configMINIMAL_STACK_SIZE * 8U)
 #define PS_APP_VIDEO_TASK_PRIORITY        (tskIDLE_PRIORITY + 2U)
-#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 8U)
+/* Console path includes command parsing and large help output. */
+#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
+/* 关键防坑：
+ * save 线程会经过 FatFs + SD 驱动 + 日志打印的深调用链。
+ * 之前栈偏小时出现过上下文指针异常（例如 0x00736576）并导致保存后卡死，
+ * 因此这里保留更大的栈余量，优先保证稳定性。 */
+#define PS_APP_SAVE_TASK_STACK_WORDS      (configMINIMAL_STACK_SIZE * 32U)
+#define PS_APP_SAVE_TASK_PRIORITY         (tskIDLE_PRIORITY + 1U)
 #define PS_APP_UART_BAUDRATE              115200U
 #define PS_APP_BTN4_MIO_PIN               50U
 #define PS_APP_BTN5_MIO_PIN               51U

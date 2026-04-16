@@ -73,6 +73,7 @@ entity gba_memorymux is
       flash_1m             : in     std_logic;
       MaxPakAddr           : in     std_logic_vector(24 downto 0);
       SramFlashEnable      : in     std_logic;
+      Sram32KMirrorTest    : in     std_logic;
       memory_remap         : in     std_logic;
       
       bitmapdrawmode       : in     std_logic;
@@ -186,6 +187,7 @@ architecture arch of gba_memorymux is
    signal read_operation     : std_logic := '0';
                              
    signal rotate_writedata   : std_logic_vector(31 downto 0) := (others => '0');
+   signal save_write_byte    : std_logic_vector(7 downto 0) := (others => '0');
    
    signal registersettle     : std_logic := '0';
    signal registersettle_cnt : integer range 0 to 7 := 0;
@@ -264,6 +266,12 @@ architecture arch of gba_memorymux is
 begin 
 
    sdram_read_addr <= sdram_read_addr_int;
+
+   with adr_save(1 downto 0) select
+      save_write_byte <= rotate_writedata(7 downto 0) when "00",
+                         rotate_writedata(15 downto 8) when "01",
+                         rotate_writedata(23 downto 16) when "10",
+                         rotate_writedata(31 downto 24) when others;
 
    settle <= '1' when registersettle = '1' or (new_cycles_valid = '1' and dma_soon = '1') else '0';
 
@@ -1236,7 +1244,11 @@ begin
                   case (flashReadState) is
                      when FLASH_READ_ARRAY =>
                         state <= FLASH_WAITREAD;
-                        bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned((flashBank & adr_save(15 downto 0))));
+                        if (Sram32KMirrorTest = '1' and flashNotSRam = '0') then
+                           bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned(flashBank & ('0' & adr_save(14 downto 0))));
+                        else
+                           bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned((flashBank & adr_save(15 downto 0))));
+                        end if;
                         bus_out_rnw  <= '1';
                         bus_out_ena  <= '1'; 
                         
@@ -1285,8 +1297,12 @@ begin
                end if;
             
             when SRAMWRITE => 
-               bus_out_Din  <= x"000000" & Dout_save(7 downto 0);
-               bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned(adr_save(15 downto 0)));
+               bus_out_Din  <= x"000000" & save_write_byte;
+               if (Sram32KMirrorTest = '1') then
+                  bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned('0' & adr_save(14 downto 0)));
+               else
+                  bus_out_Adr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned(adr_save(15 downto 0)));
+               end if;
                bus_out_rnw  <= '0';
                bus_out_ena  <= '1'; 
                save_sram    <= '1';
@@ -1386,7 +1402,7 @@ begin
                   when FLASH_PROGRAM =>
                      flash_saveaddr  <= std_logic_vector(to_unsigned(Softmap_GBA_FLASH_ADDR, busadr_bits) + unsigned((flashBank & adr_save(15 downto 0))));
                      flash_savecount <= 1;
-                     flash_savedata  <= Dout_save(7 downto 0);
+                     flash_savedata  <= save_write_byte;
                      state           <= FLASH_WRITEBLOCK;
                      mem_bus_done    <= '0';
                      flashState      <= FLASH_READ_ARRAY;

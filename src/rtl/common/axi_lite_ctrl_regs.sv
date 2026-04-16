@@ -76,7 +76,11 @@ module axi_lite_ctrl_regs #(
   output logic                 cfg_commit_toggle,
   input  logic [31:0]          stat_fbcap_frame_seq,
   input  logic                 stat_fbcap_frame_buf_idx,
-  input  logic [31:0]          stat_save_status
+  input  logic [31:0]          stat_save_status,
+  output logic [11:0]          cfg_bios_wr_addr,
+  output logic [31:0]          cfg_bios_wr_data,
+  output logic                 cfg_bios_wr_req_toggle,
+  input  logic [31:0]          stat_bios_wr_ack_seq
 );
 
   localparam logic [ADDR_W-1:0] REG_CTRL            = 12'h000;
@@ -124,12 +128,18 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_FB_CAP_STATUS         = 12'h0A8;
   localparam logic [ADDR_W-1:0] REG_FB_CAP_SEQ            = 12'h0AC;
   localparam logic [ADDR_W-1:0] REG_SAVE_STATUS           = 12'h0B0;
+  localparam logic [ADDR_W-1:0] REG_BIOS_WR_ADDR          = 12'h0B4;
+  localparam logic [ADDR_W-1:0] REG_BIOS_WR_DATA          = 12'h0B8;
+  localparam logic [ADDR_W-1:0] REG_BIOS_WR_REQ           = 12'h0BC;
+  localparam logic [ADDR_W-1:0] REG_BIOS_WR_ACK           = 12'h0C0;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
   logic [24:0] shadow_max_pak_addr;
   logic [15:0] shadow_cycle_precalc;
   logic [31:0] shadow_rtc_timestamp;
+  logic [11:0] shadow_bios_wr_addr;
+  logic [31:0] shadow_bios_wr_data;
   
   logic [31:0] irq_en;
   logic [1:0]  irq_sts; // [1] error, [0] vsync
@@ -178,6 +188,12 @@ module axi_lite_ctrl_regs #(
       cfg_display_frame_idx <= 2'd0;
       cfg_sw_reset         <= 1'b0;
       cfg_commit_toggle    <= 1'b0;
+      cfg_bios_wr_addr     <= 12'd0;
+      cfg_bios_wr_data     <= 32'd0;
+      cfg_bios_wr_req_toggle <= 1'b0;
+
+      shadow_bios_wr_addr  <= 12'd0;
+      shadow_bios_wr_data  <= 32'd0;
 
       irq_en               <= 32'h0;
       irq_sts              <= 2'b0;
@@ -243,6 +259,20 @@ module axi_lite_ctrl_regs #(
           REG_RTC_TIMESTAMP: begin
             shadow_rtc_timestamp <= apply_wstrb(shadow_rtc_timestamp, s_axi_wdata, s_axi_wstrb[3:0]);
           end
+          REG_BIOS_WR_ADDR: begin
+            merged32 = apply_wstrb({20'd0, shadow_bios_wr_addr}, s_axi_wdata, s_axi_wstrb[3:0]);
+            shadow_bios_wr_addr <= merged32[11:0];
+          end
+          REG_BIOS_WR_DATA: begin
+            shadow_bios_wr_data <= apply_wstrb(shadow_bios_wr_data, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_BIOS_WR_REQ: begin
+            if (s_axi_wdata[0]) begin
+              cfg_bios_wr_addr <= shadow_bios_wr_addr;
+              cfg_bios_wr_data <= shadow_bios_wr_data;
+              cfg_bios_wr_req_toggle <= ~cfg_bios_wr_req_toggle;
+            end
+          end
           REG_COMMIT: begin
             cfg_ctrl          <= shadow_ctrl;
             cfg_keys          <= shadow_keys;
@@ -301,6 +331,10 @@ module axi_lite_ctrl_regs #(
           REG_ERROR_LATCH:   rdata_next = error_latch;
           REG_IRQ_EN:        rdata_next = irq_en;
           REG_IRQ_STS:       rdata_next = {30'd0, irq_sts};
+          REG_BIOS_WR_ADDR:  rdata_next = {20'd0, shadow_bios_wr_addr};
+          REG_BIOS_WR_DATA:  rdata_next = shadow_bios_wr_data;
+          REG_BIOS_WR_REQ:   rdata_next = {31'd0, cfg_bios_wr_req_toggle};
+          REG_BIOS_WR_ACK:   rdata_next = stat_bios_wr_ack_seq;
           REG_DEBUG_CPU_PC:  rdata_next = stat_debug_cpu_pc;
           REG_DEBUG_CPU_MIX: rdata_next = stat_debug_cpu_mixed;
           REG_DEBUG_IRQ:     rdata_next = stat_debug_irq;

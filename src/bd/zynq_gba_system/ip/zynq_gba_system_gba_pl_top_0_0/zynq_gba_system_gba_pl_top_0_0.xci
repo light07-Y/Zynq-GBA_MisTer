@@ -105,13 +105,7 @@
         "btns": [ { "direction": "in", "size_left": "3", "size_right": "0" } ],
         "sws": [ { "direction": "in", "size_left": "3", "size_right": "0" } ],
         "leds": [ { "direction": "out", "size_left": "3", "size_right": "0" } ],
-        "audio_l": [ { "direction": "out", "size_left": "15", "size_right": "0" } ],
-        "audio_r": [ { "direction": "out", "size_left": "15", "size_right": "0" } ],
-        "irq": [ { "direction": "out" } ],
-        "ch1_req": [ { "direction": "out" } ],
-        "ch2_req": [ { "direction": "out" } ],
-        "ch3_req": [ { "direction": "out" } ],
-        "ch4_req": [ { "direction": "out" } ]
+        "irq": [ { "direction": "out" } ]
       },
       "interfaces": {
         "clk_100": {
@@ -357,5 +351,5 @@
       }
     }
   },
-  "checksum": "139f958e"
+  "checksum": "0ab1b5bb"
 }

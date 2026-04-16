@@ -736,7 +736,7 @@ u32 PsAppVideo_ConvertRgb565ToXrgb8888(u16 pixel) {
     g8 = (g6 << 2) | (g6 >> 4);
     b8 = (b5 << 3) | (b5 >> 2);
 
-    return (b8 << 16) | (g8 << 8) | r8;
+    return (r8 << 16) | (g8 << 8) | b8;
 }
 
 void PsAppVideo_ComputeDisplayWindow(PsAppVideoContext *ctx,

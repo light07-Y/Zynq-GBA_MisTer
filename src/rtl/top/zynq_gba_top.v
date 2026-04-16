@@ -141,20 +141,10 @@ module zynq_gba_top #(
   input  [3:0]  sws,
   output [3:0]  leds,
 
-  // Audio Monitor (Exported to BD for observability)
-  output [15:0] audio_l,
-  output [15:0] audio_r,
-
   // PL-to-PS Interrupt
   (* X_INTERFACE_INFO = "xilinx.com:signal:interrupt:1.0 irq INTERRUPT" *)
   (* X_INTERFACE_PARAMETER = "SENSITIVITY LEVEL_HIGH" *)
-  output        irq,
-
-  // DDRAM Mux Request Monitor Ports (for BD connectivity)
-  output        ch1_req,
-  output        ch2_req,
-  output        ch3_req,
-  output        ch4_req
+  output        irq
 );
 
   // ==========================================================================
@@ -177,6 +167,9 @@ module zynq_gba_top #(
   wire [1:0]  w_axi_display_frame_idx;
   wire        w_axi_cfg_commit_toggle;
   wire        w_axi_cfg_sw_reset;
+  wire [11:0] w_axi_bios_wr_addr;
+  wire [31:0] w_axi_bios_wr_data;
+  wire        w_axi_bios_wr_req_toggle;
 
   // 3. 内存系统信号 (DDRAM Mux & Backend)
   wire        ddram_busy;
@@ -195,6 +188,7 @@ module zynq_gba_top #(
   wire [31:0] ch2_dout;
   wire [15:0] ch3_din, ch3_dout_unused;
   wire        ch1_ready, ch2_ready, ch3_ready_unused, ch4_ready;
+  wire        ch1_req, ch2_req, ch3_req, ch4_req;
   wire        ch1_rnw, ch2_rnw, ch3_rnw, ch4_rnw;
   wire [7:0]  ch4_be;
 
@@ -318,6 +312,18 @@ module zynq_gba_top #(
   reg                                 fbcap_shadow_buf_axi_s2;
   reg [1:0]                           fbcap_shadow_sample_cnt;
   (* ASYNC_REG = "TRUE" *) reg [31:0] save_status_axi_meta, save_status_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  bios_wr_req_sync_core;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  bios_wr_ack_sync_axi;
+  reg                                 bios_wr_ack_toggle_core;
+  reg [11:0]                          bios_wr_addr_core_s1;
+  reg [11:0]                          bios_wr_addr_core_s2;
+  reg [31:0]                          bios_wr_data_core_s1;
+  reg [31:0]                          bios_wr_data_core_s2;
+  reg [1:0]                           bios_wr_sample_cnt_core;
+  reg [31:0]                          bios_wr_ack_seq_axi;
+  reg [11:0]                          bios_wr_addr_core;
+  reg [31:0]                          bios_wr_data_core;
+  reg                                 bios_wr_core;
 
   wire [15:0] unused_core_vcount;
   reg                                  fb_frame_pulse_toggle;
@@ -395,8 +401,6 @@ module zynq_gba_top #(
   assign debug_mem_axi = G_ENABLE_DEBUG ? debug_mem_axi_sync : 32'd0;
   assign audio_out_l = core_audio_l;
   assign audio_out_r = core_audio_r;
-  assign audio_l = audio_out_l;
-  assign audio_r = audio_out_r;
   // Keep the PS-side frame IRQ aligned with the core's original largeimg frame
   // boundary. Using pixel_addr==0 fires at the first pixel of a new frame and
   // can arrive before FB_CAP_SEQ has advanced, so the PS blit path misses the
@@ -728,6 +732,8 @@ module zynq_gba_top #(
       fbcap_shadow_sample_cnt <= 2'd0;
       save_status_axi_meta <= 32'd0;
       save_status_axi_sync <= 32'd0;
+      bios_wr_ack_sync_axi <= 3'b000;
+      bios_wr_ack_seq_axi <= 32'd0;
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
       sys_err_pulse_toggle_axi_sync  <= 3'b000;
     end else begin
@@ -818,8 +824,45 @@ module zynq_gba_top #(
       end
       save_status_axi_meta         <= {8'd0, save_eeprom_count_core, save_flash_count_core, save_sram_count_core};
       save_status_axi_sync         <= save_status_axi_meta;
+      bios_wr_ack_sync_axi <= {bios_wr_ack_sync_axi[1:0], bios_wr_ack_toggle_core};
+      if (bios_wr_ack_sync_axi[2] ^ bios_wr_ack_sync_axi[1]) begin
+        bios_wr_ack_seq_axi <= bios_wr_ack_seq_axi + 32'd1;
+      end
       fb_frame_pulse_toggle_axi_sync <= {fb_frame_pulse_toggle_axi_sync[1:0], fb_frame_pulse_toggle};
       sys_err_pulse_toggle_axi_sync  <= {sys_err_pulse_toggle_axi_sync[1:0], sys_err_pulse_toggle};
+    end
+  end
+
+  always @(posedge clk_100) begin
+    if (!rst_n) begin
+      bios_wr_req_sync_core <= 3'b000;
+      bios_wr_ack_toggle_core <= 1'b0;
+      bios_wr_addr_core_s1 <= 12'd0;
+      bios_wr_addr_core_s2 <= 12'd0;
+      bios_wr_data_core_s1 <= 32'd0;
+      bios_wr_data_core_s2 <= 32'd0;
+      bios_wr_sample_cnt_core <= 2'd0;
+      bios_wr_addr_core <= 12'd0;
+      bios_wr_data_core <= 32'd0;
+      bios_wr_core <= 1'b0;
+    end else begin
+      bios_wr_core <= 1'b0;
+      bios_wr_req_sync_core <= {bios_wr_req_sync_core[1:0], w_axi_bios_wr_req_toggle};
+      if (bios_wr_req_sync_core[2] ^ bios_wr_req_sync_core[1]) begin
+        bios_wr_sample_cnt_core <= 2'd3;
+      end else if (bios_wr_sample_cnt_core != 2'd0) begin
+        bios_wr_addr_core_s1 <= w_axi_bios_wr_addr;
+        bios_wr_addr_core_s2 <= bios_wr_addr_core_s1;
+        bios_wr_data_core_s1 <= w_axi_bios_wr_data;
+        bios_wr_data_core_s2 <= bios_wr_data_core_s1;
+        bios_wr_sample_cnt_core <= bios_wr_sample_cnt_core - 2'd1;
+        if (bios_wr_sample_cnt_core == 2'd1) begin
+          bios_wr_addr_core <= bios_wr_addr_core_s2;
+          bios_wr_data_core <= bios_wr_data_core_s2;
+          bios_wr_core <= 1'b1;
+          bios_wr_ack_toggle_core <= ~bios_wr_ack_toggle_core;
+        end
+      end
     end
   end
 
@@ -895,7 +938,11 @@ module zynq_gba_top #(
     .cfg_commit_toggle   (w_axi_cfg_commit_toggle),
     .stat_fbcap_frame_seq(fbcap_frame_seq_axi_sync),
     .stat_fbcap_frame_buf_idx(fbcap_frame_buf_idx_axi_sync),
-    .stat_save_status    (save_status_axi)
+    .stat_save_status    (save_status_axi),
+    .cfg_bios_wr_addr    (w_axi_bios_wr_addr),
+    .cfg_bios_wr_data    (w_axi_bios_wr_data),
+    .cfg_bios_wr_req_toggle(w_axi_bios_wr_req_toggle),
+    .stat_bios_wr_ack_seq(bios_wr_ack_seq_axi)
   );
 
   gba_config_mgr u_config_mgr (
@@ -965,6 +1012,7 @@ module zynq_gba_top #(
     .CyclesMissing         (cycles_missing),
     .CyclesVsyncSpeed      (cycles_vsync_speed),
     .SramFlashEnable       (w_core_cfg_ctrl[4]),
+    .Sram32KMirrorTest     (w_core_cfg_ctrl[13]),
     .memory_remap          (w_core_cfg_ctrl[5]),
     .increaseSSHeaderCount (1'b0),
     .save_state            (1'b0),
@@ -1019,9 +1067,9 @@ module zynq_gba_top #(
     .SAVE_out_be           (save_out_be),
     .SAVE_out_done         (save_out_done),
 
-    .bios_wraddr           (12'd0),
-    .bios_wrdata           (32'd0),
-    .bios_wr               (1'b0),
+    .bios_wraddr           (bios_wr_addr_core),
+    .bios_wrdata           (bios_wr_data_core),
+    .bios_wr               (bios_wr_core),
     .save_eeprom           (unused_save_eeprom),
     .save_sram             (unused_save_sram),
     .save_flash            (unused_save_flash),

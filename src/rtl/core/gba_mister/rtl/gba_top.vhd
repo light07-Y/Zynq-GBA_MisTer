@@ -33,6 +33,7 @@ entity gba_top is
       CyclesMissing         : buffer std_logic_vector(31 downto 0); -- debug only for speed measurement, keep open
       CyclesVsyncSpeed      : out    std_logic_vector(31 downto 0); -- debug only for speed measurement, keep open
       SramFlashEnable       : in     std_logic;
+      Sram32KMirrorTest     : in     std_logic;
       memory_remap          : in     std_logic;
       increaseSSHeaderCount : in     std_logic;
       save_state            : in     std_logic;
@@ -743,6 +744,7 @@ begin
       flash_1m             => GBA_flash_1m,
       MaxPakAddr           => MaxPakAddr_modified,
       SramFlashEnable      => SramFlashEnable,
+      Sram32KMirrorTest    => Sram32KMirrorTest,
       memory_remap         => memory_remap,
       
       bitmapdrawmode       => bitmapdrawmode,

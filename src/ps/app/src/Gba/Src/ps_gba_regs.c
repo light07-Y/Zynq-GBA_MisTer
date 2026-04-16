@@ -87,3 +87,53 @@ void PsGbaRegs_SetDisplayFrameIdx(PsGbaRegs *ctx, u32 frame_idx) {
     }
     Xil_Out32(ctx->base_addr + GBA_REG_DISPLAY_FRAME, frame_idx & 0x3U);
 }
+
+u32 PsGbaRegs_ReadBiosAckSeq(PsGbaRegs *ctx) {
+    if (ctx == 0) {
+        return 0U;
+    }
+    return Xil_In32(ctx->base_addr + GBA_REG_BIOS_WR_ACK);
+}
+
+void PsGbaRegs_StageBiosWord(PsGbaRegs *ctx, u32 word_addr, u32 word_data) {
+    if (ctx == 0) {
+        return;
+    }
+    Xil_Out32(ctx->base_addr + GBA_REG_BIOS_WR_ADDR, word_addr & 0xFFFU);
+    Xil_Out32(ctx->base_addr + GBA_REG_BIOS_WR_DATA, word_data);
+}
+
+void PsGbaRegs_RequestBiosWrite(PsGbaRegs *ctx) {
+    if (ctx == 0) {
+        return;
+    }
+    Xil_Out32(ctx->base_addr + GBA_REG_BIOS_WR_REQ, 1U);
+}
+
+XStatus PsGbaRegs_WriteBiosWord(PsGbaRegs *ctx,
+                                u32 word_addr,
+                                u32 word_data,
+                                u32 timeout_loops) {
+    u32 ack_before;
+    u32 spin;
+
+    if (ctx == 0) {
+        return XST_FAILURE;
+    }
+
+    if (timeout_loops == 0U) {
+        timeout_loops = 2000000U;
+    }
+
+    ack_before = PsGbaRegs_ReadBiosAckSeq(ctx);
+    PsGbaRegs_StageBiosWord(ctx, word_addr, word_data);
+    PsGbaRegs_RequestBiosWrite(ctx);
+
+    for (spin = 0U; spin < timeout_loops; ++spin) {
+        if (PsGbaRegs_ReadBiosAckSeq(ctx) != ack_before) {
+            return XST_SUCCESS;
+        }
+    }
+
+    return XST_FAILURE;
+}

@@ -8,9 +8,12 @@
 #define PS_APP_HAS_XGPIOPS_HEADER 1
 #else
 #define PS_APP_HAS_XGPIOPS_HEADER 0
+#ifndef PS_APP_XGPIOPS_PLACEHOLDER_DEFINED
+#define PS_APP_XGPIOPS_PLACEHOLDER_DEFINED 1
 typedef struct XGpioPs {
     unsigned int _placeholder;
 } XGpioPs;
+#endif
 #endif
 #else
 #include "xgpiops.h"
@@ -31,6 +34,7 @@ struct PsAppSaveContext;
 struct PsAppInputContext;
 struct PsAppUsbHostContext;
 struct PsAppVideoContext;
+struct PsAppHdmiLinkContext;
 
 typedef struct PsAppRuntimeContext {
     PsAudioCodec *codec;
@@ -46,6 +50,7 @@ typedef struct PsAppRuntimeContext {
     PsAppDiagState *diag;
     PsAppUsbHostState *usb_host;
     PsAppInputState *input;
+    PsAppHdmiLinkState *hdmi;
     u8 ps_gpio_ready;
     u8 reserved0;
     u8 reserved1;
@@ -56,6 +61,7 @@ typedef struct PsAppRuntimeContext {
     struct PsAppUsbHostContext *usb_host_ctx;
     struct PsAppVideoContext *video_ctx;
     struct PsAppDiagContext *diag_ctx;
+    struct PsAppHdmiLinkContext *hdmi_ctx;
 } PsAppRuntimeContext;
 
 typedef struct PsAppConsoleContext {

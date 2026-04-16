@@ -4,7 +4,7 @@
     "xci_name": "zynq_gba_system_hdmi_dvi_enc_0",
     "cell_name": "hdmi_dvi_enc",
     "component_reference": "digilentinc.com:ip:rgb2dvi:1.4",
-    "ip_revision": "10",
+    "ip_revision": "8",
     "gen_directory": "../../../../../../Zynq-GBA_MisTer-Vivado.gen/sources_1/bd/zynq_gba_system/ip/zynq_gba_system_hdmi_dvi_enc_0",
     "parameters": {
       "component_parameters": {
@@ -44,7 +44,7 @@
       },
       "runtime_parameters": {
         "IPCONTEXT": [ { "value": "IP_Integrator" } ],
-        "IPREVISION": [ { "value": "10" } ],
+        "IPREVISION": [ { "value": "8" } ],
         "MANAGED": [ { "value": "TRUE" } ],
         "OUTPUTDIR": [ { "value": "../../../../../../Zynq-GBA_MisTer-Vivado.gen/sources_1/bd/zynq_gba_system/ip/zynq_gba_system_hdmi_dvi_enc_0" } ],
         "SELECTEDSIMMODEL": [ { "value": "" } ],
@@ -155,7 +155,7 @@
           "abstraction_type": "xilinx.com:signal:clock_rtl:1.0",
           "mode": "master",
           "parameters": {
-            "ASSOCIATED_RESET": [ { "value": "aRst_n:AsyncRst_n", "value_src": "constant", "value_permission": "bd_and_user", "usage": "all" } ],
+            "ASSOCIATED_RESET": [ { "value": "aRst_n", "value_src": "constant", "value_permission": "bd_and_user", "usage": "all" } ],
             "FREQ_HZ": [ { "value": "100000000", "value_permission": "bd_and_user", "resolve_type": "generated", "format": "long", "is_ips_inferred": true, "is_static_object": false } ],
             "FREQ_TOLERANCE_HZ": [ { "value": "0", "value_permission": "bd_and_user", "resolve_type": "generated", "format": "long", "is_ips_inferred": true, "is_static_object": false } ],
             "PHASE": [ { "value": "0.0", "value_permission": "bd_and_user", "resolve_type": "generated", "format": "float", "is_ips_inferred": true, "is_static_object": false } ],
@@ -189,5 +189,5 @@
       }
     }
   },
-  "checksum": "d0f3443b"
+  "checksum": "4a3d6a22"
 }

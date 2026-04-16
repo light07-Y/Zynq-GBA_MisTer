@@ -60,8 +60,21 @@ static u32 PsAppDiag_ClampWordOffset(u32 offset, u32 limit_bytes) {
     }
     return offset & ~0x3U;
 }
+
+static const char *PsAppDiag_BiosModeName(u8 bios_mode) {
+    switch ((PsAppBiosMode)bios_mode) {
+        case PS_APP_BIOS_MODE_EXTERNAL:
+            return "external";
+        case PS_APP_BIOS_MODE_FALLBACK:
+            return "fallback";
+        case PS_APP_BIOS_MODE_INTERNAL:
+        default:
+            return "internal";
+    }
+}
+
 static void PsAppDiag_PrintCtrlDecode(u32 ctrl) {
-    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u flash1m=%u gpio=%u tilt=%u rom_loading=%u\r\n",
+    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u flash1m=%u gpio=%u tilt=%u rom_loading=%u unsafe=%u\r\n",
                (unsigned int)((ctrl >> 0) & 0x1U),
                (unsigned int)((ctrl >> 1) & 0x1U),
                (unsigned int)((ctrl >> 2) & 0x1U),
@@ -70,7 +83,8 @@ static void PsAppDiag_PrintCtrlDecode(u32 ctrl) {
                (unsigned int)((ctrl >> 9) & 0x1U),
                (unsigned int)((ctrl >> 10) & 0x1U),
                (unsigned int)((ctrl >> 11) & 0x1U),
-               (unsigned int)((ctrl >> 8) & 0x1U));
+               (unsigned int)((ctrl >> 8) & 0x1U),
+               (unsigned int)((ctrl >> 13) & 0x1U));
 }
 
 static void PsAppDiag_PrintFramebufferProbe(PsAppDiagContext *ctx) {
@@ -643,6 +657,11 @@ void PsAppDiag_PrintRomProbe(PsAppDiagContext *ctx) {
                (unsigned int)ctx->rom->sig_sram,
                (unsigned int)ctx->rom->sig_eeprom,
                save_guess);
+    xil_printf("[ROMPROBE] bios mode=%s ext=%u load_ok=%u bytes=%u\r\n",
+               PsAppDiag_BiosModeName(ctx->rom->bios_mode),
+               (unsigned int)ctx->rom->bios_external_present,
+               (unsigned int)ctx->rom->bios_load_ok,
+               (unsigned int)ctx->rom->bios_bytes_loaded);
     if (ctx->rom->flash1m_offset != 0xFFFFFFFFU) {
         xil_printf("[ROMPROBE] sig FLASH1M_V @0x%08x\r\n", (unsigned int)ctx->rom->flash1m_offset);
     }

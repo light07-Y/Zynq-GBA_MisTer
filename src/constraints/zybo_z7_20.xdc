@@ -14,6 +14,9 @@ set_property -dict {PACKAGE_PIN C20 IOSTANDARD TMDS_33} [get_ports {tmds_tx_data
 set_property -dict {PACKAGE_PIN B20 IOSTANDARD TMDS_33} [get_ports {tmds_tx_data_n[1]}]
 set_property -dict {PACKAGE_PIN B19 IOSTANDARD TMDS_33} [get_ports {tmds_tx_data_p[2]}]
 set_property -dict {PACKAGE_PIN A20 IOSTANDARD TMDS_33} [get_ports {tmds_tx_data_n[2]}]
+set_property -dict {PACKAGE_PIN E18 IOSTANDARD LVCMOS33} [get_ports hdmi_tx_hpd]
+set_property -dict {PACKAGE_PIN G17 IOSTANDARD LVCMOS33} [get_ports HDMI_DDC_IIC_scl_io]
+set_property -dict {PACKAGE_PIN G18 IOSTANDARD LVCMOS33} [get_ports HDMI_DDC_IIC_sda_io]
 
 ## Audio codec SSM2603 PCM data
 set_property -dict {PACKAGE_PIN R17 IOSTANDARD LVCMOS33} [get_ports ac_mclk]
@@ -49,7 +52,8 @@ set_property -dict {PACKAGE_PIN D18 IOSTANDARD LVCMOS33} [get_ports {leds[3]}]
 set_clock_groups -asynchronous -group {clk_fpga_0} -group {clk_fpga_1}
 
 ## Async GPIO / board-level debug/status pins: no external timing budget is enforced.
-set_false_path -from [get_ports {btns[*] sws[*]}]
+set_false_path -from [get_ports {btns[*] sws[*] hdmi_tx_hpd HDMI_DDC_IIC_scl_io HDMI_DDC_IIC_sda_io}]
 set_false_path -to [get_ports {leds[*] ac_mclk ac_bclk ac_pblrc ac_pbdat ac_muten}]
 set_false_path -to [get_ports {tmds_tx_clk_p tmds_tx_clk_n tmds_tx_data_p[*] tmds_tx_data_n[*]}]
+set_false_path -to [get_ports {HDMI_DDC_IIC_scl_io HDMI_DDC_IIC_sda_io}]
 

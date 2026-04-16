@@ -16,6 +16,12 @@ typedef enum {
     PS_APP_SAVE_KIND_EEPROM = 3U
 } PsAppSaveKind;
 
+typedef enum {
+    PS_APP_BIOS_MODE_INTERNAL = 0U,
+    PS_APP_BIOS_MODE_EXTERNAL = 1U,
+    PS_APP_BIOS_MODE_FALLBACK = 2U
+} PsAppBiosMode;
+
 typedef struct {
     u32 ctrl;
     u32 keys;
@@ -51,6 +57,31 @@ typedef struct {
 } PsAppVideoState;
 
 typedef struct {
+    u8 initialized;
+    u8 irq_connected;
+    u8 hpd_level;
+    u8 present_enable;
+    volatile u8 hpd_pending;
+    u8 edid_valid;
+    u8 edid_refresh_pending;
+    u8 blank_frame_pending;
+    u8 preferred_is_640x480p60;
+    u8 preferred_timing_valid;
+    u8 preferred_vic;
+    u8 reserved0;
+    u16 vendor_id;
+    u16 product_code;
+    u32 hpd_rise_count;
+    u32 hpd_fall_count;
+    u32 edid_read_ok_count;
+    u32 edid_read_fail_count;
+    u32 last_error;
+    u32 last_service_tick;
+    u32 last_hpd_change_tick;
+    u8 edid_block0[128];
+} PsAppHdmiLinkState;
+
+typedef struct {
     u8 loaded;
     u8 is_loading;
     u8 sig_flash1m;
@@ -62,8 +93,13 @@ typedef struct {
     u8 quirk_gpio;
     u8 quirk_tilt;
     u8 quirk_solar;
+    u8 bios_mode;
+    u8 bios_load_ok;
+    u8 bios_external_present;
+    u8 bios_reserved0;
     u32 size_bytes;
     u32 size_aligned;
+    u32 bios_bytes_loaded;
     u32 flash1m_offset;
     u32 flash_offset;
     u32 sram_offset;

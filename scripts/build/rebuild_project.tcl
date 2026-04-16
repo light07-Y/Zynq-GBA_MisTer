@@ -22,6 +22,23 @@ proc add_globbed_files {pattern} {
     }
 }
 
+proc upgrade_locked_project_ips {} {
+    set locked_ips [get_ips -quiet -filter {IS_LOCKED == 1}]
+    if {[llength $locked_ips] == 0} {
+        return
+    }
+
+    puts "INFO: Found locked IP(s); attempting upgrade: $locked_ips"
+    upgrade_ip $locked_ips
+
+    set still_locked [get_ips -quiet -filter {IS_LOCKED == 1}]
+    if {[llength $still_locked] > 0} {
+        puts "ERROR: IP(s) are still locked after upgrade: $still_locked"
+        report_ip_status
+        error "Locked IPs remain after upgrade."
+    }
+}
+
 create_project -force $project_name $repo_root -part xc7z020clg400-1
 set_property board_part digilentinc.com:zybo-z7-20:part0:1.2 [current_project]
 set_property target_language Verilog [current_project]
@@ -38,7 +55,7 @@ set_property strategy Performance_ExplorePostRoutePhysOpt [get_runs impl_1]
 set_msg_config -id {BD 41-926} -suppress
 
 set ip_repos {}
-foreach repo [list D:/Tools/vivado-library-master D:/Tools/vivado-library-master/ip] {
+foreach repo [list D:/Tools/vivado-library-master] {
     if {[file isdirectory $repo]} {
         lappend ip_repos $repo
     }
@@ -88,7 +105,22 @@ foreach relpath [list \
     }
 }
 
+upgrade_locked_project_ips
+
 open_bd_design $local_bd_file
+
+# Legacy monitor outputs were removed from zynq_gba_top; clean any stale
+# top-level BD ports left by old snapshots.
+foreach legacy_port_name [list audio_l audio_r ch1_req ch2_req ch3_req ch4_req] {
+    set legacy_port [get_bd_ports -quiet $legacy_port_name]
+    if {[llength $legacy_port] > 0} {
+        set legacy_net [get_bd_nets -quiet -of_objects $legacy_port]
+        if {[llength $legacy_net] > 0} {
+            disconnect_bd_net $legacy_net $legacy_port
+        }
+        delete_bd_objs $legacy_port
+    }
+}
 
 if {[llength [get_bd_cells -quiet fb_cap_bram_ctrl]] == 0} {
     create_bd_cell -type ip -vlnv xilinx.com:ip:axi_bram_ctrl:4.1 fb_cap_bram_ctrl
@@ -176,10 +208,21 @@ if {[llength $ps_core_cell] > 0} {
         CONFIG.PCW_ENET_RESET_ENABLE {0} \
         CONFIG.PCW_EN_ENET0 {0} \
         CONFIG.PCW_EN_ENET1 {0} \
+        CONFIG.PCW_EN_I2C0 {1} \
+        CONFIG.PCW_I2C0_PERIPHERAL_ENABLE {1} \
+        CONFIG.PCW_EN_EMIO_I2C0 {1} \
+        CONFIG.PCW_I2C0_I2C0_IO {EMIO} \
+        CONFIG.PCW_EN_I2C1 {1} \
+        CONFIG.PCW_I2C1_PERIPHERAL_ENABLE {1} \
+        CONFIG.PCW_EN_EMIO_I2C1 {1} \
+        CONFIG.PCW_I2C1_I2C1_IO {EMIO} \
         CONFIG.PCW_EN_GPIO {1} \
         CONFIG.PCW_GPIO_PERIPHERAL_ENABLE {1} \
         CONFIG.PCW_GPIO_MIO_GPIO_ENABLE {1} \
         CONFIG.PCW_GPIO_MIO_GPIO_IO {MIO} \
+        CONFIG.PCW_EN_EMIO_GPIO {1} \
+        CONFIG.PCW_GPIO_EMIO_GPIO_ENABLE {1} \
+        CONFIG.PCW_GPIO_EMIO_GPIO_IO {EMIO} \
     ] $ps_core_cell
     # BTN4/BTN5 对应 MIO50/MIO51。这里必须关闭内部 pull-up，
     # 否则 platform/ps7_init 可能把按键输入长期钉在错误电平，
@@ -187,6 +230,118 @@ if {[llength $ps_core_cell] > 0} {
     set_property CONFIG.PCW_MIO_50_PULLUP {disabled} $ps_core_cell
     set_property CONFIG.PCW_MIO_51_PULLUP {disabled} $ps_core_cell
     set_property CONFIG.PCW_IRQ_F2P_INTR {1} $ps_core_cell
+}
+
+# HDMI TX auxiliary signals (Zybo Z7):
+# - AUDIO_IIC stays on PS IIC_0 (EMIO)
+# - DDC moves to PS IIC_1 (EMIO)
+# - HPD is sampled through PS GPIO EMIO[0] (pin index 54 in XGpioPs API)
+if {[llength [get_bd_ports -quiet hdmi_tx_hpd]] == 0} {
+    create_bd_port -dir I hdmi_tx_hpd
+}
+if {[llength [get_bd_intf_ports -quiet AUDIO_IIC]] == 0} {
+    create_bd_intf_port -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 AUDIO_IIC
+}
+if {[llength [get_bd_intf_ports -quiet HDMI_DDC_IIC]] == 0} {
+    create_bd_intf_port -mode Master -vlnv xilinx.com:interface:iic_rtl:1.0 HDMI_DDC_IIC
+}
+set ps_iic0_pin  [get_bd_intf_pins  -quiet ps_core/IIC_0]
+set ps_iic1_pin  [get_bd_intf_pins  -quiet ps_core/IIC_1]
+set audio_iic_if [get_bd_intf_ports -quiet AUDIO_IIC]
+set hdmi_ddc_if  [get_bd_intf_ports -quiet HDMI_DDC_IIC]
+
+if {[llength $ps_iic0_pin] > 0 && [llength $audio_iic_if] > 0} {
+    foreach intf_obj [list $ps_iic0_pin $audio_iic_if] {
+        set net [get_bd_intf_nets -quiet -of_objects $intf_obj]
+        if {[llength $net] > 0} {
+            disconnect_bd_intf_net $net $intf_obj
+        }
+    }
+    connect_bd_intf_net $ps_iic0_pin $audio_iic_if
+}
+
+if {[llength $ps_iic1_pin] > 0 && [llength $hdmi_ddc_if] > 0} {
+    foreach intf_obj [list $ps_iic1_pin $hdmi_ddc_if] {
+        set net [get_bd_intf_nets -quiet -of_objects $intf_obj]
+        if {[llength $net] > 0} {
+            disconnect_bd_intf_net $net $intf_obj
+        }
+    }
+    connect_bd_intf_net $ps_iic1_pin $hdmi_ddc_if
+}
+
+if {[llength [get_bd_cells -quiet hdmi_hpd_gpio_concat]] == 0} {
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlconcat:2.1 hdmi_hpd_gpio_concat
+}
+if {[llength [get_bd_cells -quiet hdmi_hpd_gpio_zero]] == 0} {
+    create_bd_cell -type ip -vlnv xilinx.com:ip:xlconstant:1.1 hdmi_hpd_gpio_zero
+}
+set_property -dict [list \
+    CONFIG.NUM_PORTS {2} \
+    CONFIG.IN0_WIDTH {1} \
+    CONFIG.IN1_WIDTH {63} \
+] [get_bd_cells hdmi_hpd_gpio_concat]
+set_property -dict [list \
+    CONFIG.CONST_WIDTH {63} \
+    CONFIG.CONST_VAL {0} \
+] [get_bd_cells hdmi_hpd_gpio_zero]
+
+foreach pin_path [list \
+    ps_core/GPIO_I \
+    hdmi_hpd_gpio_concat/In0 \
+    hdmi_hpd_gpio_concat/In1 \
+    hdmi_hpd_gpio_concat/dout \
+    hdmi_hpd_gpio_zero/dout \
+] {
+    set pin [get_bd_pins -quiet $pin_path]
+    if {[llength $pin] > 0} {
+        set net [get_bd_nets -quiet -of_objects $pin]
+        if {[llength $net] > 0} {
+            disconnect_bd_net $net $pin
+        }
+    }
+}
+set hpd_port [get_bd_ports -quiet hdmi_tx_hpd]
+if {[llength $hpd_port] > 0} {
+    set hpd_net [get_bd_nets -quiet -of_objects $hpd_port]
+    if {[llength $hpd_net] > 0} {
+        disconnect_bd_net $hpd_net $hpd_port
+    }
+}
+
+if {[llength [get_bd_pins -quiet ps_core/GPIO_I]] > 0 && [llength $hpd_port] > 0} {
+    foreach fixed_net_name [list hdmi_tx_hpd_net hdmi_hpd_gpio_zero_net hdmi_hpd_gpio_gpioi_net] {
+        set fixed_net [get_bd_nets -quiet $fixed_net_name]
+        if {[llength $fixed_net] > 0} {
+            delete_bd_objs $fixed_net
+        }
+    }
+
+    connect_bd_net -net hdmi_tx_hpd_net $hpd_port [get_bd_pins hdmi_hpd_gpio_concat/In0]
+    connect_bd_net -net hdmi_hpd_gpio_zero_net \
+        [get_bd_pins hdmi_hpd_gpio_zero/dout] \
+        [get_bd_pins hdmi_hpd_gpio_concat/In1]
+    connect_bd_net -net hdmi_hpd_gpio_gpioi_net \
+        [get_bd_pins hdmi_hpd_gpio_concat/dout] \
+        [get_bd_pins ps_core/GPIO_I]
+}
+
+# Clean up any orphaned interface net left by reconnect operations.
+foreach intf_net [get_bd_intf_nets -quiet] {
+    set intf_pins [get_bd_intf_pins -quiet -of_objects $intf_net]
+    set intf_ports [get_bd_intf_ports -quiet -of_objects $intf_net]
+    if {[llength $intf_pins] == 0 && [llength $intf_ports] == 0} {
+        delete_bd_objs $intf_net
+    }
+}
+
+# Clean up stale HPD helper nets left by previous reconnect operations.
+foreach net [get_bd_nets -quiet {hdmi_tx_hpd* hdmi_hpd_gpio_concat_dout* hdmi_hpd_gpio_zero_dout*}] {
+    set pins [get_bd_pins -quiet -of_objects $net]
+    set ports [get_bd_ports -quiet -of_objects $net]
+    if {([llength $pins] + [llength $ports]) < 2} {
+        delete_bd_objs $net
+    }
 }
 
 if {[llength [get_bd_cells -quiet hdmi_rgb_pack]] > 0} {
@@ -312,6 +467,7 @@ connect_bd_net [get_bd_pins gba_pl_top_0/irq] [get_bd_pins pl_irq_concat/In0]
 connect_bd_net [get_bd_pins hdmi_vdma/mm2s_introut] [get_bd_pins pl_irq_concat/In1]
 connect_bd_net [get_bd_pins pl_irq_concat/dout] [get_bd_pins ps_core/IRQ_F2P]
 
+upgrade_locked_project_ips
 validate_bd_design
 save_bd_design
 file copy -force $local_bd_file $bd_file
