@@ -41,8 +41,9 @@
 #define PS_APP_USBHOST_INTIN_BUFFER_SIZE 64U
 #define PS_APP_USBHOST_ULPI_TIMEOUT_ITER 500000U
 #define PS_APP_USBHOST_PORT_RESET_TIMEOUT_MS 100U
-#define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN 1000U
-#define PS_APP_USBHOST_ENUM_MAX_RETRY      5U
+#define PS_APP_USBHOST_ENUM_MAX_RETRY        5U
+#define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE_TICKS
+#define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX  PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX_TICKS
 #define PS_APP_USBHOST_PHY_RESET_ASSERT_MS 5U
 #define PS_APP_USBHOST_PHY_RESET_RELEASE_MS 20U
 #define PS_APP_USBHOST_8BITDO_REPORT_TIMEOUT_TICKS 1000U
@@ -109,6 +110,11 @@ static u8 g_ps_usbhost_ulpi_recovering = 0U;
 static u32 g_ps_usbhost_no_report_ticks = 0U;
 static u32 g_ps_usbhost_startup_sideband_log_count = 0U;
 static u32 g_ps_usbhost_retry_sideband_log_count = 0U;
+static u8 g_ps_usbhost_phy_connected = 0U;
+static u8 g_ps_usbhost_phy_raw_ccs = 0U;
+static u32 g_ps_usbhost_phy_stable_ticks = 0U;
+static u32 g_ps_usbhost_enum_observe_ticks = 0U;
+static u32 g_ps_usbhost_stale_detach_ticks = 0U;
 
 static void PsAppUsbHost_ApplyPortKick(UINTPTR base_addr);
 static void PsAppUsbHost_PrintSlcrSummary(void);
@@ -475,6 +481,98 @@ static PsAppUsbHostState *PsAppUsbHost_GetState(void)
     return g_ps_usbhost_ctx->state;
 }
 
+static void PsAppUsbHost_ResetDeviceIdentity(PsAppUsbHostState *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    state->vendor_id = 0U;
+    state->product_id = 0U;
+    state->interface_number = 0U;
+    state->port_speed = 0U;
+    state->interface_class = 0U;
+    state->interface_subclass = 0U;
+    state->interface_protocol = 0U;
+    state->ep_in_addr = 0U;
+    state->ep_out_addr = 0U;
+}
+
+static u32 PsAppUsbHost_GetRecoverCooldownTicks(u8 attempt_no)
+{
+    u32 cooldown;
+    u32 cooldown_max;
+    u8 idx;
+
+    cooldown = PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE;
+    if (cooldown == 0U) {
+        cooldown = 1U;
+    }
+
+    cooldown_max = PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX;
+    if (cooldown_max < cooldown) {
+        cooldown_max = cooldown;
+    }
+
+    if (attempt_no <= 1U) {
+        return cooldown;
+    }
+
+    for (idx = 1U; idx < attempt_no; ++idx) {
+        if (cooldown >= cooldown_max) {
+            return cooldown_max;
+        }
+        if (cooldown > (cooldown_max >> 1U)) {
+            cooldown = cooldown_max;
+        } else {
+            cooldown <<= 1U;
+        }
+    }
+
+    if (cooldown > cooldown_max) {
+        cooldown = cooldown_max;
+    }
+    return cooldown;
+}
+
+static void PsAppUsbHost_ForceLogicalDetach(const char *reason)
+{
+    PsAppUsbHostState *state;
+    u8 had_binding = 0U;
+
+    state = PsAppUsbHost_GetState();
+    if (state != NULL) {
+        had_binding = ((state->device_present != 0U) ||
+                       (state->xbox_interface_active != 0U)) ? 1U : 0U;
+    }
+    if ((had_binding == 0U) && (g_ps_active_xbox != NULL)) {
+        had_binding = 1U;
+    }
+
+    if (state != NULL) {
+        state->device_present = 0U;
+        state->xbox_interface_active = 0U;
+        PsAppUsbHost_ResetDeviceIdentity(state);
+        if ((had_binding != 0U) && (state->detach_count < 0xFFFFFFFFU)) {
+            state->detach_count++;
+        }
+    }
+
+    g_ps_active_xbox = NULL;
+    g_ps_usbhost_no_report_ticks = 0U;
+    g_ps_usbhost_enum_observe_ticks = 0U;
+    g_ps_usbhost_stale_detach_ticks = 0U;
+
+    if ((g_ps_usbhost_ctx != NULL) && (g_ps_usbhost_ctx->input != NULL)) {
+        PsAppInput_OnUsbDetached(g_ps_usbhost_ctx->input);
+    }
+
+    if (had_binding != 0U) {
+        xil_printf("[USBH] forced logical detach (%s)\r\n",
+                   (reason != NULL) ? reason : "unknown");
+    }
+}
+
 static void PsAppUsbHost_RequestRootHubScan(void)
 {
     struct usbh_bus *bus;
@@ -673,11 +771,19 @@ static void PsAppUsbHost_OnEvent(u8 busid, u8 hub_index, u8 hub_port, u8 intf, u
             state->device_present = 1U;
             state->attach_count++;
             g_ps_usbhost_recover_attempts = 0U;
+            g_ps_usbhost_recover_cooldown = 0U;
+            g_ps_usbhost_enum_observe_ticks = 0U;
+            g_ps_usbhost_stale_detach_ticks = 0U;
             break;
         case USBH_EVENT_DEVICE_DISCONNECTED:
             state->device_present = 0U;
             state->detach_count++;
+            PsAppUsbHost_ResetDeviceIdentity(state);
             g_ps_usbhost_recover_attempts = 0U;
+            g_ps_usbhost_recover_cooldown = 0U;
+            g_ps_usbhost_enum_observe_ticks = 0U;
+            g_ps_usbhost_stale_detach_ticks = 0U;
+            g_ps_usbhost_no_report_ticks = 0U;
             break;
         case USBH_EVENT_DEVICE_CONFIGURED:
             if (hport != NULL) {
@@ -686,6 +792,8 @@ static void PsAppUsbHost_OnEvent(u8 busid, u8 hub_index, u8 hub_port, u8 intf, u
                 state->port_speed = hport->speed;
             }
             g_ps_usbhost_recover_attempts = 0U;
+            g_ps_usbhost_recover_cooldown = 0U;
+            g_ps_usbhost_enum_observe_ticks = 0U;
             break;
         default:
             break;
@@ -848,8 +956,13 @@ void usbh_xbox_stop(struct usbh_xbox *xbox_class)
     state = PsAppUsbHost_GetState();
     if (state != NULL) {
         state->xbox_interface_active = 0U;
+        if (state->device_present == 0U) {
+            PsAppUsbHost_ResetDeviceIdentity(state);
+        }
     }
     g_ps_usbhost_no_report_ticks = 0U;
+    g_ps_usbhost_enum_observe_ticks = 0U;
+    g_ps_usbhost_stale_detach_ticks = 0U;
 
     if (g_ps_active_xbox == xbox_class) {
         g_ps_active_xbox = NULL;
@@ -889,9 +1002,18 @@ XStatus PsAppUsbHost_Init(PsAppUsbHostContext *ctx)
     state->in_report_error_count = 0U;
     state->out_report_count = 0U;
     state->out_report_error_count = 0U;
+    state->device_present = 0U;
+    state->xbox_interface_active = 0U;
+    PsAppUsbHost_ResetDeviceIdentity(state);
+    g_ps_active_xbox = NULL;
     g_ps_usbhost_no_report_ticks = 0U;
     g_ps_usbhost_startup_sideband_log_count = 0U;
     g_ps_usbhost_retry_sideband_log_count = 0U;
+    g_ps_usbhost_phy_connected = 0U;
+    g_ps_usbhost_phy_raw_ccs = 0U;
+    g_ps_usbhost_phy_stable_ticks = 0U;
+    g_ps_usbhost_enum_observe_ticks = 0U;
+    g_ps_usbhost_stale_detach_ticks = 0U;
 
     PsAppUsbHost_ForceSlcrUsb0Config();
     PsAppUsbHost_PulsePhyReset();
@@ -908,6 +1030,8 @@ XStatus PsAppUsbHost_Init(PsAppUsbHostContext *ctx)
     PsAppUsbHost_ApplyPortKick((UINTPTR)PS_APP_USBHOST_BASE_ADDR);
     (void)PsAppUsbHost_SetVbusDriveByBase((UINTPTR)PS_APP_USBHOST_BASE_ADDR, 1U);
     g_ps_usbhost_last_portsc = Xil_In32((UINTPTR)PS_APP_USBHOST_BASE_ADDR + XUSBPS_PORTSCR1_OFFSET);
+    g_ps_usbhost_phy_raw_ccs = ((g_ps_usbhost_last_portsc & XUSBPS_PORTSCR_CCS_MASK) != 0U) ? 1U : 0U;
+    g_ps_usbhost_phy_connected = g_ps_usbhost_phy_raw_ccs;
     g_ps_usbhost_force_scan_pending = 1U;
     g_ps_usbhost_recover_cooldown = 0U;
     g_ps_usbhost_recover_attempts = 0U;
@@ -922,6 +1046,13 @@ void PsAppUsbHost_Service(PsAppUsbHostContext *ctx)
     PsAppUsbHostState *state;
     u32 portsc;
     u32 changed_bits;
+    u8 raw_ccs;
+    u32 debounce_ticks;
+    u8 logical_present;
+    u8 logical_active;
+    u32 enum_observe_threshold;
+    u32 stale_detach_threshold;
+    u32 scan_retry_ticks;
 
     if ((ctx != NULL) && (g_ps_usbhost_ctx == NULL)) {
         g_ps_usbhost_ctx = ctx;
@@ -941,6 +1072,19 @@ void PsAppUsbHost_Service(PsAppUsbHostContext *ctx)
         g_ps_usbhost_recover_cooldown--;
     }
 
+    enum_observe_threshold = PS_APP_USBHOST_ENUM_OBSERVE_TICKS;
+    if (enum_observe_threshold == 0U) {
+        enum_observe_threshold = 1U;
+    }
+    stale_detach_threshold = PS_APP_USBHOST_STALE_DETACH_TICKS;
+    if (stale_detach_threshold == 0U) {
+        stale_detach_threshold = 1U;
+    }
+    scan_retry_ticks = PS_APP_USBHOST_SCAN_RETRY_TICKS;
+    if (scan_retry_ticks == 0U) {
+        scan_retry_ticks = 1U;
+    }
+
     portsc = Xil_In32((UINTPTR)PS_APP_USBHOST_BASE_ADDR + XUSBPS_PORTSCR1_OFFSET);
     if ((portsc & XUSBPS_PORTSCR_PHCD_MASK) != 0U) {
         PsAppUsbHost_ApplyPortKick((UINTPTR)PS_APP_USBHOST_BASE_ADDR);
@@ -953,22 +1097,87 @@ void PsAppUsbHost_Service(PsAppUsbHostContext *ctx)
         PsAppUsbHost_RequestRootHubScan();
     }
 
-    if (((portsc & XUSBPS_PORTSCR_CCS_MASK) != 0U) &&
-        (state->device_present == 0U) &&
-        (state->xbox_interface_active == 0U) &&
-        (g_ps_usbhost_recover_cooldown == 0U) &&
-        (g_ps_usbhost_recover_attempts < PS_APP_USBHOST_ENUM_MAX_RETRY)) {
-        XStatus rst_status;
-
-        rst_status = PsAppUsbHost_PortReset(g_ps_usbhost_ctx);
-        if (rst_status != XST_SUCCESS) {
-            PsAppUsbHost_RequestRootHubScan();
+    raw_ccs = ((portsc & XUSBPS_PORTSCR_CCS_MASK) != 0U) ? 1U : 0U;
+    if (raw_ccs == g_ps_usbhost_phy_raw_ccs) {
+        if (g_ps_usbhost_phy_stable_ticks < 0xFFFFFFFFU) {
+            g_ps_usbhost_phy_stable_ticks++;
         }
-        g_ps_usbhost_recover_attempts++;
-        g_ps_usbhost_recover_cooldown = PS_APP_USBHOST_ENUM_RETRY_COOLDOWN;
-        xil_printf("[USBH] enumerate recovery retry=%u status=%d\r\n",
-                   (unsigned int)g_ps_usbhost_recover_attempts,
-                   (int)rst_status);
+    } else {
+        g_ps_usbhost_phy_raw_ccs = raw_ccs;
+        g_ps_usbhost_phy_stable_ticks = 0U;
+    }
+
+    debounce_ticks = (raw_ccs != 0U) ?
+                     (u32)PS_APP_USBHOST_CONNECT_DEBOUNCE_TICKS :
+                     (u32)PS_APP_USBHOST_DISCONNECT_DEBOUNCE_TICKS;
+    if (debounce_ticks == 0U) {
+        debounce_ticks = 1U;
+    }
+
+    if ((g_ps_usbhost_phy_connected != raw_ccs) &&
+        (g_ps_usbhost_phy_stable_ticks >= debounce_ticks)) {
+        g_ps_usbhost_phy_connected = raw_ccs;
+        g_ps_usbhost_enum_observe_ticks = 0U;
+        g_ps_usbhost_stale_detach_ticks = 0U;
+        g_ps_usbhost_recover_attempts = 0U;
+        g_ps_usbhost_recover_cooldown = 0U;
+        PsAppUsbHost_RequestRootHubScan();
+        xil_printf("[USBH] physical %s stable (debounce=%u)\r\n",
+                   (raw_ccs != 0U) ? "connect" : "disconnect",
+                   (unsigned int)debounce_ticks);
+    }
+
+    logical_present = (state->device_present != 0U) ? 1U : 0U;
+    logical_active = ((state->xbox_interface_active != 0U) ||
+                      (g_ps_active_xbox != NULL)) ? 1U : 0U;
+
+    if (g_ps_usbhost_phy_connected != 0U) {
+        g_ps_usbhost_stale_detach_ticks = 0U;
+
+        if ((logical_present != 0U) || (logical_active != 0U)) {
+            g_ps_usbhost_enum_observe_ticks = 0U;
+        } else {
+            XStatus rst_status;
+
+            if (g_ps_usbhost_enum_observe_ticks < 0xFFFFFFFFU) {
+                g_ps_usbhost_enum_observe_ticks++;
+            }
+
+            if ((g_ps_usbhost_enum_observe_ticks % scan_retry_ticks) == 0U) {
+                PsAppUsbHost_RequestRootHubScan();
+            }
+
+            if ((g_ps_usbhost_enum_observe_ticks >= enum_observe_threshold) &&
+                (g_ps_usbhost_recover_cooldown == 0U) &&
+                (g_ps_usbhost_recover_attempts < PS_APP_USBHOST_ENUM_MAX_RETRY)) {
+                rst_status = PsAppUsbHost_PortReset(g_ps_usbhost_ctx);
+                if (rst_status != XST_SUCCESS) {
+                    PsAppUsbHost_RequestRootHubScan();
+                }
+                g_ps_usbhost_recover_attempts++;
+                g_ps_usbhost_recover_cooldown =
+                    PsAppUsbHost_GetRecoverCooldownTicks(g_ps_usbhost_recover_attempts);
+                g_ps_usbhost_enum_observe_ticks = 0U;
+                xil_printf("[USBH] enumerate recovery retry=%u status=%d cooldown=%u\r\n",
+                           (unsigned int)g_ps_usbhost_recover_attempts,
+                           (int)rst_status,
+                           (unsigned int)g_ps_usbhost_recover_cooldown);
+            }
+        }
+    } else {
+        g_ps_usbhost_enum_observe_ticks = 0U;
+        if ((logical_present != 0U) || (logical_active != 0U)) {
+            if (g_ps_usbhost_stale_detach_ticks < 0xFFFFFFFFU) {
+                g_ps_usbhost_stale_detach_ticks++;
+            }
+            if (g_ps_usbhost_stale_detach_ticks >= stale_detach_threshold) {
+                PsAppUsbHost_ForceLogicalDetach("physical disconnect watchdog");
+                g_ps_usbhost_stale_detach_ticks = 0U;
+                PsAppUsbHost_RequestRootHubScan();
+            }
+        } else {
+            g_ps_usbhost_stale_detach_ticks = 0U;
+        }
     }
 
     if ((state->xbox_interface_active != 0U) &&
@@ -1066,6 +1275,14 @@ void PsAppUsbHost_PrintStatus(const PsAppUsbHostContext *ctx)
                (unsigned int)state->in_report_error_count,
                (unsigned int)state->out_report_count,
                (unsigned int)state->out_report_error_count);
+    xil_printf("[USBH] phy debounced=%u raw=%u stable=%u enum_wait=%u detach_wait=%u retry=%u cooldown=%u\r\n",
+               (unsigned int)g_ps_usbhost_phy_connected,
+               (unsigned int)g_ps_usbhost_phy_raw_ccs,
+               (unsigned int)g_ps_usbhost_phy_stable_ticks,
+               (unsigned int)g_ps_usbhost_enum_observe_ticks,
+               (unsigned int)g_ps_usbhost_stale_detach_ticks,
+               (unsigned int)g_ps_usbhost_recover_attempts,
+               (unsigned int)g_ps_usbhost_recover_cooldown);
 
     if (state->initialized != 0U) {
         PsAppUsbHost_PrintSlcrSummary();

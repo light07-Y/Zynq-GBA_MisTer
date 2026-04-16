@@ -33,7 +33,26 @@
   - 发送 XInput 风格震动输出包（优先验证 OUT 通道）。
 - 既有命令 `input status`/`input inject` 仍可用于解析链路验证。
 
-## 5. 已完成与未完成
+## 5. 热插拔鲁棒性策略（新增）
+
+为减少“插上不识别 / 拔掉后逻辑未释放 / 抖动导致反复复位”，`UsbHost` 侧新增了行业常见的分层策略：
+
+1. 物理层去抖：对 `PORTSC.CCS` 的连接/断开分别做稳定窗口确认，再触发后续动作。
+2. 枚举观察窗口：检测到稳定连接后，先进行 root hub 扫描与观察，不立即做端口复位。
+3. 分级恢复 + 退避：超时仍未枚举时才执行 `PortReset`，并采用指数退避冷却，避免抖动期反复 reset。
+4. 断开兜底：若物理层已稳定断开但上层事件漏报，超时后主动执行逻辑 detach，防止按键状态“卡住”。
+
+可在 `Common/Inc/ps_project_config.h` 调整阈值：
+
+- `PS_APP_USBHOST_CONNECT_DEBOUNCE_TICKS`
+- `PS_APP_USBHOST_DISCONNECT_DEBOUNCE_TICKS`
+- `PS_APP_USBHOST_ENUM_OBSERVE_TICKS`
+- `PS_APP_USBHOST_SCAN_RETRY_TICKS`
+- `PS_APP_USBHOST_STALE_DETACH_TICKS`
+- `PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE_TICKS`
+- `PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX_TICKS`
+
+## 6. 已完成与未完成
 
 已完成：
 
@@ -46,7 +65,7 @@
 2. 实机 `interrupt in` 连续收包稳定性。
 3. 实机 `usb rumble` 的设备响应一致性。
 
-## 6. 推荐上板验证步骤
+## 7. 推荐上板验证步骤
 
 1. 上电后串口执行 `usb status`，确认 `init=1`、`irq=1`。
 2. 插入接收器并连接手柄，重复 `usb status`，确认 `dev=1`、`xbox=1`、`in_ok` 持续增长。
