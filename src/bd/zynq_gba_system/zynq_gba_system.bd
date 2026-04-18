@@ -3985,8 +3985,8 @@
       "hdmi_rgb_pack": {
         "vlnv": "xilinx.com:ip:axis_subset_converter:1.1",
         "ip_revision": "36",
-        "xci_name": "zynq_gba_system_hdmi_rgb_pack_23",
-        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_23\\zynq_gba_system_hdmi_rgb_pack_23.xci",
+        "xci_name": "zynq_gba_system_hdmi_rgb_pack_25",
+        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_25\\zynq_gba_system_hdmi_rgb_pack_25.xci",
         "inst_hier_path": "hdmi_rgb_pack",
         "has_run_ip_tcl": "true",
         "parameters": {

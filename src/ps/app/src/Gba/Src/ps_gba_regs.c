@@ -14,6 +14,13 @@ u32 PsGbaRegs_Read(PsGbaRegs *ctx, u32 reg_offset) {
     return Xil_In32(ctx->base_addr + reg_offset);
 }
 
+void PsGbaRegs_Write(PsGbaRegs *ctx, u32 reg_offset, u32 value) {
+    if (ctx == 0) {
+        return;
+    }
+    Xil_Out32(ctx->base_addr + reg_offset, value);
+}
+
 void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
                             u32 ctrl,
                             u32 keys,
@@ -24,6 +31,7 @@ void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
         return;
     }
 
+    ctrl &= GBA_CTRL_VALID_MASK;
     Xil_Out32(ctx->base_addr + GBA_REG_CTRL, ctrl);
     Xil_Out32(ctx->base_addr + GBA_REG_KEYS, keys & 0x3FFU);
     Xil_Out32(ctx->base_addr + GBA_REG_MAX_PAK_ADDR, max_pak_addr & 0x1FFFFFFU);
@@ -40,7 +48,7 @@ void PsGbaRegs_ApplyBootDefaults(PsGbaRegs *ctx) {
         return;
     }
 
-    ctrl = PsGbaRegs_Read(ctx, GBA_REG_CTRL);
+    ctrl = PsGbaRegs_Read(ctx, GBA_REG_CTRL) & GBA_CTRL_VALID_MASK;
     ctrl |= (GBA_CTRL_CORE_ON | GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN);
 
     PsGbaRegs_CommitConfig(ctx,
@@ -136,4 +144,179 @@ XStatus PsGbaRegs_WriteBiosWord(PsGbaRegs *ctx,
     }
 
     return XST_FAILURE;
+}
+
+static u32 PsGbaRegs_ReadStateCtrlBase(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    ctrl = PsGbaRegs_Read(ctx, GBA_REG_STATE_CTRL);
+    ctrl &= ~(GBA_STATE_CTRL_SAVE_TRIG | GBA_STATE_CTRL_LOAD_TRIG);
+    return ctrl;
+}
+
+static u32 PsGbaRegs_ReadCheatCtrlBase(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    ctrl = PsGbaRegs_Read(ctx, GBA_REG_CHEAT_CTRL);
+    ctrl &= ~(GBA_CHEAT_CTRL_CLEAR_TRIG | GBA_CHEAT_CTRL_PUSH_TRIG);
+    return ctrl;
+}
+
+void PsGbaRegs_SetStateSlot(PsGbaRegs *ctx, u32 slot) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadStateCtrlBase(ctx);
+    ctrl &= ~GBA_STATE_CTRL_SLOT_MASK;
+    ctrl |= (slot & GBA_STATE_CTRL_SLOT_MASK);
+    PsGbaRegs_Write(ctx, GBA_REG_STATE_CTRL, ctrl);
+}
+
+void PsGbaRegs_SetRewindControl(PsGbaRegs *ctx, u32 enable, u32 active) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadStateCtrlBase(ctx);
+    ctrl &= ~(GBA_STATE_CTRL_REWIND_ENABLE | GBA_STATE_CTRL_REWIND_ACTIVE);
+    if ((enable & 0x1U) != 0U) {
+        ctrl |= GBA_STATE_CTRL_REWIND_ENABLE;
+    }
+    if ((active & 0x1U) != 0U) {
+        ctrl |= GBA_STATE_CTRL_REWIND_ACTIVE;
+    }
+    PsGbaRegs_Write(ctx, GBA_REG_STATE_CTRL, ctrl);
+}
+
+void PsGbaRegs_TriggerSaveState(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadStateCtrlBase(ctx);
+    ctrl |= GBA_STATE_CTRL_SAVE_TRIG;
+    PsGbaRegs_Write(ctx, GBA_REG_STATE_CTRL, ctrl);
+}
+
+void PsGbaRegs_TriggerLoadState(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadStateCtrlBase(ctx);
+    ctrl |= GBA_STATE_CTRL_LOAD_TRIG;
+    PsGbaRegs_Write(ctx, GBA_REG_STATE_CTRL, ctrl);
+}
+
+void PsGbaRegs_SetCheatEnable(PsGbaRegs *ctx, u32 enable) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadCheatCtrlBase(ctx);
+    ctrl &= ~GBA_CHEAT_CTRL_ENABLE;
+    if ((enable & 0x1U) != 0U) {
+        ctrl |= GBA_CHEAT_CTRL_ENABLE;
+    }
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_CTRL, ctrl);
+}
+
+void PsGbaRegs_TriggerCheatClear(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadCheatCtrlBase(ctx);
+    ctrl |= GBA_CHEAT_CTRL_CLEAR_TRIG;
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_CTRL, ctrl);
+}
+
+void PsGbaRegs_TriggerCheatPush(PsGbaRegs *ctx) {
+    u32 ctrl;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_ReadCheatCtrlBase(ctx);
+    ctrl |= GBA_CHEAT_CTRL_PUSH_TRIG;
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_CTRL, ctrl);
+}
+
+void PsGbaRegs_SetCheatWords(PsGbaRegs *ctx, u32 w0, u32 w1, u32 w2, u32 w3) {
+    if (ctx == 0) {
+        return;
+    }
+
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_WORD0, w0);
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_WORD1, w1);
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_WORD2, w2);
+    PsGbaRegs_Write(ctx, GBA_REG_CHEAT_WORD3, w3);
+}
+
+void PsGbaRegs_PushCheatWords(PsGbaRegs *ctx, u32 w0, u32 w1, u32 w2, u32 w3) {
+    PsGbaRegs_SetCheatWords(ctx, w0, w1, w2, w3);
+    PsGbaRegs_TriggerCheatPush(ctx);
+}
+
+void PsGbaRegs_SetRtcSavedState(PsGbaRegs *ctx, u32 timestamp_saved, u64 saved_time, u32 loaded) {
+    u32 lo;
+    u32 hi;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    lo = (u32)(saved_time & 0xFFFFFFFFULL);
+    hi = (u32)((saved_time >> 32U) & 0x3FFULL);
+    if ((loaded & 0x1U) != 0U) {
+        hi |= (1U << 10);
+    }
+
+    PsGbaRegs_Write(ctx, GBA_REG_RTC_SAVED_TS, timestamp_saved);
+    PsGbaRegs_Write(ctx, GBA_REG_RTC_SAVEDTIME_LO, lo);
+    PsGbaRegs_Write(ctx, GBA_REG_RTC_SAVEDTIME_HI, hi);
+}
+
+void PsGbaRegs_SetSensorState(PsGbaRegs *ctx, u32 solar, s8 tilt_x, s8 tilt_y) {
+    u32 sensor;
+
+    if (ctx == 0) {
+        return;
+    }
+
+    sensor = (solar & 0x7U);
+    sensor |= (((u32)(u8)tilt_x) & 0xFFU) << 8;
+    sensor |= (((u32)(u8)tilt_y) & 0xFFU) << 16;
+    PsGbaRegs_Write(ctx, GBA_REG_SENSOR, sensor);
+}
+
+u32 PsGbaRegs_ReadFeatureStatus(PsGbaRegs *ctx) {
+    return PsGbaRegs_Read(ctx, GBA_REG_FEATURE_STATUS);
+}
+
+u32 PsGbaRegs_ReadRtcTimestampOut(PsGbaRegs *ctx) {
+    return PsGbaRegs_Read(ctx, GBA_REG_RTC_OUT_TIMESTAMP);
+}
+
+u64 PsGbaRegs_ReadRtcSavedTimeOut(PsGbaRegs *ctx) {
+    u32 lo;
+    u32 hi;
+
+    lo = PsGbaRegs_Read(ctx, GBA_REG_RTC_OUT_SAVEDTIME_LO);
+    hi = PsGbaRegs_Read(ctx, GBA_REG_RTC_OUT_SAVEDTIME_HI) & 0x3FFU;
+    return (((u64)hi) << 32U) | ((u64)lo);
 }

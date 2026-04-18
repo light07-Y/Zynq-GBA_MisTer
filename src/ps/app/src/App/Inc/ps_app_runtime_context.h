@@ -48,6 +48,9 @@ typedef struct PsAppRuntimeContext {
     PsAppRomState *rom;
     PsAppSaveState *save;
     PsAppDiagState *diag;
+    PsAppStateFeatureConfig *state_feature;
+    PsAppRtcPersistState *rtc;
+    PsAppSensorState *sensor;
     PsAppUsbHostState *usb_host;
     PsAppInputState *input;
     PsAppHdmiLinkState *hdmi;

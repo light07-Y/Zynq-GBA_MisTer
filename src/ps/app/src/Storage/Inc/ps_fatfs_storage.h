@@ -42,6 +42,10 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
                                         u32 bytes_to_write,
                                         PsFatFsStorageWriteResult *result_out);
 
+XStatus PsFatFsStorage_QueryFileSize(const char *path,
+                                     u32 *size_bytes_out,
+                                     FRESULT *fs_result_out);
+
 XStatus PsFatFsStorage_EnsureDirectory(const char *path);
 
 const char *PsFatFsStorage_StrError(FRESULT result);

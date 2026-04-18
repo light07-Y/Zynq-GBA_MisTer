@@ -15,6 +15,10 @@ void PsAppVideo_AttemptRecover(PsAppVideoContext *ctx, u32 vdma_status, u32 vdma
 void PsAppVideo_SyncDisplayFrame(PsAppVideoContext *ctx);
 XStatus PsAppVideo_RenderBootFrames(PsAppVideoContext *ctx);
 void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx);
+void PsAppVideo_SetInterframeMode(PsAppVideoContext *ctx, u32 mode);
+void PsAppVideo_SetShadeMode(PsAppVideoContext *ctx, u32 mode);
+u32 PsAppVideo_GetInterframeMode(const PsAppVideoContext *ctx);
+u32 PsAppVideo_GetShadeMode(const PsAppVideoContext *ctx);
 
 u32 PsAppVideo_DefaultCaptureBuffer(PsAppVideoContext *ctx);
 u32 PsAppVideo_DefaultFrameIndex(PsAppVideoContext *ctx);

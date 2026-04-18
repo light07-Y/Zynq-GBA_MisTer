@@ -38,6 +38,23 @@ typedef struct {
     u8 volume;
 } PsAppAudioState;
 
+typedef enum {
+    PS_APP_VIDEO_INTERFRAME_OFF = 0U,
+    PS_APP_VIDEO_INTERFRAME_BLEND = 1U,
+    PS_APP_VIDEO_INTERFRAME_30HZ = 2U
+} PsAppVideoInterframeMode;
+
+typedef struct {
+    u8 interframe_mode;
+    u8 shade_mode;
+    u8 non_eq_hd2x_hint;
+    u8 non_eq_maxpixels_hint;
+    u8 frame30_phase;
+    u8 prev_capture_valid;
+    u8 reserved0;
+    u8 reserved1;
+} PsAppVideoFxConfig;
+
 typedef struct {
     volatile u8 display_frame_idx;
     volatile u8 pending_frame_idx;
@@ -54,7 +71,66 @@ typedef struct {
     u32 blit_total_us;
     u32 blit_seq_gap_max;
     u32 blit_seq_glitch_drop;
+    PsAppVideoFxConfig fx;
 } PsAppVideoState;
+
+typedef enum {
+    PS_APP_STATE_IO_IDLE = 0U,
+    PS_APP_STATE_IO_SAVE_WAIT_BUSY = 1U,
+    PS_APP_STATE_IO_SAVE_WAIT_DONE = 2U,
+    PS_APP_STATE_IO_LOAD_WAIT_BUSY = 3U,
+    PS_APP_STATE_IO_LOAD_WAIT_DONE = 4U
+} PsAppStateIoPhase;
+
+typedef struct {
+    u8 slot;
+    u8 rewind_enable;
+    u8 rewind_active;
+    u8 cheats_enabled;
+    u8 save_pending;
+    u8 load_pending;
+    u8 cheat_push_pending;
+    u8 cheat_clear_pending;
+    u8 io_phase;
+    u8 io_busy_seen;
+    u8 io_last_result;
+    u8 reserved0;
+    u32 feature_status;
+    u32 io_wait_ticks;
+    u32 io_timeout_ticks;
+    u32 save_file_count;
+    u32 load_file_count;
+    u32 io_error_count;
+    u32 cheat_words[4];
+    char last_state_path[PS_APP_ROM_PATH_MAX_CHARS];
+} PsAppStateFeatureConfig;
+
+typedef struct {
+    u8 loaded;
+    u8 in_use;
+    u8 dirty;
+    u8 reserved0;
+    u32 save_interval_ticks;
+    u32 save_countdown;
+    u32 timestamp_saved;
+    u64 saved_time;
+    u32 last_timestamp_out;
+    u64 last_savedtime_out;
+    char path[PS_APP_ROM_PATH_MAX_CHARS];
+} PsAppRtcPersistState;
+
+typedef struct {
+    u8 solar;
+    s8 tilt_x;
+    s8 tilt_y;
+    u8 rumble_enabled;
+    u8 rumble_active;
+    u8 rumble_strength;
+    u8 rumble_dirty;
+    u8 reserved0;
+    u32 rumble_change_count;
+    u32 sensor_update_count;
+} PsAppSensorState;
 
 typedef struct {
     u8 initialized;

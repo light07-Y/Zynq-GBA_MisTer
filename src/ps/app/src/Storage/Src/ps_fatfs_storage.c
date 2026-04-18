@@ -172,7 +172,26 @@ XStatus PsFatFsStorage_ReadFileToMemoryEx(const char *path,
     }
 
     file_size = f_size(&file);
+    if (result_out != NULL) {
+        /*
+         * 这里提前回填“文件真实大小”，即使后续因容量不匹配失败也保留给上层：
+         * 上层可据此区分 empty / oversize / 其他 IO 错误，避免只看到统一失败码。
+         */
+        if (file_size > (FSIZE_t)0xFFFFFFFFU) {
+            result_out->bytes_loaded = 0xFFFFFFFFU;
+        } else {
+            result_out->bytes_loaded = (u32)file_size;
+        }
+    }
+
     if ((file_size == 0U) || (file_size > (FSIZE_t)capacity_bytes)) {
+        if (result_out != NULL) {
+            /*
+             * 约定：对象存在但尺寸/布局不符合调用者预期时，返回 FR_INVALID_OBJECT。
+             * 这样上层可把“路径存在但格式不对”与 “FR_NO_FILE/FR_NO_PATH”分开处理。
+             */
+            result_out->fs_result = FR_INVALID_OBJECT;
+        }
         (void)f_close(&file);
         goto cleanup;
     }
@@ -395,30 +414,90 @@ cleanup:
     return status;
 }
 
-XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
-    FILINFO info;
+XStatus PsFatFsStorage_QueryFileSize(const char *path,
+                                     u32 *size_bytes_out,
+                                     FRESULT *fs_result_out) {
+    FIL file;
+    FSIZE_t file_size;
     FRESULT fs_result;
     XStatus status;
 
-    if ((path == NULL) || (*path == '\0')) {
+    if ((path == NULL) || (*path == '\0') || (size_bytes_out == NULL)) {
         return XST_INVALID_PARAM;
+    }
+
+    *size_bytes_out = 0U;
+    if (fs_result_out != NULL) {
+        *fs_result_out = FR_INVALID_PARAMETER;
     }
 
     status = XST_FAILURE;
     PsFatFsStorage_Lock();
 
     fs_result = PsFatFsStorage_Mount();
+    if (fs_result_out != NULL) {
+        *fs_result_out = fs_result;
+    }
     if (fs_result != FR_OK) {
         goto cleanup;
     }
 
-    memset(&info, 0, sizeof(info));
-    fs_result = f_stat(path, &info);
-    if (fs_result == FR_OK) {
-        status = ((info.fattrib & AM_DIR) != 0U) ? XST_SUCCESS : XST_FAILURE;
+    memset(&file, 0, sizeof(file));
+    /*
+     * 防坑：这里故意不用 f_stat。
+     * 某些 BSP/FatFs 组合在目录存在、LFN/路径边界场景下，f_stat 稳定性较差，
+     * 会放大“偶发上下文污染”的风险。改为 f_open + f_size + f_close 更稳。
+     */
+    fs_result = f_open(&file, path, FA_READ);
+    if (fs_result_out != NULL) {
+        *fs_result_out = fs_result;
+    }
+    if (fs_result != FR_OK) {
         goto cleanup;
     }
-    if ((fs_result != FR_NO_FILE) && (fs_result != FR_NO_PATH)) {
+
+    file_size = f_size(&file);
+    fs_result = f_close(&file);
+    if (fs_result_out != NULL) {
+        *fs_result_out = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+#if (FF_FS_EXFAT != 0)
+    if (file_size > 0xFFFFFFFFULL) {
+        if (fs_result_out != NULL) {
+            *fs_result_out = FR_INVALID_OBJECT;
+        }
+        goto cleanup;
+    }
+#endif
+
+    *size_bytes_out = (u32)file_size;
+    status = XST_SUCCESS;
+
+cleanup:
+    PsFatFsStorage_Unlock();
+    return status;
+}
+
+XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
+    DIR dir;
+    FRESULT fs_result;
+    XStatus status;
+    u8 dir_opened;
+
+    if ((path == NULL) || (*path == '\0')) {
+        return XST_INVALID_PARAM;
+    }
+
+    status = XST_FAILURE;
+    dir_opened = 0U;
+    PsFatFsStorage_Lock();
+
+    fs_result = PsFatFsStorage_Mount();
+    if (fs_result != FR_OK) {
         goto cleanup;
     }
 
@@ -428,7 +507,22 @@ XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
         goto cleanup;
     }
 
+    /*
+     * f_mkdir 失败后再用 f_opendir 二次确认：
+     * 若目录已存在但返回码非 FR_EXIST（某些介质/时序下会出现），
+     * 仍可判定“目录可用”，避免误报失败。
+     */
+    memset(&dir, 0, sizeof(dir));
+    fs_result = f_opendir(&dir, path);
+    if (fs_result == FR_OK) {
+        dir_opened = 1U;
+        status = XST_SUCCESS;
+    }
+
 cleanup:
+    if (dir_opened != 0U) {
+        (void)f_closedir(&dir);
+    }
     PsFatFsStorage_Unlock();
     return status;
 }

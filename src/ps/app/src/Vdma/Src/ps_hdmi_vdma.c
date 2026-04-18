@@ -1,6 +1,7 @@
 #include "Vdma/Inc/ps_hdmi_vdma.h"
 
 #include "xil_cache.h"
+#include "xil_printf.h"
 
 static XStatus PsHdmiVdma_ValidateFrameIndex(const PsHdmiVdma *ctx, u32 frame_idx) {
     if ((ctx == 0) || (ctx->is_ready == 0U)) {
@@ -11,6 +12,26 @@ static XStatus PsHdmiVdma_ValidateFrameIndex(const PsHdmiVdma *ctx, u32 frame_id
         return XST_FAILURE;
     }
 
+    return XST_SUCCESS;
+}
+
+static XStatus PsHdmiVdma_ValidateGeometry(const PsHdmiVdma *ctx) {
+    if (ctx == 0) {
+        return XST_FAILURE;
+    }
+    if ((ctx->width == 0U) || (ctx->height == 0U)) {
+        return XST_FAILURE;
+    }
+    /* 防御式上限，避免异常内存污染把 blit 变成超大循环。 */
+    if ((ctx->width > 4096U) || (ctx->height > 2160U)) {
+        return XST_FAILURE;
+    }
+    if ((ctx->frame_count == 0U) || (ctx->frame_count > 8U)) {
+        return XST_FAILURE;
+    }
+    if (ctx->line_stride_bytes == 0U) {
+        return XST_FAILURE;
+    }
     return XST_SUCCESS;
 }
 
@@ -140,6 +161,15 @@ XStatus PsHdmiVdma_FillFrame(PsHdmiVdma *ctx, u32 frame_idx, u32 color_xrgb8888)
     if (status != XST_SUCCESS) {
         return status;
     }
+    status = PsHdmiVdma_ValidateGeometry(ctx);
+    if (status != XST_SUCCESS) {
+        xil_printf("[VDMA] fill frame rejected: bad geometry w=%u h=%u stride=%u count=%u\r\n",
+                   (unsigned int)ctx->width,
+                   (unsigned int)ctx->height,
+                   (unsigned int)ctx->line_stride_bytes,
+                   (unsigned int)ctx->frame_count);
+        return XST_FAILURE;
+    }
 
     fb32 = (u32 *)ctx->frame_addrs[frame_idx];
     pixel_count = ctx->width * ctx->height;
@@ -157,6 +187,14 @@ XStatus PsHdmiVdma_FillAllFrames(PsHdmiVdma *ctx, u32 color_xrgb8888) {
     XStatus status;
 
     if ((ctx == 0) || (ctx->is_ready == 0U)) {
+        return XST_FAILURE;
+    }
+    if (PsHdmiVdma_ValidateGeometry(ctx) != XST_SUCCESS) {
+        xil_printf("[VDMA] fill all rejected: bad geometry w=%u h=%u stride=%u count=%u\r\n",
+                   (unsigned int)ctx->width,
+                   (unsigned int)ctx->height,
+                   (unsigned int)ctx->line_stride_bytes,
+                   (unsigned int)ctx->frame_count);
         return XST_FAILURE;
     }
 

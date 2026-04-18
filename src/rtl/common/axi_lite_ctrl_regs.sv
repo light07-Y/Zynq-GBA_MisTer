@@ -80,7 +80,33 @@ module axi_lite_ctrl_regs #(
   output logic [11:0]          cfg_bios_wr_addr,
   output logic [31:0]          cfg_bios_wr_data,
   output logic                 cfg_bios_wr_req_toggle,
-  input  logic [31:0]          stat_bios_wr_ack_seq
+  input  logic [31:0]          stat_bios_wr_ack_seq,
+  output logic [1:0]           cfg_state_slot,
+  output logic                 cfg_state_save_toggle,
+  output logic                 cfg_state_load_toggle,
+  output logic                 cfg_rewind_enable,
+  output logic                 cfg_rewind_active,
+  output logic                 cfg_cheat_enable,
+  output logic                 cfg_cheat_clear_toggle,
+  output logic                 cfg_cheat_push_toggle,
+  output logic [31:0]          cfg_cheat_word0,
+  output logic [31:0]          cfg_cheat_word1,
+  output logic [31:0]          cfg_cheat_word2,
+  output logic [31:0]          cfg_cheat_word3,
+  output logic [31:0]          cfg_rtc_saved_timestamp,
+  output logic [31:0]          cfg_rtc_savedtime_lo,
+  output logic [9:0]           cfg_rtc_savedtime_hi,
+  output logic                 cfg_rtc_saved_loaded,
+  output logic [2:0]           cfg_sensor_solar,
+  output logic [7:0]           cfg_sensor_tilt_x,
+  output logic [7:0]           cfg_sensor_tilt_y,
+  input  logic                 stat_feature_load_done,
+  input  logic                 stat_feature_cheats_active,
+  input  logic                 stat_feature_rtc_inuse,
+  input  logic                 stat_feature_rumble,
+  input  logic [1:0]           stat_feature_busy,
+  input  logic [31:0]          stat_rtc_timestamp_out,
+  input  logic [41:0]          stat_rtc_savedtime_out
 );
 
   localparam logic [ADDR_W-1:0] REG_CTRL            = 12'h000;
@@ -132,6 +158,20 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_BIOS_WR_DATA          = 12'h0B8;
   localparam logic [ADDR_W-1:0] REG_BIOS_WR_REQ           = 12'h0BC;
   localparam logic [ADDR_W-1:0] REG_BIOS_WR_ACK           = 12'h0C0;
+  localparam logic [ADDR_W-1:0] REG_STATE_CTRL            = 12'h0C4;
+  localparam logic [ADDR_W-1:0] REG_CHEAT_CTRL            = 12'h0C8;
+  localparam logic [ADDR_W-1:0] REG_CHEAT_WORD0           = 12'h0CC;
+  localparam logic [ADDR_W-1:0] REG_CHEAT_WORD1           = 12'h0D0;
+  localparam logic [ADDR_W-1:0] REG_CHEAT_WORD2           = 12'h0D4;
+  localparam logic [ADDR_W-1:0] REG_CHEAT_WORD3           = 12'h0D8;
+  localparam logic [ADDR_W-1:0] REG_RTC_SAVED_TS          = 12'h0DC;
+  localparam logic [ADDR_W-1:0] REG_RTC_SAVEDTIME_LO      = 12'h0E0;
+  localparam logic [ADDR_W-1:0] REG_RTC_SAVEDTIME_HI      = 12'h0E4;
+  localparam logic [ADDR_W-1:0] REG_SENSOR                = 12'h0E8;
+  localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS        = 12'h0EC;
+  localparam logic [ADDR_W-1:0] REG_RTC_OUT_TIMESTAMP     = 12'h0F0;
+  localparam logic [ADDR_W-1:0] REG_RTC_OUT_SAVEDTIME_LO  = 12'h0F4;
+  localparam logic [ADDR_W-1:0] REG_RTC_OUT_SAVEDTIME_HI  = 12'h0F8;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
@@ -140,6 +180,21 @@ module axi_lite_ctrl_regs #(
   logic [31:0] shadow_rtc_timestamp;
   logic [11:0] shadow_bios_wr_addr;
   logic [31:0] shadow_bios_wr_data;
+  logic [1:0]  shadow_state_slot;
+  logic        shadow_rewind_enable;
+  logic        shadow_rewind_active;
+  logic        shadow_cheat_enable;
+  logic [31:0] shadow_cheat_word0;
+  logic [31:0] shadow_cheat_word1;
+  logic [31:0] shadow_cheat_word2;
+  logic [31:0] shadow_cheat_word3;
+  logic [31:0] shadow_rtc_saved_timestamp;
+  logic [31:0] shadow_rtc_savedtime_lo;
+  logic [9:0]  shadow_rtc_savedtime_hi;
+  logic        shadow_rtc_saved_loaded;
+  logic [2:0]  shadow_sensor_solar;
+  logic [7:0]  shadow_sensor_tilt_x;
+  logic [7:0]  shadow_sensor_tilt_y;
   
   logic [31:0] irq_en;
   logic [1:0]  irq_sts; // [1] error, [0] vsync
@@ -191,9 +246,43 @@ module axi_lite_ctrl_regs #(
       cfg_bios_wr_addr     <= 12'd0;
       cfg_bios_wr_data     <= 32'd0;
       cfg_bios_wr_req_toggle <= 1'b0;
+      cfg_state_slot         <= 2'd0;
+      cfg_state_save_toggle  <= 1'b0;
+      cfg_state_load_toggle  <= 1'b0;
+      cfg_rewind_enable      <= 1'b0;
+      cfg_rewind_active      <= 1'b0;
+      cfg_cheat_enable       <= 1'b0;
+      cfg_cheat_clear_toggle <= 1'b0;
+      cfg_cheat_push_toggle  <= 1'b0;
+      cfg_cheat_word0        <= 32'd0;
+      cfg_cheat_word1        <= 32'd0;
+      cfg_cheat_word2        <= 32'd0;
+      cfg_cheat_word3        <= 32'd0;
+      cfg_rtc_saved_timestamp<= 32'd0;
+      cfg_rtc_savedtime_lo   <= 32'd0;
+      cfg_rtc_savedtime_hi   <= 10'd0;
+      cfg_rtc_saved_loaded   <= 1'b0;
+      cfg_sensor_solar       <= 3'd0;
+      cfg_sensor_tilt_x      <= 8'd0;
+      cfg_sensor_tilt_y      <= 8'd0;
 
       shadow_bios_wr_addr  <= 12'd0;
       shadow_bios_wr_data  <= 32'd0;
+      shadow_state_slot       <= 2'd0;
+      shadow_rewind_enable    <= 1'b0;
+      shadow_rewind_active    <= 1'b0;
+      shadow_cheat_enable     <= 1'b0;
+      shadow_cheat_word0      <= 32'd0;
+      shadow_cheat_word1      <= 32'd0;
+      shadow_cheat_word2      <= 32'd0;
+      shadow_cheat_word3      <= 32'd0;
+      shadow_rtc_saved_timestamp <= 32'd0;
+      shadow_rtc_savedtime_lo <= 32'd0;
+      shadow_rtc_savedtime_hi <= 10'd0;
+      shadow_rtc_saved_loaded <= 1'b0;
+      shadow_sensor_solar     <= 3'd0;
+      shadow_sensor_tilt_x    <= 8'd0;
+      shadow_sensor_tilt_y    <= 8'd0;
 
       irq_en               <= 32'h0;
       irq_sts              <= 2'b0;
@@ -273,6 +362,86 @@ module axi_lite_ctrl_regs #(
               cfg_bios_wr_req_toggle <= ~cfg_bios_wr_req_toggle;
             end
           end
+          REG_STATE_CTRL: begin
+            merged32 = apply_wstrb({22'd0,
+                                    shadow_rewind_active,
+                                    shadow_rewind_enable,
+                                    6'd0,
+                                    shadow_state_slot},
+                                   s_axi_wdata,
+                                   s_axi_wstrb[3:0]);
+            shadow_state_slot    <= merged32[1:0];
+            shadow_rewind_enable <= merged32[8];
+            shadow_rewind_active <= merged32[9];
+            cfg_state_slot       <= merged32[1:0];
+            cfg_rewind_enable    <= merged32[8];
+            cfg_rewind_active    <= merged32[9];
+            if (merged32[4]) begin
+              cfg_state_save_toggle <= ~cfg_state_save_toggle;
+            end
+            if (merged32[5]) begin
+              cfg_state_load_toggle <= ~cfg_state_load_toggle;
+            end
+          end
+          REG_CHEAT_CTRL: begin
+            merged32 = apply_wstrb({31'd0, shadow_cheat_enable}, s_axi_wdata, s_axi_wstrb[3:0]);
+            shadow_cheat_enable <= merged32[0];
+            cfg_cheat_enable    <= merged32[0];
+            if (merged32[1]) begin
+              cfg_cheat_clear_toggle <= ~cfg_cheat_clear_toggle;
+            end
+            if (merged32[2]) begin
+              cfg_cheat_push_toggle <= ~cfg_cheat_push_toggle;
+            end
+          end
+          REG_CHEAT_WORD0: begin
+            shadow_cheat_word0 <= apply_wstrb(shadow_cheat_word0, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_cheat_word0    <= apply_wstrb(cfg_cheat_word0, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_CHEAT_WORD1: begin
+            shadow_cheat_word1 <= apply_wstrb(shadow_cheat_word1, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_cheat_word1    <= apply_wstrb(cfg_cheat_word1, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_CHEAT_WORD2: begin
+            shadow_cheat_word2 <= apply_wstrb(shadow_cheat_word2, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_cheat_word2    <= apply_wstrb(cfg_cheat_word2, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_CHEAT_WORD3: begin
+            shadow_cheat_word3 <= apply_wstrb(shadow_cheat_word3, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_cheat_word3    <= apply_wstrb(cfg_cheat_word3, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_RTC_SAVED_TS: begin
+            shadow_rtc_saved_timestamp <= apply_wstrb(shadow_rtc_saved_timestamp, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_rtc_saved_timestamp    <= apply_wstrb(cfg_rtc_saved_timestamp, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_RTC_SAVEDTIME_LO: begin
+            shadow_rtc_savedtime_lo <= apply_wstrb(shadow_rtc_savedtime_lo, s_axi_wdata, s_axi_wstrb[3:0]);
+            cfg_rtc_savedtime_lo    <= apply_wstrb(cfg_rtc_savedtime_lo, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
+          REG_RTC_SAVEDTIME_HI: begin
+            merged32 = apply_wstrb({21'd0, shadow_rtc_saved_loaded, shadow_rtc_savedtime_hi},
+                                   s_axi_wdata,
+                                   s_axi_wstrb[3:0]);
+            shadow_rtc_savedtime_hi <= merged32[9:0];
+            shadow_rtc_saved_loaded <= merged32[10];
+            cfg_rtc_savedtime_hi    <= merged32[9:0];
+            cfg_rtc_saved_loaded    <= merged32[10];
+          end
+          REG_SENSOR: begin
+            merged32 = apply_wstrb({8'd0,
+                                    shadow_sensor_tilt_y,
+                                    shadow_sensor_tilt_x,
+                                    5'd0,
+                                    shadow_sensor_solar},
+                                   s_axi_wdata,
+                                   s_axi_wstrb[3:0]);
+            shadow_sensor_solar  <= merged32[2:0];
+            shadow_sensor_tilt_x <= merged32[15:8];
+            shadow_sensor_tilt_y <= merged32[23:16];
+            cfg_sensor_solar     <= merged32[2:0];
+            cfg_sensor_tilt_x    <= merged32[15:8];
+            cfg_sensor_tilt_y    <= merged32[23:16];
+          end
           REG_COMMIT: begin
             cfg_ctrl          <= shadow_ctrl;
             cfg_keys          <= shadow_keys;
@@ -335,6 +504,42 @@ module axi_lite_ctrl_regs #(
           REG_BIOS_WR_DATA:  rdata_next = shadow_bios_wr_data;
           REG_BIOS_WR_REQ:   rdata_next = {31'd0, cfg_bios_wr_req_toggle};
           REG_BIOS_WR_ACK:   rdata_next = stat_bios_wr_ack_seq;
+          REG_STATE_CTRL:    rdata_next = {22'd0,
+                                           cfg_rewind_active,
+                                           cfg_rewind_enable,
+                                           2'd0,
+                                           cfg_state_load_toggle,
+                                           cfg_state_save_toggle,
+                                           2'd0,
+                                           cfg_state_slot};
+          REG_CHEAT_CTRL:    rdata_next = {29'd0,
+                                           cfg_cheat_push_toggle,
+                                           cfg_cheat_clear_toggle,
+                                           cfg_cheat_enable};
+          REG_CHEAT_WORD0:   rdata_next = cfg_cheat_word0;
+          REG_CHEAT_WORD1:   rdata_next = cfg_cheat_word1;
+          REG_CHEAT_WORD2:   rdata_next = cfg_cheat_word2;
+          REG_CHEAT_WORD3:   rdata_next = cfg_cheat_word3;
+          REG_RTC_SAVED_TS:  rdata_next = cfg_rtc_saved_timestamp;
+          REG_RTC_SAVEDTIME_LO: rdata_next = cfg_rtc_savedtime_lo;
+          REG_RTC_SAVEDTIME_HI: rdata_next = {21'd0, cfg_rtc_saved_loaded, cfg_rtc_savedtime_hi};
+          REG_SENSOR:        rdata_next = {8'd0,
+                                           cfg_sensor_tilt_y,
+                                           cfg_sensor_tilt_x,
+                                           5'd0,
+                                           cfg_sensor_solar};
+          REG_FEATURE_STATUS: rdata_next = {22'd0,
+                                            stat_feature_busy,
+                                            2'd0,
+                                            cfg_rewind_active,
+                                            cfg_rewind_enable,
+                                            stat_feature_rumble,
+                                            stat_feature_rtc_inuse,
+                                            stat_feature_cheats_active,
+                                            stat_feature_load_done};
+          REG_RTC_OUT_TIMESTAMP:    rdata_next = stat_rtc_timestamp_out;
+          REG_RTC_OUT_SAVEDTIME_LO: rdata_next = stat_rtc_savedtime_out[31:0];
+          REG_RTC_OUT_SAVEDTIME_HI: rdata_next = {22'd0, stat_rtc_savedtime_out[41:32]};
           REG_DEBUG_CPU_PC:  rdata_next = stat_debug_cpu_pc;
           REG_DEBUG_CPU_MIX: rdata_next = stat_debug_cpu_mixed;
           REG_DEBUG_IRQ:     rdata_next = stat_debug_irq;

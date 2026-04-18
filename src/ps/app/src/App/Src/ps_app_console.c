@@ -15,6 +15,23 @@
 #include "UsbHost/Inc/ps_app_usbhost.h"
 #include "Video/Inc/ps_app_video.h"
 
+#if defined(INCLUDE_uxTaskGetStackHighWaterMark) && (INCLUDE_uxTaskGetStackHighWaterMark == 1)
+#define PS_APP_CONSOLE_HAS_STACK_HWM 1
+static UBaseType_t PsAppConsole_GetStackHwmWords(void) {
+    return uxTaskGetStackHighWaterMark(NULL);
+}
+#elif defined(INCLUDE_uxTaskGetStackHighWaterMark2) && (INCLUDE_uxTaskGetStackHighWaterMark2 == 1)
+#define PS_APP_CONSOLE_HAS_STACK_HWM 1
+static UBaseType_t PsAppConsole_GetStackHwmWords(void) {
+    return (UBaseType_t)uxTaskGetStackHighWaterMark2(NULL);
+}
+#else
+#define PS_APP_CONSOLE_HAS_STACK_HWM 0
+static UBaseType_t PsAppConsole_GetStackHwmWords(void) {
+    return 0U;
+}
+#endif
+
 static int PsAppConsole_ParseOnOff(const char *s, u32 *value_out) {
     if ((s == NULL) || (value_out == NULL)) {
         return -1;
@@ -44,6 +61,37 @@ static int PsAppConsole_ParseU32Value(const char *s, u32 *value_out) {
 
     *value_out = (u32)value;
     return 0;
+}
+
+static int PsAppConsole_ParseBlendMode(const char *s, u32 *mode_out) {
+    if ((s == NULL) || (mode_out == NULL)) {
+        return -1;
+    }
+    if ((strcmp(s, "off") == 0) || (strcmp(s, "0") == 0)) {
+        *mode_out = PS_APP_VIDEO_INTERFRAME_OFF;
+        return 0;
+    }
+    if ((strcmp(s, "on") == 0) || (strcmp(s, "1") == 0) || (strcmp(s, "blend") == 0)) {
+        *mode_out = PS_APP_VIDEO_INTERFRAME_BLEND;
+        return 0;
+    }
+    if ((strcmp(s, "30") == 0) || (strcmp(s, "30hz") == 0)) {
+        *mode_out = PS_APP_VIDEO_INTERFRAME_30HZ;
+        return 0;
+    }
+    return -1;
+}
+
+static const char *PsAppConsole_BlendModeName(u32 mode) {
+    switch ((PsAppVideoInterframeMode)mode) {
+        case PS_APP_VIDEO_INTERFRAME_BLEND:
+            return "blend";
+        case PS_APP_VIDEO_INTERFRAME_30HZ:
+            return "30hz";
+        case PS_APP_VIDEO_INTERFRAME_OFF:
+        default:
+            return "off";
+    }
 }
 static int PsAppConsole_KeyBitFromName(const char *name) {
     if (name == NULL) return -1;
@@ -325,6 +373,10 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  usb ulpi\r\n");
     xil_printf("  usb vbus on|off\r\n");
     xil_printf("  usb rumble <large 0-255> <small 0-255>\r\n");
+    xil_printf("  state status|slot <0-3>|save|load\r\n");
+    xil_printf("  rewind status|on|off|active on|off\r\n");
+    xil_printf("  cheat status|on|off|clear|push <w0> <w1> <w2> <w3>\r\n");
+    xil_printf("  video status|blend off|on|30|shade off|1|2|3|4\r\n");
     xil_printf("  rtc <hex>\r\n");
     xil_printf("  cycle <dec>\r\n");
     xil_printf("  maxpak <hex>\r\n");
@@ -755,6 +807,222 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         return;
     }
 
+    if (strcmp(cmd, "state") == 0) {
+        u32 feature_status;
+        u32 busy_state;
+
+        a1 = strtok(NULL, " \t");
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            feature_status = PsGbaRegs_ReadFeatureStatus(app->regs);
+            app->state_feature->feature_status = feature_status;
+            busy_state = (feature_status & GBA_FEATURE_STATUS_BUSY_MASK) >>
+                         GBA_FEATURE_STATUS_BUSY_SHIFT;
+            xil_printf("[CMD] state slot=%u save_pending=%u load_pending=%u load_done=%u busy=%u rewind=%u/%u io_phase=%u io_last=%u\r\n",
+                       (unsigned int)app->state_feature->slot,
+                       (unsigned int)app->state_feature->save_pending,
+                       (unsigned int)app->state_feature->load_pending,
+                       (unsigned int)((feature_status & GBA_FEATURE_STATUS_LOAD_DONE) != 0U),
+                       (unsigned int)busy_state,
+                       (unsigned int)app->state_feature->rewind_enable,
+                       (unsigned int)app->state_feature->rewind_active,
+                       (unsigned int)app->state_feature->io_phase,
+                       (unsigned int)app->state_feature->io_last_result);
+            xil_printf("[CMD] state io_wait=%u io_timeout=%u saves=%u loads=%u errs=%u path=%s\r\n",
+                       (unsigned int)app->state_feature->io_wait_ticks,
+                       (unsigned int)app->state_feature->io_timeout_ticks,
+                       (unsigned int)app->state_feature->save_file_count,
+                       (unsigned int)app->state_feature->load_file_count,
+                       (unsigned int)app->state_feature->io_error_count,
+                       app->state_feature->last_state_path[0] != '\0' ?
+                           app->state_feature->last_state_path : "(none)");
+            return;
+        }
+
+        if (strcmp(a1, "slot") == 0) {
+            a2 = strtok(NULL, " \t");
+            if ((a2 == NULL) || (PsAppConsole_ParseU32Value(a2, &v) != 0) ||
+                (v >= PS_APP_STATE_SLOT_COUNT)) {
+                xil_printf("[CMD] usage: state slot <0-%u>\r\n",
+                           (unsigned int)(PS_APP_STATE_SLOT_COUNT - 1U));
+                return;
+            }
+            app->state_feature->slot = (u8)v;
+            PsGbaRegs_SetStateSlot(app->regs, v);
+            xil_printf("[CMD] state slot=%u\r\n", (unsigned int)app->state_feature->slot);
+            return;
+        }
+
+        if (strcmp(a1, "save") == 0) {
+            if (app->rom->loaded == 0U) {
+                xil_printf("[CMD] state save ignored: no ROM loaded\r\n");
+                return;
+            }
+            app->state_feature->save_pending = 1U;
+            xil_printf("[CMD] state save requested\r\n");
+            return;
+        }
+
+        if (strcmp(a1, "load") == 0) {
+            if (app->rom->loaded == 0U) {
+                xil_printf("[CMD] state load ignored: no ROM loaded\r\n");
+                return;
+            }
+            app->state_feature->load_pending = 1U;
+            xil_printf("[CMD] state load requested\r\n");
+            return;
+        }
+
+        xil_printf("[CMD] usage: state status|slot <0-%u>|save|load\r\n",
+                   (unsigned int)(PS_APP_STATE_SLOT_COUNT - 1U));
+        return;
+    }
+
+    if (strcmp(cmd, "rewind") == 0) {
+        a1 = strtok(NULL, " \t");
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            xil_printf("[CMD] rewind enable=%u active=%u\r\n",
+                       (unsigned int)app->state_feature->rewind_enable,
+                       (unsigned int)app->state_feature->rewind_active);
+            return;
+        }
+
+        if (strcmp(a1, "active") == 0) {
+            a2 = strtok(NULL, " \t");
+            if (PsAppConsole_ParseOnOff(a2, &v) != 0) {
+                xil_printf("[CMD] usage: rewind active on|off\r\n");
+                return;
+            }
+            app->state_feature->rewind_active = (u8)(v & 0x1U);
+            PsGbaRegs_SetRewindControl(app->regs,
+                                       app->state_feature->rewind_enable,
+                                       app->state_feature->rewind_active);
+            xil_printf("[CMD] rewind enable=%u active=%u\r\n",
+                       (unsigned int)app->state_feature->rewind_enable,
+                       (unsigned int)app->state_feature->rewind_active);
+            return;
+        }
+
+        if (PsAppConsole_ParseOnOff(a1, &v) != 0) {
+            xil_printf("[CMD] usage: rewind on|off | rewind active on|off | rewind status\r\n");
+            return;
+        }
+        app->state_feature->rewind_enable = (u8)(v & 0x1U);
+        if (app->state_feature->rewind_enable == 0U) {
+            app->state_feature->rewind_active = 0U;
+        }
+        PsGbaRegs_SetRewindControl(app->regs,
+                                   app->state_feature->rewind_enable,
+                                   app->state_feature->rewind_active);
+        xil_printf("[CMD] rewind enable=%u active=%u\r\n",
+                   (unsigned int)app->state_feature->rewind_enable,
+                   (unsigned int)app->state_feature->rewind_active);
+        return;
+    }
+
+    if (strcmp(cmd, "cheat") == 0) {
+        u32 feature_status;
+
+        a1 = strtok(NULL, " \t");
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            feature_status = PsGbaRegs_ReadFeatureStatus(app->regs);
+            app->state_feature->feature_status = feature_status;
+            xil_printf("[CMD] cheat en=%u active=%u clear_pending=%u push_pending=%u\r\n",
+                       (unsigned int)app->state_feature->cheats_enabled,
+                       (unsigned int)((feature_status & GBA_FEATURE_STATUS_CHEATS_ACTIVE) != 0U),
+                       (unsigned int)app->state_feature->cheat_clear_pending,
+                       (unsigned int)app->state_feature->cheat_push_pending);
+            xil_printf("[CMD] cheat words=%08x %08x %08x %08x\r\n",
+                       (unsigned int)app->state_feature->cheat_words[0],
+                       (unsigned int)app->state_feature->cheat_words[1],
+                       (unsigned int)app->state_feature->cheat_words[2],
+                       (unsigned int)app->state_feature->cheat_words[3]);
+            return;
+        }
+
+        if (strcmp(a1, "clear") == 0) {
+            app->state_feature->cheat_clear_pending = 1U;
+            xil_printf("[CMD] cheat clear requested\r\n");
+            return;
+        }
+
+        if (strcmp(a1, "push") == 0) {
+            a2 = strtok(NULL, " \t");
+            a3 = strtok(NULL, " \t");
+            a4 = strtok(NULL, " \t");
+            a5 = strtok(NULL, " \t");
+            if ((a2 == NULL) || (a3 == NULL) || (a4 == NULL) || (a5 == NULL) ||
+                (PsAppConsole_ParseU32Value(a2, &app->state_feature->cheat_words[0]) != 0) ||
+                (PsAppConsole_ParseU32Value(a3, &app->state_feature->cheat_words[1]) != 0) ||
+                (PsAppConsole_ParseU32Value(a4, &app->state_feature->cheat_words[2]) != 0) ||
+                (PsAppConsole_ParseU32Value(a5, &app->state_feature->cheat_words[3]) != 0)) {
+                xil_printf("[CMD] usage: cheat push <w0> <w1> <w2> <w3>\r\n");
+                return;
+            }
+            app->state_feature->cheat_push_pending = 1U;
+            xil_printf("[CMD] cheat push requested\r\n");
+            return;
+        }
+
+        if (PsAppConsole_ParseOnOff(a1, &v) != 0) {
+            xil_printf("[CMD] usage: cheat on|off|clear|push <w0> <w1> <w2> <w3>|status\r\n");
+            return;
+        }
+        app->state_feature->cheats_enabled = (u8)(v & 0x1U);
+        PsGbaRegs_SetCheatEnable(app->regs, v);
+        xil_printf("[CMD] cheat en=%u\r\n", (unsigned int)app->state_feature->cheats_enabled);
+        return;
+    }
+
+    if (strcmp(cmd, "video") == 0) {
+        u32 blend_mode;
+        u32 shade_mode;
+
+        a1 = strtok(NULL, " \t");
+        if ((a1 == NULL) || (strcmp(a1, "status") == 0)) {
+            blend_mode = PsAppVideo_GetInterframeMode(video);
+            shade_mode = PsAppVideo_GetShadeMode(video);
+            xil_printf("[CMD] video blend=%s shade=%u hd2x_eq=%u maxpixels_eq=%u\r\n",
+                       PsAppConsole_BlendModeName(blend_mode),
+                       (unsigned int)shade_mode,
+                       (unsigned int)((app->video->fx.non_eq_hd2x_hint != 0U) ? 0U : 1U),
+                       (unsigned int)((app->video->fx.non_eq_maxpixels_hint != 0U) ? 0U : 1U));
+            return;
+        }
+
+        if (strcmp(a1, "blend") == 0) {
+            a2 = strtok(NULL, " \t");
+            if (PsAppConsole_ParseBlendMode(a2, &v) != 0) {
+                xil_printf("[CMD] usage: video blend off|on|30\r\n");
+                return;
+            }
+            PsAppVideo_SetInterframeMode(video, v);
+            xil_printf("[CMD] video blend=%s\r\n",
+                       PsAppConsole_BlendModeName(PsAppVideo_GetInterframeMode(video)));
+            return;
+        }
+
+        if (strcmp(a1, "shade") == 0) {
+            a2 = strtok(NULL, " \t");
+            if ((a2 == NULL) || (strcmp(a2, "off") == 0)) {
+                v = 0U;
+            } else if (PsAppConsole_ParseU32Value(a2, &v) != 0) {
+                xil_printf("[CMD] usage: video shade off|1|2|3|4\r\n");
+                return;
+            }
+            if (v > 4U) {
+                xil_printf("[CMD] usage: video shade off|1|2|3|4\r\n");
+                return;
+            }
+            PsAppVideo_SetShadeMode(video, v);
+            xil_printf("[CMD] video shade=%u\r\n",
+                       (unsigned int)PsAppVideo_GetShadeMode(video));
+            return;
+        }
+
+        xil_printf("[CMD] usage: video status|blend off|on|30|shade off|1|2|3|4\r\n");
+        return;
+    }
+
     if ((strcmp(cmd, "core") == 0) || (strcmp(cmd, "turbo") == 0) ||
         (strcmp(cmd, "lock") == 0) || (strcmp(cmd, "remap") == 0) ||
         (strcmp(cmd, "unsafe") == 0)) {
@@ -968,8 +1236,33 @@ static void PsAppConsole_ProcessLine(PsAppConsoleContext *ctx, char *line) {
         }
 
         if ((a1 != NULL) && (strcmp(a1, "load") == 0)) {
-            if (PsAppRuntime_LoadRomFromSd(app, a2) == XST_SUCCESS) xil_printf("[CMD] rom load ok\r\n");
-            else xil_printf("[CMD] rom load failed\r\n");
+            UBaseType_t stack_hwm_before;
+            UBaseType_t stack_hwm_after;
+
+            stack_hwm_before = PsAppConsole_GetStackHwmWords();
+#if (PS_APP_CONSOLE_HAS_STACK_HWM != 0)
+            xil_printf("[CMD] rom load begin stack_hwm=%u words\r\n",
+                       (unsigned int)stack_hwm_before);
+#else
+            xil_printf("[CMD] rom load begin stack_hwm=n/a\r\n");
+#endif
+            if (PsAppRuntime_LoadRomFromSd(app, a2) == XST_SUCCESS) {
+                stack_hwm_after = PsAppConsole_GetStackHwmWords();
+#if (PS_APP_CONSOLE_HAS_STACK_HWM != 0)
+                xil_printf("[CMD] rom load ok stack_hwm=%u words\r\n",
+                           (unsigned int)stack_hwm_after);
+#else
+                xil_printf("[CMD] rom load ok stack_hwm=n/a\r\n");
+#endif
+            } else {
+                stack_hwm_after = PsAppConsole_GetStackHwmWords();
+#if (PS_APP_CONSOLE_HAS_STACK_HWM != 0)
+                xil_printf("[CMD] rom load failed stack_hwm=%u words\r\n",
+                           (unsigned int)stack_hwm_after);
+#else
+                xil_printf("[CMD] rom load failed stack_hwm=n/a\r\n");
+#endif
+            }
             return;
         }
 

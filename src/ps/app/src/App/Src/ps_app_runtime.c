@@ -7,6 +7,7 @@
 #include "sleep.h"
 #include "xaxivdma_hw.h"
 #include "xil_io.h"
+#include "xil_cache.h"
 #include "xparameters.h"
 #include "xuartps.h"
 #include "xil_printf.h"
@@ -39,6 +40,35 @@
 /* SSM2603 音量寄存器边界：0x30=-73 dB，0x79=0 dB(unity gain)。 */
 #define PS_APP_AUDIO_CODEC_MIN_DB_VOL  0x30U
 #define PS_APP_AUDIO_CODEC_UNITY_VOL   0x79U
+#define PS_APP_RTC_FILE_MAGIC          0x43545247U /* "GRTC" */
+#define PS_APP_STATE_FILE_MAGIC        0x54534247U /* "GBST" */
+#define PS_APP_STATE_FILE_VERSION      0x00010000U
+#define PS_APP_CORE_STATE_WORDS        0x00018346U
+#define PS_APP_SENSOR_SOLAR_MAX        7U
+#define PS_APP_SENSOR_TILT_DIVISOR     256
+
+typedef struct {
+    u32 magic;
+    u32 timestamp_saved;
+    u32 savedtime_lo;
+    u32 savedtime_hi_loaded;
+} PsAppRtcFileRecord;
+
+typedef struct {
+    u32 magic;
+    u32 version;
+    u32 slot;
+    u32 payload_bytes;
+    u32 core_state_words;
+    u32 reserved0;
+    u32 reserved1;
+    u32 reserved2;
+} PsAppStateFileHeader;
+
+static u8 s_state_file_buffer[sizeof(PsAppStateFileHeader) + PS_APP_STATE_SLOT_BYTES]
+    __attribute__((aligned(64)));
+
+static u32 PsAppRuntime_ClampStateSlot(u32 slot);
 
 static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
     size_t src_len;
@@ -59,6 +89,915 @@ static void PsAppRuntime_CopyText(char *dst, size_t dst_size, const char *src) {
 
     memcpy(dst, src, src_len);
     dst[src_len] = '\0';
+}
+
+static void PsAppRuntime_RomStem(const char *rom_path, char *stem_out, size_t stem_size) {
+    const char *name_ptr;
+    const char *dot_ptr;
+    size_t copy_len;
+
+    if ((stem_out == NULL) || (stem_size == 0U)) {
+        return;
+    }
+
+    stem_out[0] = '\0';
+    if ((rom_path == NULL) || (*rom_path == '\0')) {
+        return;
+    }
+
+    name_ptr = strrchr(rom_path, '/');
+    if (name_ptr == NULL) {
+        name_ptr = strrchr(rom_path, '\\');
+    }
+    name_ptr = (name_ptr == NULL) ? rom_path : (name_ptr + 1);
+    dot_ptr = strrchr(name_ptr, '.');
+    copy_len = (dot_ptr != NULL) ? (size_t)(dot_ptr - name_ptr) : strlen(name_ptr);
+    if (copy_len >= stem_size) {
+        copy_len = stem_size - 1U;
+    }
+
+    memcpy(stem_out, name_ptr, copy_len);
+    stem_out[copy_len] = '\0';
+}
+
+static void PsAppRuntime_BuildRtcPath(const char *rom_path, char *path_out, size_t path_size) {
+    char stem[PS_APP_ROM_PATH_MAX_CHARS];
+    size_t dir_len;
+    size_t stem_len;
+    const char *ext;
+    size_t ext_len;
+
+    if ((path_out == NULL) || (path_size == 0U)) {
+        return;
+    }
+
+    path_out[0] = '\0';
+    PsAppRuntime_RomStem(rom_path, stem, sizeof(stem));
+    if (stem[0] == '\0') {
+        return;
+    }
+
+    ext = ".rtc";
+    dir_len = strlen(PS_APP_RTC_SD_DIR);
+    stem_len = strlen(stem);
+    ext_len = strlen(ext);
+    if ((dir_len + 1U + stem_len + ext_len + 1U) > path_size) {
+        return;
+    }
+
+    memcpy(path_out, PS_APP_RTC_SD_DIR, dir_len);
+    path_out[dir_len] = '/';
+    memcpy(&path_out[dir_len + 1U], stem, stem_len);
+    memcpy(&path_out[dir_len + 1U + stem_len], ext, ext_len);
+    path_out[dir_len + 1U + stem_len + ext_len] = '\0';
+}
+
+static void PsAppRuntime_BuildStatePath(const char *rom_path,
+                                        u32 slot,
+                                        char *path_out,
+                                        size_t path_size) {
+    char stem[PS_APP_ROM_PATH_MAX_CHARS];
+    char ext[10];
+    size_t dir_len;
+    size_t stem_len;
+    size_t ext_len;
+
+    if ((path_out == NULL) || (path_size == 0U)) {
+        return;
+    }
+
+    path_out[0] = '\0';
+    PsAppRuntime_RomStem(rom_path, stem, sizeof(stem));
+    if (stem[0] == '\0') {
+        return;
+    }
+
+    if (slot >= PS_APP_STATE_SLOT_COUNT) {
+        slot = 0U;
+    }
+    memcpy(ext, ".s1.state", sizeof(ext));
+    ext[2] = (char)('1' + (char)slot);
+    ext_len = strlen(ext);
+    dir_len = strlen(PS_APP_STATE_SD_DIR);
+    stem_len = strlen(stem);
+    if ((dir_len + 1U + stem_len + ext_len + 1U) > path_size) {
+        return;
+    }
+
+    memcpy(path_out, PS_APP_STATE_SD_DIR, dir_len);
+    path_out[dir_len] = '/';
+    memcpy(&path_out[dir_len + 1U], stem, stem_len);
+    memcpy(&path_out[dir_len + 1U + stem_len], ext, ext_len);
+    path_out[dir_len + 1U + stem_len + ext_len] = '\0';
+}
+
+static UINTPTR PsAppRuntime_StateSlotBaseAddr(u32 slot) {
+    u32 safe_slot;
+
+    safe_slot = PsAppRuntime_ClampStateSlot(slot);
+    return (UINTPTR)(PS_APP_STATE_REGION_BASE_ADDR + (safe_slot * PS_APP_STATE_SLOT_BYTES));
+}
+
+static const char *PsAppRuntime_GetActiveStatePath(PsAppRuntimeContext *ctx,
+                                                   char *fallback_path,
+                                                   size_t fallback_size,
+                                                   u32 slot) {
+    if ((ctx != NULL) &&
+        (ctx->state_feature != NULL) &&
+        (ctx->state_feature->last_state_path[0] != '\0')) {
+        return ctx->state_feature->last_state_path;
+    }
+
+    if ((ctx != NULL) && (ctx->rom != NULL)) {
+        PsAppRuntime_BuildStatePath(ctx->rom->path, slot, fallback_path, fallback_size);
+        if (fallback_path[0] != '\0') {
+            return fallback_path;
+        }
+    }
+
+    return "";
+}
+
+static XStatus PsAppRuntime_SaveStateSlotToFile(PsAppRuntimeContext *ctx,
+                                                u32 slot,
+                                                const char *path) {
+    PsFatFsStorageWriteResult write_result;
+    PsAppStateFileHeader header;
+    UINTPTR slot_base_addr;
+    u8 *payload_ptr;
+    u32 total_bytes;
+
+    if ((ctx == NULL) || (ctx->state_feature == NULL) || (path == NULL) || (*path == '\0')) {
+        return XST_INVALID_PARAM;
+    }
+
+    if (PsFatFsStorage_EnsureDirectory(PS_APP_STATE_SD_DIR) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    slot = PsAppRuntime_ClampStateSlot(slot);
+    slot_base_addr = PsAppRuntime_StateSlotBaseAddr(slot);
+    payload_ptr = &s_state_file_buffer[sizeof(PsAppStateFileHeader)];
+    total_bytes = (u32)sizeof(PsAppStateFileHeader) + PS_APP_STATE_SLOT_BYTES;
+
+    header.magic = PS_APP_STATE_FILE_MAGIC;
+    header.version = PS_APP_STATE_FILE_VERSION;
+    header.slot = slot;
+    header.payload_bytes = PS_APP_STATE_SLOT_BYTES;
+    header.core_state_words = PS_APP_CORE_STATE_WORDS;
+    header.reserved0 = 0U;
+    header.reserved1 = 0U;
+    header.reserved2 = 0U;
+
+    Xil_DCacheInvalidateRange((INTPTR)slot_base_addr, (INTPTR)PS_APP_STATE_SLOT_BYTES);
+    memcpy(s_state_file_buffer, &header, sizeof(header));
+    memcpy(payload_ptr, (const void *)slot_base_addr, PS_APP_STATE_SLOT_BYTES);
+    Xil_DCacheFlushRange((INTPTR)s_state_file_buffer, (INTPTR)total_bytes);
+
+    memset(&write_result, 0, sizeof(write_result));
+    if (PsFatFsStorage_WriteMemoryToFile(path,
+                                         (UINTPTR)s_state_file_buffer,
+                                         total_bytes,
+                                         &write_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    ctx->state_feature->save_file_count++;
+    PsAppRuntime_CopyText(ctx->state_feature->last_state_path,
+                          sizeof(ctx->state_feature->last_state_path),
+                          path);
+    return XST_SUCCESS;
+}
+
+static XStatus PsAppRuntime_LoadStateSlotFromFile(PsAppRuntimeContext *ctx,
+                                                  u32 slot,
+                                                  const char *path) {
+    PsFatFsStorageReadResult read_result;
+    const u8 *payload_ptr;
+    u32 payload_bytes;
+    UINTPTR slot_base_addr;
+    const PsAppStateFileHeader *header;
+
+    if ((ctx == NULL) || (ctx->state_feature == NULL) || (path == NULL) || (*path == '\0')) {
+        return XST_INVALID_PARAM;
+    }
+
+    memset(&read_result, 0, sizeof(read_result));
+    if (PsFatFsStorage_ReadFileToMemory(path,
+                                        (UINTPTR)s_state_file_buffer,
+                                        sizeof(s_state_file_buffer),
+                                        &read_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    payload_ptr = NULL;
+    payload_bytes = 0U;
+    if (read_result.bytes_loaded == PS_APP_STATE_SLOT_BYTES) {
+        payload_ptr = s_state_file_buffer;
+        payload_bytes = PS_APP_STATE_SLOT_BYTES;
+    } else if (read_result.bytes_loaded ==
+               ((u32)sizeof(PsAppStateFileHeader) + PS_APP_STATE_SLOT_BYTES)) {
+        header = (const PsAppStateFileHeader *)s_state_file_buffer;
+        if ((header->magic != PS_APP_STATE_FILE_MAGIC) ||
+            (header->version != PS_APP_STATE_FILE_VERSION) ||
+            (header->payload_bytes != PS_APP_STATE_SLOT_BYTES) ||
+            (header->core_state_words != PS_APP_CORE_STATE_WORDS)) {
+            return XST_FAILURE;
+        }
+        payload_ptr = &s_state_file_buffer[sizeof(PsAppStateFileHeader)];
+        payload_bytes = PS_APP_STATE_SLOT_BYTES;
+    } else {
+        return XST_FAILURE;
+    }
+
+    slot = PsAppRuntime_ClampStateSlot(slot);
+    slot_base_addr = PsAppRuntime_StateSlotBaseAddr(slot);
+    memcpy((void *)slot_base_addr, payload_ptr, payload_bytes);
+    Xil_DCacheFlushRange((INTPTR)slot_base_addr, (INTPTR)payload_bytes);
+
+    ctx->state_feature->load_file_count++;
+    PsAppRuntime_CopyText(ctx->state_feature->last_state_path,
+                          sizeof(ctx->state_feature->last_state_path),
+                          path);
+    return XST_SUCCESS;
+}
+
+static u32 PsAppRuntime_ClampStateSlot(u32 slot) {
+    if (PS_APP_STATE_SLOT_COUNT == 0U) {
+        return 0U;
+    }
+    return slot % PS_APP_STATE_SLOT_COUNT;
+}
+
+static s8 PsAppRuntime_ClampS16ToS8(s16 value) {
+    if (value > 127) {
+        return 127;
+    }
+    if (value < -128) {
+        return -128;
+    }
+    return (s8)value;
+}
+
+static u32 PsAppRuntime_BuildSensorRegWord(const PsAppSensorState *sensor) {
+    u32 solar;
+
+    if (sensor == NULL) {
+        return 0U;
+    }
+
+    solar = sensor->solar;
+    if (solar > PS_APP_SENSOR_SOLAR_MAX) {
+        solar = PS_APP_SENSOR_SOLAR_MAX;
+    }
+
+    return (solar & 0x7U) |
+           ((((u32)(u8)sensor->tilt_x) & 0xFFU) << 8) |
+           ((((u32)(u8)sensor->tilt_y) & 0xFFU) << 16);
+}
+
+static void PsAppRuntime_ApplyFeatureLevels(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) || (ctx->regs == NULL) || (ctx->state_feature == NULL)) {
+        return;
+    }
+
+    ctx->state_feature->slot = (u8)PsAppRuntime_ClampStateSlot(ctx->state_feature->slot);
+    PsGbaRegs_SetStateSlot(ctx->regs, ctx->state_feature->slot);
+    PsGbaRegs_SetRewindControl(ctx->regs,
+                               (u32)(ctx->state_feature->rewind_enable & 0x1U),
+                               (u32)(ctx->state_feature->rewind_active & 0x1U));
+    PsGbaRegs_SetCheatEnable(ctx->regs, (u32)(ctx->state_feature->cheats_enabled & 0x1U));
+    PsGbaRegs_SetCheatWords(ctx->regs,
+                            ctx->state_feature->cheat_words[0],
+                            ctx->state_feature->cheat_words[1],
+                            ctx->state_feature->cheat_words[2],
+                            ctx->state_feature->cheat_words[3]);
+}
+
+static u32 PsAppRuntime_SanitizeCtrlShadow(PsAppRuntimeContext *ctx,
+                                           const char *tag,
+                                           u8 print_when_clean) {
+    u32 raw_ctrl;
+    u32 safe_ctrl;
+
+    if ((ctx == NULL) || (ctx->config == NULL)) {
+        return 0U;
+    }
+
+    raw_ctrl = ctx->config->ctrl;
+    safe_ctrl = raw_ctrl & GBA_CTRL_VALID_MASK;
+    if (safe_ctrl != raw_ctrl) {
+        xil_printf("[CFG] warning: ctrl shadow masked tag=%s raw=0x%08x safe=0x%08x\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (unsigned int)raw_ctrl,
+                   (unsigned int)safe_ctrl);
+    } else if (print_when_clean != 0U) {
+        xil_printf("[CFG] ctrl shadow ok tag=%s val=0x%08x\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (unsigned int)safe_ctrl);
+    }
+    ctx->config->ctrl = safe_ctrl;
+    return safe_ctrl;
+}
+
+static void PsAppRuntime_ValidateContextStability(PsAppRuntimeContext *ctx, const char *tag) {
+    u8 vdma_bad;
+    XStatus status;
+
+    if ((ctx == NULL) || (ctx->vdma == NULL) || (ctx->video_ctx == NULL) || (ctx->config == NULL)) {
+        return;
+    }
+
+    /*
+     * 第一层防线：先清掉 ctrl 的异常高位。
+     * 历史上出现过 0xEAxxxxxx 混入 ctrl，继续下发会把核心带进不可预期状态。
+     */
+    (void)PsAppRuntime_SanitizeCtrlShadow(ctx, tag, 0U);
+
+    /*
+     * 第二层防线：修复 runtime_ctx 与 video_ctx 的关键指针关系。
+     * 若栈/内存曾被踩坏，这几根指针最先决定后续是否继续扩散。
+     */
+    if (ctx->video_ctx->vdma != ctx->vdma) {
+        xil_printf("[CTX] warning: video_ctx->vdma mismatch tag=%s old=0x%08x new=0x%08x\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (unsigned int)(UINTPTR)ctx->video_ctx->vdma,
+                   (unsigned int)(UINTPTR)ctx->vdma);
+        ctx->video_ctx->vdma = ctx->vdma;
+    }
+    if (ctx->video_ctx->regs != ctx->regs) {
+        xil_printf("[CTX] warning: video_ctx->regs mismatch tag=%s old=0x%08x new=0x%08x\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (unsigned int)(UINTPTR)ctx->video_ctx->regs,
+                   (unsigned int)(UINTPTR)ctx->regs);
+        ctx->video_ctx->regs = ctx->regs;
+    }
+    if (ctx->video_ctx->state != ctx->video) {
+        xil_printf("[CTX] warning: video_ctx->state mismatch tag=%s old=0x%08x new=0x%08x\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (unsigned int)(UINTPTR)ctx->video_ctx->state,
+                   (unsigned int)(UINTPTR)ctx->video);
+        ctx->video_ctx->state = ctx->video;
+    }
+
+    vdma_bad = 0U;
+    /*
+     * 第三层防线：用“硬约束”校验 VDMA 上下文。
+     * 一旦 width/height/stride/frame_addrs/baseaddr 任一异常，就判定上下文已污染。
+     */
+    if ((ctx->vdma->width != PS_APP_HDMI_WIDTH) ||
+        (ctx->vdma->height != PS_APP_HDMI_HEIGHT) ||
+        (ctx->vdma->bytes_per_pixel != PS_APP_HDMI_BPP) ||
+        (ctx->vdma->line_stride_bytes != (PS_APP_HDMI_WIDTH * PS_APP_HDMI_BPP)) ||
+        (ctx->vdma->frame_size_bytes != (PS_APP_HDMI_WIDTH * PS_APP_HDMI_HEIGHT * PS_APP_HDMI_BPP)) ||
+        (ctx->vdma->frame_count != 3U) ||
+        (ctx->vdma->frame_addrs[0] != (UINTPTR)PS_APP_FB_REGION_BASE_ADDR) ||
+        (ctx->vdma->frame_addrs[1] != (UINTPTR)(PS_APP_FB_REGION_BASE_ADDR + PS_APP_FB_FRAME_STORE_BYTES)) ||
+        (ctx->vdma->frame_addrs[2] != (UINTPTR)(PS_APP_FB_REGION_BASE_ADDR + (2U * PS_APP_FB_FRAME_STORE_BYTES))) ||
+        (ctx->vdma->vdma.BaseAddr != (UINTPTR)XPAR_XAXIVDMA_0_BASEADDR)) {
+        vdma_bad = 1U;
+    }
+
+    if (vdma_bad == 0U) {
+        return;
+    }
+
+    xil_printf("[CTX] warning: vdma context corrupted tag=%s base=0x%08x w=%u h=%u stride=%u count=%u ready=%u\r\n",
+               (tag != NULL) ? tag : "unknown",
+               (unsigned int)ctx->vdma->vdma.BaseAddr,
+               (unsigned int)ctx->vdma->width,
+               (unsigned int)ctx->vdma->height,
+               (unsigned int)ctx->vdma->line_stride_bytes,
+               (unsigned int)ctx->vdma->frame_count,
+               (unsigned int)ctx->vdma->is_ready);
+
+    /*
+     * 进入自愈流程：重新初始化 VDMA + 重新绑定 video IRQ。
+     * 目标是“不中断启动流程并恢复到可显示状态”，而不是直接卡死。
+     */
+    status = PsHdmiVdma_Init(ctx->vdma,
+                             XPAR_XAXIVDMA_0_BASEADDR,
+                             (UINTPTR)PS_APP_FB_REGION_BASE_ADDR,
+                             PS_APP_FB_FRAME_STORE_BYTES,
+                             PS_APP_HDMI_WIDTH,
+                             PS_APP_HDMI_HEIGHT,
+                             PS_APP_HDMI_BPP);
+    if (status != XST_SUCCESS) {
+        xil_printf("[CTX] warning: vdma reinit failed tag=%s status=%d\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (int)status);
+        return;
+    }
+
+    status = PsAppVideo_InitInterrupts(ctx->video_ctx);
+    if (status != XST_SUCCESS) {
+        xil_printf("[CTX] warning: video irq rebind failed tag=%s status=%d\r\n",
+                   (tag != NULL) ? tag : "unknown",
+                   (int)status);
+    }
+    PsAppVideo_SetInterframeMode(ctx->video_ctx, ctx->video->fx.interframe_mode);
+    PsAppVideo_SetShadeMode(ctx->video_ctx, ctx->video->fx.shade_mode);
+}
+
+static void PsAppRuntime_ApplyRtcSavedState(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) || (ctx->regs == NULL) || (ctx->rtc == NULL)) {
+        return;
+    }
+
+    PsGbaRegs_SetRtcSavedState(ctx->regs,
+                               ctx->rtc->timestamp_saved,
+                               ctx->rtc->saved_time,
+                               (u32)(ctx->rtc->loaded & 0x1U));
+}
+
+static void PsAppRuntime_ApplySensorState(PsAppRuntimeContext *ctx, u8 force) {
+    u32 sensor_word;
+    u32 old_word;
+
+    if ((ctx == NULL) || (ctx->regs == NULL) || (ctx->sensor == NULL)) {
+        return;
+    }
+
+    sensor_word = PsAppRuntime_BuildSensorRegWord(ctx->sensor);
+    old_word = PsGbaRegs_Read(ctx->regs, GBA_REG_SENSOR);
+    if ((force == 0U) && (old_word == sensor_word)) {
+        return;
+    }
+
+    PsGbaRegs_Write(ctx->regs, GBA_REG_SENSOR, sensor_word);
+    if (ctx->sensor->sensor_update_count < 0xFFFFFFFFU) {
+        ctx->sensor->sensor_update_count++;
+    }
+}
+
+static XStatus PsAppRuntime_FlushRtcToFile(PsAppRuntimeContext *ctx) {
+    PsFatFsStorageWriteResult write_result;
+    PsAppRtcFileRecord record;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL)) {
+        return XST_FAILURE;
+    }
+    if (ctx->rtc->path[0] == '\0') {
+        return XST_INVALID_PARAM;
+    }
+
+    if (PsFatFsStorage_EnsureDirectory(PS_APP_RTC_SD_DIR) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    record.magic = PS_APP_RTC_FILE_MAGIC;
+    record.timestamp_saved = ctx->rtc->timestamp_saved;
+    record.savedtime_lo = (u32)(ctx->rtc->saved_time & 0xFFFFFFFFULL);
+    record.savedtime_hi_loaded = ((u32)((ctx->rtc->saved_time >> 32U) & 0x3FFULL)) |
+                                 (((u32)(ctx->rtc->loaded & 0x1U)) << 10);
+
+    memset(&write_result, 0, sizeof(write_result));
+    if (PsFatFsStorage_WriteMemoryToFile(ctx->rtc->path,
+                                         (UINTPTR)&record,
+                                         sizeof(record),
+                                         &write_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    ctx->rtc->dirty = 0U;
+    ctx->rtc->save_countdown = ctx->rtc->save_interval_ticks;
+    xil_printf("[RTC] flush %s ts=0x%08x st=0x%08x_%08x\r\n",
+               ctx->rtc->path,
+               (unsigned int)ctx->rtc->timestamp_saved,
+               (unsigned int)((ctx->rtc->saved_time >> 32U) & 0x3FFULL),
+               (unsigned int)(ctx->rtc->saved_time & 0xFFFFFFFFULL));
+    return XST_SUCCESS;
+}
+
+static XStatus PsAppRuntime_PrepareRtcForRom(PsAppRuntimeContext *ctx, const char *rom_path) {
+    PsFatFsStorageReadResult read_result;
+    PsAppRtcFileRecord record;
+    char rtc_path_snapshot[PS_APP_ROM_PATH_MAX_CHARS];
+    const char *rtc_path_for_log;
+    XStatus status;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL)) {
+        return XST_FAILURE;
+    }
+
+    ctx->rtc->loaded = 0U;
+    ctx->rtc->in_use = 0U;
+    ctx->rtc->dirty = 0U;
+    ctx->rtc->timestamp_saved = 0U;
+    ctx->rtc->saved_time = 0ULL;
+    ctx->rtc->last_timestamp_out = 0U;
+    ctx->rtc->last_savedtime_out = 0ULL;
+    ctx->rtc->path[0] = '\0';
+    ctx->rtc->save_countdown = ctx->rtc->save_interval_ticks;
+
+    PsAppRuntime_BuildRtcPath(rom_path, ctx->rtc->path, sizeof(ctx->rtc->path));
+    PsAppRuntime_CopyText(rtc_path_snapshot, sizeof(rtc_path_snapshot), ctx->rtc->path);
+    rtc_path_for_log = (rtc_path_snapshot[0] != '\0') ? rtc_path_snapshot : "(invalid)";
+    if (ctx->rtc->path[0] == '\0') {
+        PsAppRuntime_ApplyRtcSavedState(ctx);
+        return XST_INVALID_PARAM;
+    }
+
+    memset(&record, 0, sizeof(record));
+    memset(&read_result, 0, sizeof(read_result));
+    /*
+     * 只接受固定大小 RTC 记录。
+     * 底层会把 empty/oversize 映射为 FR_INVALID_OBJECT，上层在此做细分日志与降级。
+     */
+    status = PsFatFsStorage_ReadFileToMemory(ctx->rtc->path,
+                                             (UINTPTR)&record,
+                                             sizeof(record),
+                                             &read_result);
+    if ((status == XST_SUCCESS) &&
+        (read_result.bytes_loaded == sizeof(record)) &&
+        (record.magic == PS_APP_RTC_FILE_MAGIC)) {
+        ctx->rtc->timestamp_saved = record.timestamp_saved;
+        ctx->rtc->saved_time =
+            (((u64)(record.savedtime_hi_loaded & 0x3FFU)) << 32U) |
+            ((u64)record.savedtime_lo);
+        ctx->rtc->loaded = (u8)((record.savedtime_hi_loaded >> 10) & 0x1U);
+        ctx->rtc->last_timestamp_out = ctx->rtc->timestamp_saved;
+        ctx->rtc->last_savedtime_out = ctx->rtc->saved_time;
+        PsAppRuntime_ApplyRtcSavedState(ctx);
+        xil_printf("[RTC] preload %s loaded=%u ts=0x%08x st=0x%08x_%08x\r\n",
+                   ctx->rtc->path,
+                   (unsigned int)ctx->rtc->loaded,
+                   (unsigned int)ctx->rtc->timestamp_saved,
+                   (unsigned int)((ctx->rtc->saved_time >> 32U) & 0x3FFULL),
+                   (unsigned int)(ctx->rtc->saved_time & 0xFFFFFFFFULL));
+        return XST_SUCCESS;
+    }
+
+    if ((status != XST_SUCCESS) &&
+        (read_result.fs_result != FR_NO_FILE) &&
+        (read_result.fs_result != FR_NO_PATH)) {
+        if (read_result.fs_result == FR_INVALID_OBJECT) {
+            if (read_result.bytes_loaded == 0U) {
+                xil_printf("[RTC] empty rtc ignored %s\r\n", rtc_path_for_log);
+            } else {
+                xil_printf("[RTC] invalid rtc record size %s (bytes=%u expect=%u)\r\n",
+                           rtc_path_for_log,
+                           (unsigned int)read_result.bytes_loaded,
+                           (unsigned int)sizeof(record));
+            }
+        } else {
+            xil_printf("[RTC] warning: read %s failed (%s)\r\n",
+                       rtc_path_for_log,
+                       PsFatFsStorage_StrError(read_result.fs_result));
+        }
+    } else if (status != XST_SUCCESS) {
+        xil_printf("[RTC] no existing rtc for %s\r\n", rtc_path_for_log);
+    } else {
+        xil_printf("[RTC] invalid rtc record %s (magic=0x%08x bytes=%u)\r\n",
+                   rtc_path_for_log,
+                   (unsigned int)record.magic,
+                   (unsigned int)read_result.bytes_loaded);
+    }
+
+    PsAppRuntime_ApplyRtcSavedState(ctx);
+    return XST_SUCCESS;
+}
+
+static void PsAppRuntime_ServiceStateFeature(PsAppRuntimeContext *ctx) {
+    u32 busy_bits;
+    u32 slot;
+    const char *state_path_ptr;
+    char state_path[PS_APP_ROM_PATH_MAX_CHARS];
+    XStatus status;
+
+    if ((ctx == NULL) || (ctx->state_feature == NULL) || (ctx->regs == NULL) || (ctx->rom == NULL)) {
+        return;
+    }
+
+    ctx->state_feature->feature_status = PsGbaRegs_ReadFeatureStatus(ctx->regs);
+    busy_bits = (ctx->state_feature->feature_status & GBA_FEATURE_STATUS_BUSY_MASK) >>
+                GBA_FEATURE_STATUS_BUSY_SHIFT;
+
+    if (ctx->state_feature->save_pending != 0U) {
+        if ((ctx->rom == NULL) || (ctx->rom->loaded == 0U) || (ctx->rom->is_loading != 0U)) {
+            ctx->state_feature->save_pending = 0U;
+            if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                ctx->state_feature->io_error_count++;
+            }
+            ctx->state_feature->io_last_result = 2U;
+            xil_printf("[STATE] save ignored: rom not ready\r\n");
+        } else if (ctx->state_feature->io_phase == PS_APP_STATE_IO_IDLE) {
+            slot = PsAppRuntime_ClampStateSlot(ctx->state_feature->slot);
+            ctx->state_feature->slot = (u8)slot;
+            PsAppRuntime_BuildStatePath(ctx->rom->path, slot, state_path, sizeof(state_path));
+            if (state_path[0] == '\0') {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 3U;
+                xil_printf("[STATE] save failed: invalid path\r\n");
+            } else {
+                PsGbaRegs_SetStateSlot(ctx->regs, slot);
+                PsGbaRegs_TriggerSaveState(ctx->regs);
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_SAVE_WAIT_BUSY;
+                ctx->state_feature->io_busy_seen = 0U;
+                ctx->state_feature->io_wait_ticks = 0U;
+                ctx->state_feature->io_timeout_ticks = PS_APP_STATE_IO_TIMEOUT_TICKS;
+                ctx->state_feature->io_last_result = 0U;
+                PsAppRuntime_CopyText(ctx->state_feature->last_state_path,
+                                      sizeof(ctx->state_feature->last_state_path),
+                                      state_path);
+                xil_printf("[STATE] save begin slot=%u path=%s\r\n",
+                           (unsigned int)slot,
+                           state_path);
+            }
+            ctx->state_feature->save_pending = 0U;
+        }
+    }
+
+    if (ctx->state_feature->load_pending != 0U) {
+        if ((ctx->rom == NULL) || (ctx->rom->loaded == 0U) || (ctx->rom->is_loading != 0U)) {
+            ctx->state_feature->load_pending = 0U;
+            if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                ctx->state_feature->io_error_count++;
+            }
+            ctx->state_feature->io_last_result = 2U;
+            xil_printf("[STATE] load ignored: rom not ready\r\n");
+        } else if (ctx->state_feature->io_phase == PS_APP_STATE_IO_IDLE) {
+            slot = PsAppRuntime_ClampStateSlot(ctx->state_feature->slot);
+            ctx->state_feature->slot = (u8)slot;
+            PsAppRuntime_BuildStatePath(ctx->rom->path, slot, state_path, sizeof(state_path));
+            if (state_path[0] == '\0') {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 3U;
+                xil_printf("[STATE] load failed: invalid path\r\n");
+            } else {
+                status = PsAppRuntime_LoadStateSlotFromFile(ctx, slot, state_path);
+                if (status == XST_SUCCESS) {
+                    PsGbaRegs_SetStateSlot(ctx->regs, slot);
+                    PsGbaRegs_TriggerLoadState(ctx->regs);
+                    ctx->state_feature->io_phase = PS_APP_STATE_IO_LOAD_WAIT_BUSY;
+                    ctx->state_feature->io_busy_seen = 0U;
+                    ctx->state_feature->io_wait_ticks = 0U;
+                    ctx->state_feature->io_timeout_ticks = PS_APP_STATE_IO_TIMEOUT_TICKS;
+                    ctx->state_feature->io_last_result = 0U;
+                    xil_printf("[STATE] load begin slot=%u path=%s\r\n",
+                               (unsigned int)slot,
+                               state_path);
+                } else {
+                    if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                        ctx->state_feature->io_error_count++;
+                    }
+                    ctx->state_feature->io_last_result = 3U;
+                    xil_printf("[STATE] load failed: file read/format error (%s)\r\n", state_path);
+                }
+            }
+            ctx->state_feature->load_pending = 0U;
+        }
+    }
+
+    if (ctx->state_feature->cheat_clear_pending != 0U) {
+        PsGbaRegs_TriggerCheatClear(ctx->regs);
+        ctx->state_feature->cheat_clear_pending = 0U;
+    }
+    if (ctx->state_feature->cheat_push_pending != 0U) {
+        PsGbaRegs_PushCheatWords(ctx->regs,
+                                 ctx->state_feature->cheat_words[0],
+                                 ctx->state_feature->cheat_words[1],
+                                 ctx->state_feature->cheat_words[2],
+                                 ctx->state_feature->cheat_words[3]);
+        ctx->state_feature->cheat_push_pending = 0U;
+    }
+
+    if (ctx->state_feature->io_phase == PS_APP_STATE_IO_IDLE) {
+        ctx->state_feature->io_wait_ticks = 0U;
+        ctx->state_feature->io_timeout_ticks = 0U;
+        ctx->state_feature->io_busy_seen = 0U;
+        return;
+    }
+
+    if (ctx->state_feature->io_wait_ticks < 0xFFFFFFFFU) {
+        ctx->state_feature->io_wait_ticks++;
+    }
+    if (ctx->state_feature->io_timeout_ticks > 0U) {
+        ctx->state_feature->io_timeout_ticks--;
+    }
+    if (busy_bits != 0U) {
+        ctx->state_feature->io_busy_seen = 1U;
+    }
+
+    switch ((PsAppStateIoPhase)ctx->state_feature->io_phase) {
+        case PS_APP_STATE_IO_SAVE_WAIT_BUSY:
+            if (ctx->state_feature->io_busy_seen != 0U) {
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_SAVE_WAIT_DONE;
+                ctx->state_feature->io_wait_ticks = 0U;
+                ctx->state_feature->io_timeout_ticks = PS_APP_STATE_IO_TIMEOUT_TICKS;
+            } else if (ctx->state_feature->io_wait_ticks >= PS_APP_STATE_IO_FALLBACK_TICKS) {
+                slot = PsAppRuntime_ClampStateSlot(ctx->state_feature->slot);
+                state_path_ptr = PsAppRuntime_GetActiveStatePath(ctx,
+                                                                 state_path,
+                                                                 sizeof(state_path),
+                                                                 slot);
+                status = PsAppRuntime_SaveStateSlotToFile(ctx, slot, state_path_ptr);
+                if (status == XST_SUCCESS) {
+                    ctx->state_feature->io_last_result = 1U;
+                    xil_printf("[STATE] save done (fallback) slot=%u path=%s\r\n",
+                               (unsigned int)slot,
+                               state_path_ptr);
+                } else {
+                    if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                        ctx->state_feature->io_error_count++;
+                    }
+                    ctx->state_feature->io_last_result = 4U;
+                    xil_printf("[STATE] save failed (fallback) slot=%u\r\n", (unsigned int)slot);
+                }
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+            } else if (ctx->state_feature->io_timeout_ticks == 0U) {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 5U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] save timeout before busy\r\n");
+            }
+            break;
+
+        case PS_APP_STATE_IO_SAVE_WAIT_DONE:
+            if (busy_bits == 0U) {
+                slot = PsAppRuntime_ClampStateSlot(ctx->state_feature->slot);
+                state_path_ptr = PsAppRuntime_GetActiveStatePath(ctx,
+                                                                 state_path,
+                                                                 sizeof(state_path),
+                                                                 slot);
+                status = PsAppRuntime_SaveStateSlotToFile(ctx, slot, state_path_ptr);
+                if (status == XST_SUCCESS) {
+                    ctx->state_feature->io_last_result = 1U;
+                    xil_printf("[STATE] save done slot=%u path=%s\r\n",
+                               (unsigned int)slot,
+                               state_path_ptr);
+                } else {
+                    if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                        ctx->state_feature->io_error_count++;
+                    }
+                    ctx->state_feature->io_last_result = 4U;
+                    xil_printf("[STATE] save file write failed slot=%u\r\n", (unsigned int)slot);
+                }
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+            } else if (ctx->state_feature->io_timeout_ticks == 0U) {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 5U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] save timeout while busy\r\n");
+            }
+            break;
+
+        case PS_APP_STATE_IO_LOAD_WAIT_BUSY:
+            if (ctx->state_feature->io_busy_seen != 0U) {
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_LOAD_WAIT_DONE;
+                ctx->state_feature->io_wait_ticks = 0U;
+                ctx->state_feature->io_timeout_ticks = PS_APP_STATE_IO_TIMEOUT_TICKS;
+            } else if (ctx->state_feature->io_wait_ticks >= PS_APP_STATE_IO_FALLBACK_TICKS) {
+                ctx->state_feature->io_last_result = 1U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] load done (fallback)\r\n");
+            } else if (ctx->state_feature->io_timeout_ticks == 0U) {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 5U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] load timeout before busy\r\n");
+            }
+            break;
+
+        case PS_APP_STATE_IO_LOAD_WAIT_DONE:
+            if (busy_bits == 0U) {
+                ctx->state_feature->io_last_result = 1U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] load done\r\n");
+            } else if (ctx->state_feature->io_timeout_ticks == 0U) {
+                if (ctx->state_feature->io_error_count < 0xFFFFFFFFU) {
+                    ctx->state_feature->io_error_count++;
+                }
+                ctx->state_feature->io_last_result = 5U;
+                ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+                xil_printf("[STATE] load timeout while busy\r\n");
+            }
+            break;
+
+        default:
+            ctx->state_feature->io_phase = PS_APP_STATE_IO_IDLE;
+            break;
+    }
+}
+
+static void PsAppRuntime_ServiceRtcPersist(PsAppRuntimeContext *ctx) {
+    u32 timestamp_out;
+    u64 savedtime_out;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL) || (ctx->rom == NULL) || (ctx->regs == NULL) ||
+        (ctx->state_feature == NULL)) {
+        return;
+    }
+    if ((ctx->rom->loaded == 0U) || (ctx->rom->is_loading != 0U)) {
+        return;
+    }
+
+    ctx->rtc->in_use = (u8)(((ctx->state_feature->feature_status & GBA_FEATURE_STATUS_RTC_INUSE) != 0U) ? 1U : 0U);
+    if (ctx->rtc->in_use == 0U) {
+        return;
+    }
+
+    timestamp_out = PsGbaRegs_ReadRtcTimestampOut(ctx->regs);
+    savedtime_out = PsGbaRegs_ReadRtcSavedTimeOut(ctx->regs);
+    if ((timestamp_out != ctx->rtc->last_timestamp_out) ||
+        (savedtime_out != ctx->rtc->last_savedtime_out)) {
+        ctx->rtc->last_timestamp_out = timestamp_out;
+        ctx->rtc->last_savedtime_out = savedtime_out;
+        ctx->rtc->timestamp_saved = timestamp_out;
+        ctx->rtc->saved_time = savedtime_out;
+        ctx->rtc->loaded = 1U;
+        ctx->rtc->dirty = 1U;
+        ctx->rtc->save_countdown = ctx->rtc->save_interval_ticks;
+    }
+
+    if (ctx->rtc->dirty == 0U) {
+        return;
+    }
+    if (ctx->rtc->save_countdown != 0U) {
+        ctx->rtc->save_countdown--;
+    }
+    if (ctx->rtc->save_countdown == 0U) {
+        (void)PsAppRuntime_FlushRtcToFile(ctx);
+    }
+}
+
+static void PsAppRuntime_ServiceRumble(PsAppRuntimeContext *ctx) {
+    u8 core_rumble_on;
+    u8 target_rumble;
+    u8 desired_strength;
+
+    if ((ctx == NULL) || (ctx->sensor == NULL) || (ctx->state_feature == NULL)) {
+        return;
+    }
+
+    core_rumble_on = (u8)(((ctx->state_feature->feature_status & GBA_FEATURE_STATUS_RUMBLE) != 0U) ? 1U : 0U);
+    target_rumble = (u8)(((ctx->sensor->rumble_enabled != 0U) && (core_rumble_on != 0U)) ? 1U : 0U);
+
+    if ((target_rumble == ctx->sensor->rumble_active) && (ctx->sensor->rumble_dirty == 0U)) {
+        return;
+    }
+
+    desired_strength = (target_rumble != 0U) ? ctx->sensor->rumble_strength : (u8)PS_APP_RUMBLE_STRENGTH_OFF;
+    if ((ctx->usb_host_ctx != NULL) &&
+        (ctx->usb_host != NULL) &&
+        (ctx->usb_host->xbox_interface_active != 0U)) {
+        if (PsAppUsbHost_SetRumble(ctx->usb_host_ctx, desired_strength, 0U) == XST_SUCCESS) {
+            if (ctx->sensor->rumble_change_count < 0xFFFFFFFFU) {
+                ctx->sensor->rumble_change_count++;
+            }
+        }
+    }
+
+    ctx->sensor->rumble_active = target_rumble;
+    ctx->sensor->rumble_dirty = 0U;
+}
+
+static void PsAppRuntime_ServiceSensorFast(PsAppRuntimeContext *ctx) {
+    u8 next_solar;
+    s8 next_tilt_x;
+    s8 next_tilt_y;
+
+    if ((ctx == NULL) || (ctx->sensor == NULL) || (ctx->rom == NULL) || (ctx->input == NULL)) {
+        return;
+    }
+
+    next_solar = (ctx->sensor->solar > PS_APP_SENSOR_SOLAR_MAX) ?
+                 (u8)PS_APP_SENSOR_SOLAR_MAX : ctx->sensor->solar;
+    next_tilt_x = ctx->sensor->tilt_x;
+    next_tilt_y = ctx->sensor->tilt_y;
+
+    if ((ctx->input->active != 0U) && (ctx->input->report_valid != 0U)) {
+        if (ctx->rom->quirk_solar != 0U) {
+            next_solar = (u8)(ctx->input->rt >> 5);
+            if (next_solar > PS_APP_SENSOR_SOLAR_MAX) {
+                next_solar = (u8)PS_APP_SENSOR_SOLAR_MAX;
+            }
+        }
+        if (ctx->rom->quirk_tilt != 0U) {
+            next_tilt_x = PsAppRuntime_ClampS16ToS8((s16)(ctx->input->lx / PS_APP_SENSOR_TILT_DIVISOR));
+            next_tilt_y = PsAppRuntime_ClampS16ToS8((s16)(ctx->input->ly / PS_APP_SENSOR_TILT_DIVISOR));
+        }
+    }
+
+    if ((next_solar != ctx->sensor->solar) ||
+        (next_tilt_x != ctx->sensor->tilt_x) ||
+        (next_tilt_y != ctx->sensor->tilt_y)) {
+        ctx->sensor->solar = next_solar;
+        ctx->sensor->tilt_x = next_tilt_x;
+        ctx->sensor->tilt_y = next_tilt_y;
+    }
+
+    PsAppRuntime_ApplySensorState(ctx, 0U);
 }
 
 static const char *PsAppRuntime_BiosModeName(u8 bios_mode) {
@@ -741,6 +1680,7 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->config->ctrl =
         (PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL) | PS_APP_GBA_CTRL_BOOT_REQUIRED) &
         ~GBA_CTRL_CORE_ON;
+    ctx->config->ctrl &= GBA_CTRL_VALID_MASK;
     ctx->config->keys = 0U;
     ctx->config->max_pak_addr = 0U;
     ctx->config->cycle_precalc = 100U;
@@ -764,6 +1704,70 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->video->blit_total_us = 0U;
     ctx->video->blit_seq_gap_max = 0U;
     ctx->video->blit_seq_glitch_drop = 0U;
+    ctx->video->fx.interframe_mode = (u8)PS_APP_VIDEO_INTERFRAME_DEFAULT;
+    if (ctx->video->fx.interframe_mode > PS_APP_VIDEO_INTERFRAME_30HZ) {
+        ctx->video->fx.interframe_mode = (u8)PS_APP_VIDEO_INTERFRAME_OFF;
+    }
+    ctx->video->fx.shade_mode = (u8)PS_APP_VIDEO_SHADE_DEFAULT;
+    if (ctx->video->fx.shade_mode > 4U) {
+        ctx->video->fx.shade_mode = 0U;
+    }
+    ctx->video->fx.non_eq_hd2x_hint = 1U;
+    ctx->video->fx.non_eq_maxpixels_hint = 1U;
+    ctx->video->fx.frame30_phase = 0U;
+    ctx->video->fx.prev_capture_valid = 0U;
+    ctx->video->fx.reserved0 = 0U;
+    ctx->video->fx.reserved1 = 0U;
+
+    ctx->state_feature->slot = 0U;
+    ctx->state_feature->rewind_enable = 0U;
+    ctx->state_feature->rewind_active = 0U;
+    ctx->state_feature->cheats_enabled = 0U;
+    ctx->state_feature->save_pending = 0U;
+    ctx->state_feature->load_pending = 0U;
+    ctx->state_feature->cheat_push_pending = 0U;
+    ctx->state_feature->cheat_clear_pending = 0U;
+    ctx->state_feature->feature_status = 0U;
+    ctx->state_feature->cheat_words[0] = 0U;
+    ctx->state_feature->cheat_words[1] = 0U;
+    ctx->state_feature->cheat_words[2] = 0U;
+    ctx->state_feature->cheat_words[3] = 0U;
+    ctx->state_feature->io_phase = (u8)PS_APP_STATE_IO_IDLE;
+    ctx->state_feature->io_busy_seen = 0U;
+    ctx->state_feature->io_last_result = 0U;
+    ctx->state_feature->reserved0 = 0U;
+    ctx->state_feature->io_wait_ticks = 0U;
+    ctx->state_feature->io_timeout_ticks = 0U;
+    ctx->state_feature->save_file_count = 0U;
+    ctx->state_feature->load_file_count = 0U;
+    ctx->state_feature->io_error_count = 0U;
+    ctx->state_feature->last_state_path[0] = '\0';
+
+    ctx->rtc->loaded = 0U;
+    ctx->rtc->in_use = 0U;
+    ctx->rtc->dirty = 0U;
+    ctx->rtc->reserved0 = 0U;
+    ctx->rtc->save_interval_ticks = PS_APP_RTC_FLUSH_TICKS;
+    if (ctx->rtc->save_interval_ticks == 0U) {
+        ctx->rtc->save_interval_ticks = 1U;
+    }
+    ctx->rtc->save_countdown = ctx->rtc->save_interval_ticks;
+    ctx->rtc->timestamp_saved = 0U;
+    ctx->rtc->saved_time = 0ULL;
+    ctx->rtc->last_timestamp_out = 0U;
+    ctx->rtc->last_savedtime_out = 0ULL;
+    ctx->rtc->path[0] = '\0';
+
+    ctx->sensor->solar = 0U;
+    ctx->sensor->tilt_x = 0;
+    ctx->sensor->tilt_y = 0;
+    ctx->sensor->rumble_enabled = 1U;
+    ctx->sensor->rumble_active = 0U;
+    ctx->sensor->rumble_strength = (u8)PS_APP_RUMBLE_STRENGTH_ON;
+    ctx->sensor->rumble_dirty = 1U;
+    ctx->sensor->reserved0 = 0U;
+    ctx->sensor->rumble_change_count = 0U;
+    ctx->sensor->sensor_update_count = 0U;
 
     ctx->rom->loaded = 0U;
     ctx->rom->is_loading = 0U;
@@ -921,6 +1925,8 @@ void PsAppRuntime_ApplyShadowConfig(PsAppRuntimeContext *ctx) {
         return;
     }
 
+    (void)PsAppRuntime_SanitizeCtrlShadow(ctx, "apply-shadow", 0U);
+
     PsGbaRegs_CommitConfig(ctx->regs,
                            ctx->config->ctrl,
                            ctx->config->keys,
@@ -977,6 +1983,9 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
         xil_printf("[ROM] invalid path\r\n");
         return XST_INVALID_PARAM;
     }
+    if ((ctx->rtc != NULL) && (ctx->rtc->dirty != 0U)) {
+        (void)PsAppRuntime_FlushRtcToFile(ctx);
+    }
 
     ctx->rom->is_loading = 1U;
     ctx->rom->loaded = 0U;
@@ -1015,6 +2024,11 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     ctx->diag->stall_last_frame = 0U;
     ctx->diag->stall_same_sample_count = 0U;
     ctx->diag->auto_stall_audit_printed = 0U;
+    ctx->state_feature->save_pending = 0U;
+    ctx->state_feature->load_pending = 0U;
+    ctx->state_feature->cheat_push_pending = 0U;
+    ctx->state_feature->cheat_clear_pending = 0U;
+    ctx->state_feature->feature_status = 0U;
     PsAppRuntime_CopyText(ctx->rom->path, sizeof(ctx->rom->path), resolved_path);
 
     ctx->config->ctrl |= PS_APP_GBA_CTRL_BOOT_REQUIRED;
@@ -1060,15 +2074,50 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     if (PsAppSave_PrepareForRom(ctx->save_ctx, ctx->rom->path) != XST_SUCCESS) {
         xil_printf("[SAVE] preload skipped\r\n");
     }
+    if (strcmp(ctx->rom->path, resolved_path) != 0) {
+        xil_printf("[ROM] warning: path clobbered after save preload old=%s new=%s\r\n",
+                   ctx->rom->path,
+                   resolved_path);
+        PsAppRuntime_CopyText(ctx->rom->path, sizeof(ctx->rom->path), resolved_path);
+    }
+    /*
+     * RTC 预加载前后各做一次稳定性校验：
+     * - pre: 确保进入 RTC 路径前上下文已干净；
+     * - post: 一旦 RTC/存储链路触发异常，立即就地自愈，避免带毒进入后续 VDMA 请求。
+     */
+    PsAppRuntime_ValidateContextStability(ctx, "rom-pre-rtc");
+    (void)PsAppRuntime_PrepareRtcForRom(ctx, ctx->rom->path);
+    PsAppRuntime_ValidateContextStability(ctx, "rom-post-rtc");
+    PsAppRuntime_ApplyFeatureLevels(ctx);
+    PsAppRuntime_ApplySensorState(ctx, 1U);
 
     ctx->config->max_pak_addr = load_result.max_pak_addr & 0x1FFFFFFU;
     ctx->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
     ctx->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED);
     PsAppRuntime_ApplyRomDetection(ctx, &load_result);
+    (void)PsAppRuntime_SanitizeCtrlShadow(ctx, "rom-detect", 0U);
+    xil_printf("[ROMSTEP] apply-shadow begin ctrl=0x%08x\r\n",
+               (unsigned int)ctx->config->ctrl);
     PsAppRuntime_ApplyShadowConfig(ctx);
-    (void)PsHdmiVdma_FillAllFrames(ctx->vdma, 0x00000000U);
-    (void)PsAppVideo_RequestFrame(ctx->video_ctx, 0U);
+    xil_printf("[ROMSTEP] apply-shadow done\r\n");
+    xil_printf("[ROMSTEP] vdma fill begin w=%u h=%u stride=%u count=%u\r\n",
+               (unsigned int)ctx->vdma->width,
+               (unsigned int)ctx->vdma->height,
+               (unsigned int)ctx->vdma->line_stride_bytes,
+               (unsigned int)ctx->vdma->frame_count);
+    if (PsHdmiVdma_FillAllFrames(ctx->vdma, 0x00000000U) != XST_SUCCESS) {
+        xil_printf("[ROMSTEP] warning: vdma fill failed\r\n");
+    } else {
+        xil_printf("[ROMSTEP] vdma fill done\r\n");
+    }
+    xil_printf("[ROMSTEP] request frame begin\r\n");
+    if (PsAppVideo_RequestFrame(ctx->video_ctx, 0U) != XST_SUCCESS) {
+        xil_printf("[ROMSTEP] warning: request frame failed\r\n");
+    } else {
+        xil_printf("[ROMSTEP] request frame done\r\n");
+    }
     PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
+    xil_printf("[ROMSTEP] sync frame done\r\n");
     ctx->video->fbcap_last_frame_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
     PsAppDiag_PrintConfigReadback(ctx->diag_ctx, "rom-postload");
 
@@ -1115,6 +2164,9 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
     PsAppRuntime_ApplyShadowConfig(ctx);
     PsGbaRegs_SetIrqEnable(ctx->regs, ctx->config->irq_enable);
     PsGbaRegs_ClearIrqStatus(ctx->regs, PS_APP_IRQ_MASK_VSYNC | PS_APP_IRQ_MASK_ERROR);
+    PsAppRuntime_ApplyFeatureLevels(ctx);
+    PsAppRuntime_ApplyRtcSavedState(ctx);
+    PsAppRuntime_ApplySensorState(ctx, 1U);
     xil_printf("[INIT] 1: gba regs done\r\n");
 
     xil_printf("[INIT] 2: vdma init\r\n");
@@ -1157,6 +2209,8 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
         xil_printf("[INIT] 5 failed: %d\r\n", status);
         return status;
     }
+    PsAppVideo_SetInterframeMode(ctx->video_ctx, ctx->video->fx.interframe_mode);
+    PsAppVideo_SetShadeMode(ctx->video_ctx, ctx->video->fx.shade_mode);
     xil_printf("[INIT] 5: framebuffers ready\r\n");
     xil_printf("[INIT] 5: trying park frame 0\r\n");
     status = PsAppVideo_RequestFrame(ctx->video_ctx, 0U);
@@ -1207,16 +2261,17 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
                (int)PS_APP_INPUT_LSTICK_DEADZONE,
                (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
 #endif
-    xil_printf("[INIT] 8.4: usb host init\r\n");
-    if (PsAppUsbHost_Init(ctx->usb_host_ctx) != XST_SUCCESS) {
-        xil_printf("[INIT] 8.4 warning: usb host unavailable\r\n");
-    } else {
-        PsAppUsbHost_PrintStatus(ctx->usb_host_ctx);
-    }
 
     xil_printf("[INIT] 9: rom autoload\r\n");
     if (PsAppRuntime_AutoloadDefaultRom(ctx) != XST_SUCCESS) {
         xil_printf("[INIT] 9 warning: ROM autoload skipped\r\n");
+    }
+
+    xil_printf("[INIT] 9.1: usb host init (post-rom)\r\n");
+    if (PsAppUsbHost_Init(ctx->usb_host_ctx) != XST_SUCCESS) {
+        xil_printf("[INIT] 9.1 warning: usb host unavailable\r\n");
+    } else {
+        PsAppUsbHost_PrintStatus(ctx->usb_host_ctx);
     }
 
     return XST_SUCCESS;
@@ -1239,6 +2294,7 @@ static void PsAppRuntime_ServiceInputFast(PsAppRuntimeContext *ctx) {
     PsAppInput_Service(ctx->input_ctx);
     frame_token = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
     PsAppInput_PublishFrame(ctx->input_ctx, frame_token);
+    PsAppRuntime_ServiceSensorFast(ctx);
     input_override = PsAppInput_ShouldOverrideKeys(ctx->input_ctx);
     if (input_override != 0U) {
         prev_gba_keys = ctx->input->last_committed_keys & 0x3FFU;
@@ -1331,6 +2387,9 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
         PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
         ctx->hdmi->blank_frame_pending = 0U;
     }
+    PsAppRuntime_ServiceStateFeature(ctx);
+    PsAppRuntime_ServiceRtcPersist(ctx);
+    PsAppRuntime_ServiceRumble(ctx);
 
     if (ctx->rom->is_loading != 0U) {
         PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);

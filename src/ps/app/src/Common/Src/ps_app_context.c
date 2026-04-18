@@ -45,6 +45,9 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->runtime_ctx.rom = &ctx->rom;
     ctx->runtime_ctx.save = &ctx->save;
     ctx->runtime_ctx.diag = &ctx->diag;
+    ctx->runtime_ctx.state_feature = &ctx->state_feature;
+    ctx->runtime_ctx.rtc = &ctx->rtc;
+    ctx->runtime_ctx.sensor = &ctx->sensor;
     ctx->runtime_ctx.usb_host = &ctx->usb_host;
     ctx->runtime_ctx.input = &ctx->input;
     ctx->runtime_ctx.hdmi = &ctx->hdmi;

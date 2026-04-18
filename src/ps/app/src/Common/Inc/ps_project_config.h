@@ -25,17 +25,28 @@ extern "C" {
 #define PS_APP_ROM_PATH_MAX_CHARS       128U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/bjg.gba"
 #define PS_APP_SAVE_SD_DIR              "0:/saves"
+#define PS_APP_STATE_SD_DIR             "0:/states"
+#define PS_APP_RTC_SD_DIR               "0:/rtc"
 #define PS_APP_BIOS_SD_PATH             "0:/boot.rom"
 #define PS_APP_GBA_BIOS_BYTES           (16U * 1024U)
 #define PS_APP_GBA_BIOS_WORDS           (PS_APP_GBA_BIOS_BYTES / 4U)
 #define PS_APP_GBA_BIOS_WRITE_TIMEOUT_LOOPS 2000000U
+#define PS_APP_STATE_SLOT_COUNT         4U
+/* MiSTer GBA savestate map (DWORD-based addressing on SAVE_out bus). */
+#define PS_APP_CORE_SAVESTATE_BASE_DWORDS 0x03800000U
+#define PS_APP_CORE_SAVESTATE_SLOT_DWORDS 0x00020000U
+#define PS_APP_STATE_SLOT_BYTES         (PS_APP_CORE_SAVESTATE_SLOT_DWORDS * 4U)
+#define PS_APP_STATE_REGION_BASE_ADDR   (PS_APP_GBA_SAVE_REGION_BASE_ADDR + \
+                                         (PS_APP_CORE_SAVESTATE_BASE_DWORDS * 4U))
+#define PS_APP_STATE_IO_TIMEOUT_TICKS   300U
+#define PS_APP_STATE_IO_FALLBACK_TICKS  5U
 
 #define PS_APP_SYS_TASK_STACK_WORDS       (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_SYS_TASK_PRIORITY          (tskIDLE_PRIORITY + 3U)
 #define PS_APP_VIDEO_TASK_STACK_WORDS     (configMINIMAL_STACK_SIZE * 8U)
 #define PS_APP_VIDEO_TASK_PRIORITY        (tskIDLE_PRIORITY + 2U)
-/* Console path includes command parsing and large help output. */
-#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 10U)
+/* Console 栈需要兼顾命令解析与日志打印，但过大也会挤占 FreeRTOS heap。 */
+#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 12U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
 /* 关键防坑：
  * save 线程会经过 FatFs + SD 驱动 + 日志打印的深调用链。
@@ -76,6 +87,11 @@ extern "C" {
 #define PS_APP_USBHOST_STALE_DETACH_TICKS            80U
 #define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE_TICKS 400U
 #define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX_TICKS  3000U
+#define PS_APP_RTC_FLUSH_TICKS            500U
+#define PS_APP_RUMBLE_STRENGTH_ON         180U
+#define PS_APP_RUMBLE_STRENGTH_OFF        0U
+#define PS_APP_VIDEO_INTERFRAME_DEFAULT   0U
+#define PS_APP_VIDEO_SHADE_DEFAULT        0U
 #define PS_APP_SAVE_FLUSH_QUIET_TICKS     25U
 #define PS_APP_TRACE_DEFAULT_SAMPLES      20U
 #define PS_APP_TRACE_DEFAULT_INTERVAL_MS  100U

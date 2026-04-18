@@ -33,7 +33,7 @@
   - 发送 XInput 风格震动输出包（优先验证 OUT 通道）。
 - 既有命令 `input status`/`input inject` 仍可用于解析链路验证。
 
-## 5. 热插拔鲁棒性策略（新增）
+## 5. 热插拔鲁棒性策略
 
 为减少“插上不识别 / 拔掉后逻辑未释放 / 抖动导致反复复位”，`UsbHost` 侧新增了行业常见的分层策略：
 
@@ -51,23 +51,3 @@
 - `PS_APP_USBHOST_STALE_DETACH_TICKS`
 - `PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE_TICKS`
 - `PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX_TICKS`
-
-## 6. 已完成与未完成
-
-已完成：
-
-1. 编译通过（`app.elf`）。
-2. Host 栈、IRQ、xbox class、输入映射、震动发送路径全部连通到应用代码。
-
-未在当前提交内自动验证（需上板）：
-
-1. 实机插接收器后的枚举时序与端口供电状态。
-2. 实机 `interrupt in` 连续收包稳定性。
-3. 实机 `usb rumble` 的设备响应一致性。
-
-## 7. 推荐上板验证步骤
-
-1. 上电后串口执行 `usb status`，确认 `init=1`、`irq=1`。
-2. 插入接收器并连接手柄，重复 `usb status`，确认 `dev=1`、`xbox=1`、`in_ok` 持续增长。
-3. 按键观察 `[INPUT] gba_keys=...` 输出是否符合预期。
-4. 执行 `usb rumble 120 60`，确认手柄震动反馈。
