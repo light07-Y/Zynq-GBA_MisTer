@@ -26,6 +26,12 @@ void PsAppRuntime_ReadPsButtonRawLevels(PsAppRuntimeContext *ctx,
                                         u32 *mio50_cfg,
                                         u32 *mio51_cfg);
 u32 PsAppRuntime_ReadPsButtonMask(PsAppRuntimeContext *ctx);
+void PsAppRuntimeFeature_InitDefaults(PsAppRuntimeContext *ctx);
+void PsAppRuntimeFeature_OnRomLoaded(PsAppRuntimeContext *ctx);
+void PsAppRuntimeFeature_OnRomPreUnload(PsAppRuntimeContext *ctx);
+void PsAppRuntimeFeature_ServiceFast(PsAppRuntimeContext *ctx);
+void PsAppRuntimeFeature_ServiceSlow(PsAppRuntimeContext *ctx);
+u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd);
 void PsAppRuntime_Service(PsAppRuntimeContext *ctx);
 void PsAppMonitorTask(void *arg);
 void PsAppSaveTask(void *arg);

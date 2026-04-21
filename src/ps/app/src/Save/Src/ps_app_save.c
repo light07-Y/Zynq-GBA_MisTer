@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "Gba/Inc/ps_gba_regs.h"
 #include "Storage/Inc/ps_fatfs_storage.h"
 #include "xil_cache.h"
 #include "xil_printf.h"
@@ -70,12 +71,17 @@ static XStatus PsAppSave_SnapshotWindow(PsAppSaveContext *ctx,
     return XST_SUCCESS;
 }
 
+/* 逻辑 save 类型 -> DDR 窗口基址：
+ * SRAM 与 FLASH 在 core 侧复用同一段窗口（起点一致，按不同逻辑长度解释）。
+ * EEPROM 则放在后续独立窗口，避免覆盖 SRAM/FLASH 区域。 */
 static UINTPTR PsAppSave_BaseAddr(PsAppSaveKind kind) {
     switch (kind) {
         case PS_APP_SAVE_KIND_SRAM:
         case PS_APP_SAVE_KIND_FLASH:
             return (UINTPTR)PS_APP_GBA_SAVE_REGION_BASE_ADDR;
         case PS_APP_SAVE_KIND_EEPROM:
+            /* 这里使用 FLASH 逻辑长度作为偏移锚点，是为了和 RTL softmap 地址保持一致。
+             * 该偏移不是“展开字节”概念，窗口展开由 WindowByteCount 单独处理。 */
             return (UINTPTR)(PS_APP_GBA_SAVE_REGION_BASE_ADDR + PS_APP_GBA_SAVE_FLASH_BYTES);
         default:
             return 0U;
@@ -90,6 +96,21 @@ static u32 PsAppSave_ByteCount(PsAppSaveKind kind) {
             return PS_APP_GBA_SAVE_FLASH_BYTES;
         case PS_APP_SAVE_KIND_EEPROM:
             return PS_APP_GBA_SAVE_EEPROM_BYTES;
+        default:
+            return 0U;
+    }
+}
+
+static u32 PsAppSave_WindowByteCount(PsAppSaveKind kind) {
+    /* window 字节数 = 逻辑字节数 * stride(4)。
+     * 任何对 DDR 保存窗口的 memcpy/memset 都必须用这个值，不能直接用逻辑大小。 */
+    switch (kind) {
+        case PS_APP_SAVE_KIND_SRAM:
+            return PS_APP_GBA_SAVE_SRAM_WINDOW_BYTES;
+        case PS_APP_SAVE_KIND_FLASH:
+            return PS_APP_GBA_SAVE_FLASH_WINDOW_BYTES;
+        case PS_APP_SAVE_KIND_EEPROM:
+            return PS_APP_GBA_SAVE_EEPROM_WINDOW_BYTES;
         default:
             return 0U;
     }
@@ -258,11 +279,12 @@ static void PsAppSave_ClearWindow(PsAppSaveKind kind) {
     u32 bytes;
 
     base_addr = PsAppSave_BaseAddr(kind);
-    bytes = PsAppSave_ByteCount(kind);
+    bytes = PsAppSave_WindowByteCount(kind);
     if ((base_addr == 0U) || (bytes == 0U)) {
         return;
     }
 
+    /* 用 0xFF 清窗口，匹配大多数卡带保存介质“擦除态”语义。 */
     memset((void *)base_addr, 0xFF, bytes);
     Xil_DCacheFlushRange((INTPTR)base_addr, bytes);
 }
@@ -273,6 +295,11 @@ static XStatus PsAppSave_TryLoadKind(PsAppSaveContext *ctx,
                                      u8 *loaded_out) {
     PsFatFsStorageReadResult read_result;
     char path[PS_APP_ROM_PATH_MAX_CHARS];
+    UINTPTR base_addr;
+    u8 *window_ptr;
+    u32 logical_bytes;
+    u32 window_bytes;
+    u32 idx;
     XStatus status;
 
     if ((ctx == NULL) || (ctx->state == NULL)) {
@@ -284,18 +311,40 @@ static XStatus PsAppSave_TryLoadKind(PsAppSaveContext *ctx,
         return XST_INVALID_PARAM;
     }
 
+    logical_bytes = PsAppSave_ByteCount(kind);
+    window_bytes = PsAppSave_WindowByteCount(kind);
+    base_addr = PsAppSave_BaseAddr(kind);
+    if ((logical_bytes == 0U) || (window_bytes == 0U) || (base_addr == 0U) ||
+        (logical_bytes > sizeof(s_ps_app_save_snapshot))) {
+        return XST_FAILURE;
+    }
+
     memset(&read_result, 0, sizeof(read_result));
     status = PsFatFsStorage_ReadFileToMemory(path,
-                                             PsAppSave_BaseAddr(kind),
-                                             PsAppSave_ByteCount(kind),
+                                             (UINTPTR)s_ps_app_save_snapshot,
+                                             logical_bytes,
                                              &read_result);
     if (status != XST_SUCCESS) {
         return status;
     }
 
+    /* gba_mister 的保存窗口是 4x 展开格式：每个逻辑字节占用一个 32-bit 槽位。
+     * 从磁盘加载时需要把标准存档格式“解包”到 core 可直接读取的窗口布局。 */
+    window_ptr = (u8 *)base_addr;
+    memset(window_ptr, 0xFF, window_bytes);
+    for (idx = 0U; idx < read_result.bytes_loaded; ++idx) {
+        u8 v = s_ps_app_save_snapshot[idx];
+        u32 off = idx * PS_APP_GBA_SAVE_EXPAND_STRIDE;
+        window_ptr[off + 0U] = v;
+        window_ptr[off + 1U] = v;
+        window_ptr[off + 2U] = v;
+        window_ptr[off + 3U] = v;
+    }
+    Xil_DCacheFlushRange((INTPTR)base_addr, window_bytes);
+
     ctx->state->loaded_from_sd = 1U;
     ctx->state->last_bytes = read_result.bytes_loaded;
-    ctx->state->last_checksum = PsAppSave_Checksum(PsAppSave_BaseAddr(kind), read_result.bytes_loaded);
+    ctx->state->last_checksum = PsAppSave_Checksum((UINTPTR)s_ps_app_save_snapshot, read_result.bytes_loaded);
     ctx->state->active_kind = (u8)kind;
     PsAppSave_CopyText(ctx->state->path, sizeof(ctx->state->path), path);
     if (loaded_out != NULL) {
@@ -319,6 +368,9 @@ static PsAppSaveKind PsAppSave_ResolveDirtyKind(u32 old_status, u32 new_status) 
     new_flash = (new_status >> 8) & 0xFFU;
     new_eeprom = (new_status >> 16) & 0xFFU;
 
+    /* SAVE_STATUS 是事件计数器而非“脏位”。
+     * 只要对应计数变化，就说明该介质出现了新写入事件。
+     * 优先级 EEPROM > FLASH > SRAM：EEPROM 最敏感，优先保证及时落盘。 */
     if (new_eeprom != old_eeprom) {
         return PS_APP_SAVE_KIND_EEPROM;
     }
@@ -336,7 +388,9 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
     char path[PS_APP_ROM_PATH_MAX_CHARS];
     UINTPTR base_addr;
     UINTPTR snapshot_addr;
-    u32 bytes;
+    u32 logical_bytes;
+    u32 window_bytes;
+    u32 idx;
 
     if ((ctx == NULL) || (ctx->state == NULL) || (ctx->rom == NULL)) {
         return XST_FAILURE;
@@ -351,17 +405,34 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
     }
 
     base_addr = PsAppSave_BaseAddr(kind);
-    bytes = PsAppSave_ByteCount(kind);
-    xil_printf("[SAVE] flush begin %s bytes=%u\r\n", path, (unsigned int)bytes);
-    if (PsAppSave_SnapshotWindow(ctx, base_addr, bytes, &snapshot_addr) != XST_SUCCESS) {
-        xil_printf("[SAVE] snapshot failed base=0x%08x bytes=%u\r\n",
-                   (unsigned int)base_addr,
-                   (unsigned int)bytes);
+    logical_bytes = PsAppSave_ByteCount(kind);
+    window_bytes = PsAppSave_WindowByteCount(kind);
+    xil_printf("[SAVE] flush begin %s logical=%u window=%u\r\n",
+               path,
+               (unsigned int)logical_bytes,
+               (unsigned int)window_bytes);
+    if ((logical_bytes == 0U) || (window_bytes == 0U)) {
         return XST_FAILURE;
     }
-    xil_printf("[SAVE] snapshot done bytes=%u\r\n", (unsigned int)bytes);
+    if (PsAppSave_SnapshotWindow(ctx, base_addr, window_bytes, &snapshot_addr) != XST_SUCCESS) {
+        xil_printf("[SAVE] snapshot failed base=0x%08x bytes=%u\r\n",
+                   (unsigned int)base_addr,
+                   (unsigned int)window_bytes);
+        return XST_FAILURE;
+    }
+
+    /* 从 core 的 4x 展开窗口中“压缩”回标准存档文件格式。 */
+    for (idx = 0U; idx < logical_bytes; ++idx) {
+        s_ps_app_save_snapshot[idx] = s_ps_app_save_snapshot[idx * PS_APP_GBA_SAVE_EXPAND_STRIDE];
+    }
+    Xil_DCacheFlushRange((INTPTR)s_ps_app_save_snapshot, logical_bytes);
+    xil_printf("[SAVE] snapshot done logical=%u\r\n", (unsigned int)logical_bytes);
+
     memset(&write_result, 0, sizeof(write_result));
-    if (PsFatFsStorage_WriteMemoryToFile(path, snapshot_addr, bytes, &write_result) != XST_SUCCESS) {
+    if (PsFatFsStorage_WriteMemoryToFile(path,
+                                         (UINTPTR)s_ps_app_save_snapshot,
+                                         logical_bytes,
+                                         &write_result) != XST_SUCCESS) {
         xil_printf("[SAVE] flush failed %s fs=%s\r\n",
                    path,
                    PsFatFsStorage_StrError(write_result.fs_result));
@@ -382,10 +453,11 @@ static XStatus PsAppSave_FlushKind(PsAppSaveContext *ctx, PsAppSaveKind kind) {
     ctx->state->flush_count++;
     ctx->state->dirty = 0U;
     ctx->state->quiet_ticks = 0U;
+    ctx->state->dirty_age_ticks = 0U;
     ctx->state->active_kind = (u8)kind;
     ctx->state->last_bytes = write_result.bytes_written;
 #if PS_APP_SAVE_ENABLE_POSTWRITE_CHECKSUM
-    ctx->state->last_checksum = PsAppSave_Checksum(base_addr, bytes);
+    ctx->state->last_checksum = PsAppSave_Checksum((UINTPTR)s_ps_app_save_snapshot, logical_bytes);
 #else
     ctx->state->last_checksum = 0U;
 #endif
@@ -403,6 +475,7 @@ void PsAppSave_Reset(PsAppSaveContext *ctx) {
     }
 
     memset(ctx->state, 0, sizeof(*ctx->state));
+    /* FLASH 窗口覆盖 SRAM/FLASH 共享区域，因此清 FLASH 即可同时清 SRAM 视图。 */
     PsAppSave_ClearWindow(PS_APP_SAVE_KIND_FLASH);
     PsAppSave_ClearWindow(PS_APP_SAVE_KIND_EEPROM);
 }
@@ -440,6 +513,11 @@ XStatus PsAppSave_PrepareForRom(PsAppSaveContext *ctx, const char *rom_path) {
     print_path = (log_path[0] != '\0') ? log_path : "(unknown)";
 
     loaded = 0U;
+    /* 加载优先级说明：
+     * 1) 先尝试 FLASH（覆盖 FLASH1M/FLASH 场景）；
+     * 2) FLASH 不存在再尝试 SRAM；
+     * 3) EEPROM 独立尝试（可与前两者并存于窗口布局中）。
+     * 这样可兼容历史文件命名并最大化命中可恢复存档。 */
     if (PsAppSave_TryLoadKind(ctx, rom_path, PS_APP_SAVE_KIND_FLASH, &loaded) != XST_SUCCESS) {
         (void)PsAppSave_TryLoadKind(ctx, rom_path, PS_APP_SAVE_KIND_SRAM, &loaded);
     }
@@ -466,10 +544,15 @@ void PsAppSave_Service(PsAppSaveContext *ctx) {
         return;
     }
 
+    /* 每次 service 轮询硬件计数器，检测是否出现新的 save 写入事件。 */
     status = PsGbaRegs_Read(ctx->regs, GBA_REG_SAVE_STATUS);
     dirty_kind = PsAppSave_ResolveDirtyKind(ctx->state->event_counters, status);
     if (dirty_kind != PS_APP_SAVE_KIND_NONE) {
         ctx->state->event_counters = status;
+        if ((ctx->state->dirty == 0U) ||
+            (ctx->state->active_kind != (u8)dirty_kind)) {
+            ctx->state->dirty_age_ticks = 0U;
+        }
         ctx->state->active_kind = (u8)dirty_kind;
         ctx->state->dirty = 1U;
         ctx->state->quiet_ticks = 0U;
@@ -480,9 +563,37 @@ void PsAppSave_Service(PsAppSaveContext *ctx) {
     }
 
     ctx->state->quiet_ticks++;
-    if (ctx->state->quiet_ticks < PS_APP_SAVE_FLUSH_QUIET_TICKS) {
+    if (ctx->state->dirty_age_ticks < 0xFFFFFFFFU) {
+        ctx->state->dirty_age_ticks++;
+    }
+    /* 双阈值策略：
+     * quiet: 写入事件安静一段时间后再落盘，减少碎片写；
+     * hard : 即使一直有写入抖动，也在上限时间强制落盘。 */
+    if ((ctx->state->quiet_ticks < PS_APP_SAVE_FLUSH_QUIET_TICKS) &&
+        (ctx->state->dirty_age_ticks < PS_APP_SAVE_FLUSH_HARD_TICKS)) {
         return;
     }
 
     (void)PsAppSave_FlushKind(ctx, (PsAppSaveKind)ctx->state->active_kind);
+}
+
+XStatus PsAppSave_FlushIfDirty(PsAppSaveContext *ctx) {
+    PsAppSaveKind kind;
+
+    if ((ctx == NULL) || (ctx->state == NULL) || (ctx->rom == NULL)) {
+        return XST_FAILURE;
+    }
+    if ((ctx->rom->loaded == 0U) || (ctx->state->dirty == 0U)) {
+        return XST_SUCCESS;
+    }
+
+    /* 仅允许三种有效 save 介质，避免异常值导致写错窗口。 */
+    kind = (PsAppSaveKind)ctx->state->active_kind;
+    if ((kind != PS_APP_SAVE_KIND_SRAM) &&
+        (kind != PS_APP_SAVE_KIND_FLASH) &&
+        (kind != PS_APP_SAVE_KIND_EEPROM)) {
+        return XST_FAILURE;
+    }
+
+    return PsAppSave_FlushKind(ctx, kind);
 }

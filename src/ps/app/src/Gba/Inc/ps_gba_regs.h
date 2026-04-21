@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PsGbaRegs {
     UINTPTR base_addr;
 } PsGbaRegs;
 
@@ -63,20 +63,21 @@ enum {
     GBA_REG_BIOS_WR_DATA           = 0x0B8,
     GBA_REG_BIOS_WR_REQ            = 0x0BC,
     GBA_REG_BIOS_WR_ACK            = 0x0C0,
-    GBA_REG_STATE_CTRL             = 0x0C4,
-    GBA_REG_CHEAT_CTRL             = 0x0C8,
-    GBA_REG_CHEAT_WORD0            = 0x0CC,
-    GBA_REG_CHEAT_WORD1            = 0x0D0,
-    GBA_REG_CHEAT_WORD2            = 0x0D4,
-    GBA_REG_CHEAT_WORD3            = 0x0D8,
-    GBA_REG_RTC_SAVED_TS           = 0x0DC,
-    GBA_REG_RTC_SAVEDTIME_LO       = 0x0E0,
-    GBA_REG_RTC_SAVEDTIME_HI       = 0x0E4,
-    GBA_REG_SENSOR                 = 0x0E8,
-    GBA_REG_FEATURE_STATUS         = 0x0EC,
-    GBA_REG_RTC_OUT_TIMESTAMP      = 0x0F0,
-    GBA_REG_RTC_OUT_SAVEDTIME_LO   = 0x0F4,
-    GBA_REG_RTC_OUT_SAVEDTIME_HI   = 0x0F8
+    GBA_REG_FEATURE_CTRL           = 0x0C4,
+    GBA_REG_FEATURE_ACTION         = 0x0C8,
+    GBA_REG_SAVESTATE_SLOT         = 0x0CC,
+    GBA_REG_CHEAT_FLAGS            = 0x0D0,
+    GBA_REG_CHEAT_ADDR             = 0x0D4,
+    GBA_REG_CHEAT_COMPARE          = 0x0D8,
+    GBA_REG_CHEAT_REPLACE          = 0x0DC,
+    GBA_REG_SENSOR_INPUT           = 0x0E0,
+    GBA_REG_RTC_IN_SAVEDTIME_LO    = 0x0E4,
+    GBA_REG_RTC_IN_SAVEDTIME_HI    = 0x0E8,
+    GBA_REG_RTC_OUT_TIMESTAMP      = 0x0EC,
+    GBA_REG_RTC_OUT_SAVEDTIME_LO   = 0x0F0,
+    GBA_REG_RTC_OUT_SAVEDTIME_HI   = 0x0F4,
+    GBA_REG_FEATURE_STATUS         = 0x0F8,
+    GBA_REG_FEATURE_STATUS_CLR     = 0x0FC
 };
 
 enum {
@@ -89,46 +90,50 @@ enum {
     GBA_CTRL_FLASH_1M        = (1U << 9),
     GBA_CTRL_SPECIAL_GPIO    = (1U << 10),
     GBA_CTRL_TILT            = (1U << 11),
-    GBA_CTRL_SRAM_32K_MIRROR_TEST = (1U << 13),
-    GBA_CTRL_VALID_MASK      = (GBA_CTRL_CORE_ON |
-                                GBA_CTRL_LOCK_SPEED |
-                                GBA_CTRL_CPU_TURBO |
-                                GBA_CTRL_SRAM_FLASH_EN |
-                                GBA_CTRL_MEMORY_REMAP |
-                                GBA_CTRL_ROM_LOADING |
-                                GBA_CTRL_FLASH_1M |
-                                GBA_CTRL_SPECIAL_GPIO |
-                                GBA_CTRL_TILT |
-                                GBA_CTRL_SRAM_32K_MIRROR_TEST)
+    GBA_CTRL_SRAM_32K_MIRROR_TEST = (1U << 13)
 };
 
 enum {
-    GBA_STATE_CTRL_SLOT_MASK      = 0x3U,
-    GBA_STATE_CTRL_SAVE_TRIG      = (1U << 4),
-    GBA_STATE_CTRL_LOAD_TRIG      = (1U << 5),
-    GBA_STATE_CTRL_REWIND_ENABLE  = (1U << 8),
-    GBA_STATE_CTRL_REWIND_ACTIVE  = (1U << 9)
+    GBA_FEATURE_CTRL_REWIND_ON         = (1U << 0),
+    GBA_FEATURE_CTRL_CHEATS_ENABLED    = (1U << 1),
+    GBA_FEATURE_CTRL_RUMBLE_FORWARD_EN = (1U << 2),
+    GBA_FEATURE_CTRL_SENSOR_AUTO_EN    = (1U << 3),
+    GBA_FEATURE_CTRL_RTC_AUTO_UPDATE_EN = (1U << 4),
+    /* 扩展位：运行时按住 R3 时拉高该位驱动 core 的 rewind_active。 */
+    GBA_FEATURE_CTRL_REWIND_ACTIVE_REQ = (1U << 5)
 };
 
 enum {
-    GBA_CHEAT_CTRL_ENABLE         = (1U << 0),
-    GBA_CHEAT_CTRL_CLEAR_TRIG     = (1U << 1),
-    GBA_CHEAT_CTRL_PUSH_TRIG      = (1U << 2)
+    GBA_FEATURE_ACTION_SAVE_TRIG       = (1U << 0),
+    GBA_FEATURE_ACTION_LOAD_TRIG       = (1U << 1),
+    GBA_FEATURE_ACTION_CHEAT_PUSH_TRIG = (1U << 2),
+    GBA_FEATURE_ACTION_CHEAT_CLEAR_TRIG = (1U << 3),
+    GBA_FEATURE_ACTION_RTC_NEW_TRIG    = (1U << 4)
 };
 
 enum {
-    GBA_FEATURE_STATUS_LOAD_DONE      = (1U << 0),
-    GBA_FEATURE_STATUS_CHEATS_ACTIVE  = (1U << 1),
-    GBA_FEATURE_STATUS_RTC_INUSE      = (1U << 2),
-    GBA_FEATURE_STATUS_RUMBLE         = (1U << 3),
-    GBA_FEATURE_STATUS_REWIND_ENABLE  = (1U << 4),
-    GBA_FEATURE_STATUS_REWIND_ACTIVE  = (1U << 5),
-    GBA_FEATURE_STATUS_BUSY_SHIFT     = 8,
-    GBA_FEATURE_STATUS_BUSY_MASK      = (0x3U << GBA_FEATURE_STATUS_BUSY_SHIFT)
+    GBA_FEATURE_STATUS_SAVESTATE_BUSY   = (1U << 0),
+    GBA_FEATURE_STATUS_LOAD_DONE_LATCHED = (1U << 1),
+    GBA_FEATURE_STATUS_REWIND_ACTIVE    = (1U << 2),
+    GBA_FEATURE_STATUS_RUMBLE_OUT       = (1U << 3),
+    GBA_FEATURE_STATUS_CHEATS_ACTIVE    = (1U << 4),
+    GBA_FEATURE_STATUS_RTC_INUSE        = (1U << 5)
 };
+
+typedef struct {
+    u32 flags;
+    u32 addr;
+    u32 compare;
+    u32 replace;
+} PsGbaCheatCodeWords;
+
+typedef struct {
+    u32 timestamp;
+    u64 savedtime;
+    u8 save_loaded;
+} PsGbaRtcOut;
 
 void PsGbaRegs_Init(PsGbaRegs *ctx, UINTPTR base_addr);
-void PsGbaRegs_Write(PsGbaRegs *ctx, u32 reg_offset, u32 value);
 void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
                             u32 ctrl,
                             u32 keys,
@@ -145,24 +150,15 @@ u32 PsGbaRegs_ReadBiosAckSeq(PsGbaRegs *ctx);
 void PsGbaRegs_StageBiosWord(PsGbaRegs *ctx, u32 word_addr, u32 word_data);
 void PsGbaRegs_RequestBiosWrite(PsGbaRegs *ctx);
 XStatus PsGbaRegs_WriteBiosWord(PsGbaRegs *ctx, u32 word_addr, u32 word_data, u32 timeout_loops);
-
-void PsGbaRegs_SetStateSlot(PsGbaRegs *ctx, u32 slot);
-void PsGbaRegs_SetRewindControl(PsGbaRegs *ctx, u32 enable, u32 active);
-void PsGbaRegs_TriggerSaveState(PsGbaRegs *ctx);
-void PsGbaRegs_TriggerLoadState(PsGbaRegs *ctx);
-
-void PsGbaRegs_SetCheatEnable(PsGbaRegs *ctx, u32 enable);
-void PsGbaRegs_TriggerCheatClear(PsGbaRegs *ctx);
-void PsGbaRegs_TriggerCheatPush(PsGbaRegs *ctx);
-void PsGbaRegs_SetCheatWords(PsGbaRegs *ctx, u32 w0, u32 w1, u32 w2, u32 w3);
-void PsGbaRegs_PushCheatWords(PsGbaRegs *ctx, u32 w0, u32 w1, u32 w2, u32 w3);
-
-void PsGbaRegs_SetRtcSavedState(PsGbaRegs *ctx, u32 timestamp_saved, u64 saved_time, u32 loaded);
-void PsGbaRegs_SetSensorState(PsGbaRegs *ctx, u32 solar, s8 tilt_x, s8 tilt_y);
-
+void PsGbaRegs_SetFeatureCtrl(PsGbaRegs *ctx, u32 feature_ctrl);
+void PsGbaRegs_SetSavestateSlot(PsGbaRegs *ctx, u32 slot);
+void PsGbaRegs_SetSensorInput(PsGbaRegs *ctx, u32 solar_level, s8 tilt_x, s8 tilt_y);
+void PsGbaRegs_SetCheatCodeWords(PsGbaRegs *ctx, const PsGbaCheatCodeWords *code_words);
+void PsGbaRegs_TriggerFeatureAction(PsGbaRegs *ctx, u32 action_mask);
 u32 PsGbaRegs_ReadFeatureStatus(PsGbaRegs *ctx);
-u32 PsGbaRegs_ReadRtcTimestampOut(PsGbaRegs *ctx);
-u64 PsGbaRegs_ReadRtcSavedTimeOut(PsGbaRegs *ctx);
+void PsGbaRegs_ClearFeatureStatus(PsGbaRegs *ctx, u32 clear_mask);
+void PsGbaRegs_ReadRtcOut(PsGbaRegs *ctx, PsGbaRtcOut *out);
+void PsGbaRegs_WriteRtcSavedTimeIn(PsGbaRegs *ctx, u64 savedtime, u8 save_loaded);
 
 u32 PsGbaRegs_Read(PsGbaRegs *ctx, u32 reg_offset);
 

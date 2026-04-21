@@ -18,6 +18,10 @@ XStatus PsAppUsbHost_PortReset(PsAppUsbHostContext *ctx);
 XStatus PsAppUsbHost_SetVbusDrive(PsAppUsbHostContext *ctx, u8 enable);
 XStatus PsAppUsbHost_DumpUlpi(PsAppUsbHostContext *ctx);
 
+XStatus PsAppUsbHost_ServiceChecked(PsAppUsbHostContext *ctx);
+XStatus PsAppUsbHost_PrintStatusChecked(const PsAppUsbHostContext *ctx);
+XStatus PsAppUsbHost_ForceRootHubScanChecked(PsAppUsbHostContext *ctx);
+
 #ifdef __cplusplus
 }
 #endif

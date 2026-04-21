@@ -3,8 +3,7 @@
 
 #include "xil_types.h"
 #include "xstatus.h"
-
-#include "Storage/Inc/ps_fatfs_storage.h"
+#include "ff.h"
 
 #ifdef __cplusplus
 extern "C" {

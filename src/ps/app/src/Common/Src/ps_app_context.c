@@ -44,6 +44,7 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->runtime_ctx.video = &ctx->video;
     ctx->runtime_ctx.rom = &ctx->rom;
     ctx->runtime_ctx.save = &ctx->save;
+    ctx->runtime_ctx.feature = &ctx->feature;
     ctx->runtime_ctx.diag = &ctx->diag;
     ctx->runtime_ctx.state_feature = &ctx->state_feature;
     ctx->runtime_ctx.rtc = &ctx->rtc;

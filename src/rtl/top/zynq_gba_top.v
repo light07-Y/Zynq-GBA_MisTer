@@ -157,6 +157,23 @@ module zynq_gba_top #(
   wire [24:0] w_core_cfg_max_pak_addr;
   wire [15:0] w_core_cfg_cycle_precalc;
   wire [31:0] w_core_cfg_rtc_timestamp;
+  wire [5:0]  w_core_feature_ctrl;
+  wire [2:0]  w_core_savestate_slot;
+  wire [31:0] w_core_cheat_flags;
+  wire [31:0] w_core_cheat_addr;
+  wire [31:0] w_core_cheat_compare;
+  wire [31:0] w_core_cheat_replace;
+  wire [2:0]  w_core_sensor_solar;
+  wire signed [7:0] w_core_sensor_tilt_x;
+  wire signed [7:0] w_core_sensor_tilt_y;
+  wire [41:0] w_core_rtc_savedtime;
+  wire        w_core_rtc_save_loaded;
+  wire        w_core_pulse_save_state;
+  wire        w_core_pulse_load_state;
+  wire        w_core_pulse_cheat_push;
+  wire        w_core_pulse_cheat_clear;
+  wire        w_core_pulse_rtc_new;
+  wire        w_core_rewind_active;
 
   // 2. AXI 寄存器到系统控制器的接口
   wire [31:0] w_axi_cfg_ctrl;
@@ -170,25 +187,20 @@ module zynq_gba_top #(
   wire [11:0] w_axi_bios_wr_addr;
   wire [31:0] w_axi_bios_wr_data;
   wire        w_axi_bios_wr_req_toggle;
-  wire [1:0]  w_axi_state_slot;
-  wire        w_axi_state_save_toggle;
-  wire        w_axi_state_load_toggle;
-  wire        w_axi_rewind_enable;
-  wire        w_axi_rewind_active;
-  wire        w_axi_cheat_enable;
-  wire        w_axi_cheat_clear_toggle;
-  wire        w_axi_cheat_push_toggle;
-  wire [31:0] w_axi_cheat_word0;
-  wire [31:0] w_axi_cheat_word1;
-  wire [31:0] w_axi_cheat_word2;
-  wire [31:0] w_axi_cheat_word3;
-  wire [31:0] w_axi_rtc_saved_timestamp;
-  wire [31:0] w_axi_rtc_savedtime_lo;
-  wire [9:0]  w_axi_rtc_savedtime_hi;
-  wire        w_axi_rtc_saved_loaded;
-  wire [2:0]  w_axi_sensor_solar;
-  wire [7:0]  w_axi_sensor_tilt_x;
-  wire [7:0]  w_axi_sensor_tilt_y;
+  wire [5:0]  w_axi_feature_ctrl;
+  wire        w_axi_feature_action_save_toggle;
+  wire        w_axi_feature_action_load_toggle;
+  wire        w_axi_feature_action_cheat_push_toggle;
+  wire        w_axi_feature_action_cheat_clear_toggle;
+  wire        w_axi_feature_action_rtc_new_toggle;
+  wire [2:0]  w_axi_savestate_slot;
+  wire [31:0] w_axi_cheat_flags;
+  wire [31:0] w_axi_cheat_addr;
+  wire [31:0] w_axi_cheat_compare;
+  wire [31:0] w_axi_cheat_replace;
+  wire [23:0] w_axi_sensor_input;
+  wire [31:0] w_axi_rtc_in_savedtime_lo;
+  wire [31:0] w_axi_rtc_in_savedtime_hi;
 
   // 3. 内存系统信号 (DDRAM Mux & Backend)
   wire        ddram_busy;
@@ -280,6 +292,17 @@ module zynq_gba_top #(
   wire [31:0] dbg_done_last_addr_axi;
   wire [31:0] dbg_done_last_meta_axi;
   wire [31:0] save_status_axi;
+  wire        feature_savestate_busy_axi;
+  wire        feature_load_done_pulse_axi;
+  wire        feature_rewind_active_axi;
+  wire        feature_rumble_out_axi;
+  wire        feature_cheats_active_axi;
+  wire        feature_rtc_inuse_axi;
+  wire [2:0]  feature_slot_echo_axi;
+  wire [2:0]  feature_solar_echo_axi;
+  wire [31:0] feature_rtc_out_timestamp_axi;
+  wire [31:0] feature_rtc_out_savedtime_lo_axi;
+  wire [31:0] feature_rtc_out_savedtime_hi_axi;
 
   (* ASYNC_REG = "TRUE" *) reg        w_core_cfg_sw_reset_meta, w_core_cfg_sw_reset_sync;
   (* ASYNC_REG = "TRUE" *) reg [1:0]  display_frame_idx_core_meta, display_frame_idx_core_sync;
@@ -331,6 +354,18 @@ module zynq_gba_top #(
   reg                                 fbcap_shadow_buf_axi_s2;
   reg [1:0]                           fbcap_shadow_sample_cnt;
   (* ASYNC_REG = "TRUE" *) reg [31:0] save_status_axi_meta, save_status_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        feature_savestate_busy_axi_meta, feature_savestate_busy_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        feature_rewind_active_axi_meta, feature_rewind_active_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        feature_rumble_out_axi_meta, feature_rumble_out_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        feature_cheats_active_axi_meta, feature_cheats_active_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg        feature_rtc_inuse_axi_meta, feature_rtc_inuse_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  feature_slot_echo_axi_meta, feature_slot_echo_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  feature_solar_echo_axi_meta, feature_solar_echo_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] feature_rtc_out_timestamp_axi_meta, feature_rtc_out_timestamp_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] feature_rtc_out_savedtime_lo_axi_meta, feature_rtc_out_savedtime_lo_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] feature_rtc_out_savedtime_hi_axi_meta, feature_rtc_out_savedtime_hi_axi_sync;
+  reg                                 feature_load_done_toggle_core;
+  (* ASYNC_REG = "TRUE" *) reg [2:0]  feature_load_done_toggle_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [2:0]  bios_wr_req_sync_core;
   (* ASYNC_REG = "TRUE" *) reg [2:0]  bios_wr_ack_sync_axi;
   reg                                 bios_wr_ack_toggle_core;
@@ -343,40 +378,6 @@ module zynq_gba_top #(
   reg [11:0]                          bios_wr_addr_core;
   reg [31:0]                          bios_wr_data_core;
   reg                                 bios_wr_core;
-  reg [1:0]                           state_slot_core_meta;
-  reg [1:0]                           state_slot_core_sync;
-  reg                                 rewind_enable_core_meta;
-  reg                                 rewind_enable_core_sync;
-  reg                                 rewind_active_core_meta;
-  reg                                 rewind_active_core_sync;
-  reg                                 cheat_enable_core_meta;
-  reg                                 cheat_enable_core_sync;
-  reg [31:0]                          cheat_word0_core_meta;
-  reg [31:0]                          cheat_word0_core_sync;
-  reg [31:0]                          cheat_word1_core_meta;
-  reg [31:0]                          cheat_word1_core_sync;
-  reg [31:0]                          cheat_word2_core_meta;
-  reg [31:0]                          cheat_word2_core_sync;
-  reg [31:0]                          cheat_word3_core_meta;
-  reg [31:0]                          cheat_word3_core_sync;
-  reg [31:0]                          rtc_saved_timestamp_core_meta;
-  reg [31:0]                          rtc_saved_timestamp_core_sync;
-  reg [31:0]                          rtc_savedtime_lo_core_meta;
-  reg [31:0]                          rtc_savedtime_lo_core_sync;
-  reg [9:0]                           rtc_savedtime_hi_core_meta;
-  reg [9:0]                           rtc_savedtime_hi_core_sync;
-  reg                                 rtc_saved_loaded_core_meta;
-  reg                                 rtc_saved_loaded_core_sync;
-  reg [2:0]                           sensor_solar_core_meta;
-  reg [2:0]                           sensor_solar_core_sync;
-  reg [7:0]                           sensor_tilt_x_core_meta;
-  reg [7:0]                           sensor_tilt_x_core_sync;
-  reg [7:0]                           sensor_tilt_y_core_meta;
-  reg [7:0]                           sensor_tilt_y_core_sync;
-  (* ASYNC_REG = "TRUE" *) reg [2:0]  state_save_req_sync_core;
-  (* ASYNC_REG = "TRUE" *) reg [2:0]  state_load_req_sync_core;
-  (* ASYNC_REG = "TRUE" *) reg [2:0]  cheat_clear_req_sync_core;
-  (* ASYNC_REG = "TRUE" *) reg [2:0]  cheat_push_req_sync_core;
 
   wire [15:0] unused_core_vcount;
   reg                                  fb_frame_pulse_toggle;
@@ -417,8 +418,6 @@ module zynq_gba_top #(
 
   // 7. 明确收口上游核心当前未接入的可选功能，避免综合依赖隐式默认值
   localparam [1:0] GBA_UNDERCLOCK_OFF       = 2'b00;
-  localparam [1:0] GBA_INTERFRAME_BLEND_OFF = 2'b00;
-  localparam [2:0] GBA_SHADE_MODE_OFF       = 3'b000;
 
   wire [31:0] unused_bus_read_data;
   wire [31:0] core_rtc_timestamp_out;
@@ -440,25 +439,6 @@ module zynq_gba_top #(
   wire        audio_sample_ce;
   wire [15:0] audio_out_l;
   wire [15:0] audio_out_r;
-  (* ASYNC_REG = "TRUE" *) reg [31:0] rtc_timestamp_out_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg [31:0] rtc_timestamp_out_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg [41:0] rtc_savedtime_out_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg [41:0] rtc_savedtime_out_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        rtc_inuse_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg        rtc_inuse_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        cheats_active_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg        cheats_active_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        load_done_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg        load_done_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        rumble_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg        rumble_axi_sync;
-  (* ASYNC_REG = "TRUE" *) reg        save_busy_axi_meta;
-  (* ASYNC_REG = "TRUE" *) reg        save_busy_axi_sync;
-  wire [1:0] feature_busy_axi;
-  wire       state_save_pulse_core;
-  wire       state_load_pulse_core;
-  wire       cheat_clear_pulse_core;
-  wire       cheat_push_pulse_core;
 
   assign w_core_cfg_sw_reset = w_core_cfg_sw_reset_sync;
   assign display_frame_idx_core = display_frame_idx_core_sync;
@@ -473,11 +453,6 @@ module zynq_gba_top #(
   assign debug_mem_axi = G_ENABLE_DEBUG ? debug_mem_axi_sync : 32'd0;
   assign audio_out_l = core_audio_l;
   assign audio_out_r = core_audio_r;
-  assign feature_busy_axi = {save_busy_axi_sync, 1'b0};
-  assign state_save_pulse_core = state_save_req_sync_core[2] ^ state_save_req_sync_core[1];
-  assign state_load_pulse_core = state_load_req_sync_core[2] ^ state_load_req_sync_core[1];
-  assign cheat_clear_pulse_core = cheat_clear_req_sync_core[2] ^ cheat_clear_req_sync_core[1];
-  assign cheat_push_pulse_core = cheat_push_req_sync_core[2] ^ cheat_push_req_sync_core[1];
   // Keep the PS-side frame IRQ aligned with the core's original largeimg frame
   // boundary. Using pixel_addr==0 fires at the first pixel of a new frame and
   // can arrive before FB_CAP_SEQ has advanced, so the PS blit path misses the
@@ -507,6 +482,18 @@ module zynq_gba_top #(
   assign dbg_done_last_addr_axi = G_ENABLE_DEBUG ? dbg_done_last_addr_axi_sync : 32'd0;
   assign dbg_done_last_meta_axi = G_ENABLE_DEBUG ? dbg_done_last_meta_axi_sync : 32'd0;
   assign save_status_axi = save_status_axi_sync;
+  assign w_core_rewind_active = w_core_feature_ctrl[0] & w_core_feature_ctrl[5];
+  assign feature_savestate_busy_axi = feature_savestate_busy_axi_sync;
+  assign feature_load_done_pulse_axi = feature_load_done_toggle_axi_sync[2] ^ feature_load_done_toggle_axi_sync[1];
+  assign feature_rewind_active_axi = feature_rewind_active_axi_sync;
+  assign feature_rumble_out_axi = feature_rumble_out_axi_sync;
+  assign feature_cheats_active_axi = feature_cheats_active_axi_sync;
+  assign feature_rtc_inuse_axi = feature_rtc_inuse_axi_sync;
+  assign feature_slot_echo_axi = feature_slot_echo_axi_sync;
+  assign feature_solar_echo_axi = feature_solar_echo_axi_sync;
+  assign feature_rtc_out_timestamp_axi = feature_rtc_out_timestamp_axi_sync;
+  assign feature_rtc_out_savedtime_lo_axi = feature_rtc_out_savedtime_lo_axi_sync;
+  assign feature_rtc_out_savedtime_hi_axi = feature_rtc_out_savedtime_hi_axi_sync;
 
   function [7:0] sat_inc8;
     input [7:0] value;
@@ -521,40 +508,6 @@ module zynq_gba_top #(
       w_core_cfg_sw_reset_sync <= 1'b0;
       display_frame_idx_core_meta <= 2'd0;
       display_frame_idx_core_sync <= 2'd0;
-      state_slot_core_meta <= 2'd0;
-      state_slot_core_sync <= 2'd0;
-      rewind_enable_core_meta <= 1'b0;
-      rewind_enable_core_sync <= 1'b0;
-      rewind_active_core_meta <= 1'b0;
-      rewind_active_core_sync <= 1'b0;
-      cheat_enable_core_meta <= 1'b0;
-      cheat_enable_core_sync <= 1'b0;
-      cheat_word0_core_meta <= 32'd0;
-      cheat_word0_core_sync <= 32'd0;
-      cheat_word1_core_meta <= 32'd0;
-      cheat_word1_core_sync <= 32'd0;
-      cheat_word2_core_meta <= 32'd0;
-      cheat_word2_core_sync <= 32'd0;
-      cheat_word3_core_meta <= 32'd0;
-      cheat_word3_core_sync <= 32'd0;
-      rtc_saved_timestamp_core_meta <= 32'd0;
-      rtc_saved_timestamp_core_sync <= 32'd0;
-      rtc_savedtime_lo_core_meta <= 32'd0;
-      rtc_savedtime_lo_core_sync <= 32'd0;
-      rtc_savedtime_hi_core_meta <= 10'd0;
-      rtc_savedtime_hi_core_sync <= 10'd0;
-      rtc_saved_loaded_core_meta <= 1'b0;
-      rtc_saved_loaded_core_sync <= 1'b0;
-      sensor_solar_core_meta <= 3'd0;
-      sensor_solar_core_sync <= 3'd0;
-      sensor_tilt_x_core_meta <= 8'd0;
-      sensor_tilt_x_core_sync <= 8'd0;
-      sensor_tilt_y_core_meta <= 8'd0;
-      sensor_tilt_y_core_sync <= 8'd0;
-      state_save_req_sync_core <= 3'b000;
-      state_load_req_sync_core <= 3'b000;
-      cheat_clear_req_sync_core <= 3'b000;
-      cheat_push_req_sync_core <= 3'b000;
       fb_frame_pulse_toggle    <= 1'b0;
       sys_err_pulse_toggle     <= 1'b0;
       dbg_chain_flags_core     <= 32'd0;
@@ -588,45 +541,12 @@ module zynq_gba_top #(
       save_sram_count_core    <= 8'd0;
       save_flash_count_core   <= 8'd0;
       save_eeprom_count_core  <= 8'd0;
+      feature_load_done_toggle_core <= 1'b0;
     end else begin
       w_core_cfg_sw_reset_meta <= w_axi_cfg_sw_reset;
       w_core_cfg_sw_reset_sync <= w_core_cfg_sw_reset_meta;
       display_frame_idx_core_meta <= w_axi_display_frame_idx;
       display_frame_idx_core_sync <= display_frame_idx_core_meta;
-      state_slot_core_meta <= w_axi_state_slot;
-      state_slot_core_sync <= state_slot_core_meta;
-      rewind_enable_core_meta <= w_axi_rewind_enable;
-      rewind_enable_core_sync <= rewind_enable_core_meta;
-      rewind_active_core_meta <= w_axi_rewind_active;
-      rewind_active_core_sync <= rewind_active_core_meta;
-      cheat_enable_core_meta <= w_axi_cheat_enable;
-      cheat_enable_core_sync <= cheat_enable_core_meta;
-      cheat_word0_core_meta <= w_axi_cheat_word0;
-      cheat_word0_core_sync <= cheat_word0_core_meta;
-      cheat_word1_core_meta <= w_axi_cheat_word1;
-      cheat_word1_core_sync <= cheat_word1_core_meta;
-      cheat_word2_core_meta <= w_axi_cheat_word2;
-      cheat_word2_core_sync <= cheat_word2_core_meta;
-      cheat_word3_core_meta <= w_axi_cheat_word3;
-      cheat_word3_core_sync <= cheat_word3_core_meta;
-      rtc_saved_timestamp_core_meta <= w_axi_rtc_saved_timestamp;
-      rtc_saved_timestamp_core_sync <= rtc_saved_timestamp_core_meta;
-      rtc_savedtime_lo_core_meta <= w_axi_rtc_savedtime_lo;
-      rtc_savedtime_lo_core_sync <= rtc_savedtime_lo_core_meta;
-      rtc_savedtime_hi_core_meta <= w_axi_rtc_savedtime_hi;
-      rtc_savedtime_hi_core_sync <= rtc_savedtime_hi_core_meta;
-      rtc_saved_loaded_core_meta <= w_axi_rtc_saved_loaded;
-      rtc_saved_loaded_core_sync <= rtc_saved_loaded_core_meta;
-      sensor_solar_core_meta <= w_axi_sensor_solar;
-      sensor_solar_core_sync <= sensor_solar_core_meta;
-      sensor_tilt_x_core_meta <= w_axi_sensor_tilt_x;
-      sensor_tilt_x_core_sync <= sensor_tilt_x_core_meta;
-      sensor_tilt_y_core_meta <= w_axi_sensor_tilt_y;
-      sensor_tilt_y_core_sync <= sensor_tilt_y_core_meta;
-      state_save_req_sync_core <= {state_save_req_sync_core[1:0], w_axi_state_save_toggle};
-      state_load_req_sync_core <= {state_load_req_sync_core[1:0], w_axi_state_load_toggle};
-      cheat_clear_req_sync_core <= {cheat_clear_req_sync_core[1:0], w_axi_cheat_clear_toggle};
-      cheat_push_req_sync_core <= {cheat_push_req_sync_core[1:0], w_axi_cheat_push_toggle};
 
       if (fb_frame_pulse) begin
         fb_frame_pulse_toggle <= ~fb_frame_pulse_toggle;
@@ -773,6 +693,10 @@ module zynq_gba_top #(
           if (dbg_chain_counts1_core[31:28] != 4'hF)
             dbg_chain_counts1_core[31:28] <= dbg_chain_counts1_core[31:28] + 4'd1;
         end
+
+        if (core_load_done) begin
+          feature_load_done_toggle_core <= ~feature_load_done_toggle_core;
+        end
       end
     end
   end
@@ -877,20 +801,27 @@ module zynq_gba_top #(
       fbcap_shadow_sample_cnt <= 2'd0;
       save_status_axi_meta <= 32'd0;
       save_status_axi_sync <= 32'd0;
-      rtc_timestamp_out_axi_meta <= 32'd0;
-      rtc_timestamp_out_axi_sync <= 32'd0;
-      rtc_savedtime_out_axi_meta <= 42'd0;
-      rtc_savedtime_out_axi_sync <= 42'd0;
-      rtc_inuse_axi_meta <= 1'b0;
-      rtc_inuse_axi_sync <= 1'b0;
-      cheats_active_axi_meta <= 1'b0;
-      cheats_active_axi_sync <= 1'b0;
-      load_done_axi_meta <= 1'b0;
-      load_done_axi_sync <= 1'b0;
-      rumble_axi_meta <= 1'b0;
-      rumble_axi_sync <= 1'b0;
-      save_busy_axi_meta <= 1'b0;
-      save_busy_axi_sync <= 1'b0;
+      feature_savestate_busy_axi_meta <= 1'b0;
+      feature_savestate_busy_axi_sync <= 1'b0;
+      feature_rewind_active_axi_meta <= 1'b0;
+      feature_rewind_active_axi_sync <= 1'b0;
+      feature_rumble_out_axi_meta <= 1'b0;
+      feature_rumble_out_axi_sync <= 1'b0;
+      feature_cheats_active_axi_meta <= 1'b0;
+      feature_cheats_active_axi_sync <= 1'b0;
+      feature_rtc_inuse_axi_meta <= 1'b0;
+      feature_rtc_inuse_axi_sync <= 1'b0;
+      feature_slot_echo_axi_meta <= 3'd0;
+      feature_slot_echo_axi_sync <= 3'd0;
+      feature_solar_echo_axi_meta <= 3'd0;
+      feature_solar_echo_axi_sync <= 3'd0;
+      feature_rtc_out_timestamp_axi_meta <= 32'd0;
+      feature_rtc_out_timestamp_axi_sync <= 32'd0;
+      feature_rtc_out_savedtime_lo_axi_meta <= 32'd0;
+      feature_rtc_out_savedtime_lo_axi_sync <= 32'd0;
+      feature_rtc_out_savedtime_hi_axi_meta <= 32'd0;
+      feature_rtc_out_savedtime_hi_axi_sync <= 32'd0;
+      feature_load_done_toggle_axi_sync <= 3'b000;
       bios_wr_ack_sync_axi <= 3'b000;
       bios_wr_ack_seq_axi <= 32'd0;
       fb_frame_pulse_toggle_axi_sync <= 3'b000;
@@ -983,20 +914,27 @@ module zynq_gba_top #(
       end
       save_status_axi_meta         <= {8'd0, save_eeprom_count_core, save_flash_count_core, save_sram_count_core};
       save_status_axi_sync         <= save_status_axi_meta;
-      rtc_timestamp_out_axi_meta   <= core_rtc_timestamp_out;
-      rtc_timestamp_out_axi_sync   <= rtc_timestamp_out_axi_meta;
-      rtc_savedtime_out_axi_meta   <= core_rtc_savedtime_out;
-      rtc_savedtime_out_axi_sync   <= rtc_savedtime_out_axi_meta;
-      rtc_inuse_axi_meta           <= core_rtc_inuse;
-      rtc_inuse_axi_sync           <= rtc_inuse_axi_meta;
-      cheats_active_axi_meta       <= core_cheats_active;
-      cheats_active_axi_sync       <= cheats_active_axi_meta;
-      load_done_axi_meta           <= core_load_done;
-      load_done_axi_sync           <= load_done_axi_meta;
-      rumble_axi_meta              <= core_rumble;
-      rumble_axi_sync              <= rumble_axi_meta;
-      save_busy_axi_meta           <= save_out_active;
-      save_busy_axi_sync           <= save_busy_axi_meta;
+      feature_savestate_busy_axi_meta <= save_out_active;
+      feature_savestate_busy_axi_sync <= feature_savestate_busy_axi_meta;
+      feature_rewind_active_axi_meta <= w_core_rewind_active;
+      feature_rewind_active_axi_sync <= feature_rewind_active_axi_meta;
+      feature_rumble_out_axi_meta <= core_rumble;
+      feature_rumble_out_axi_sync <= feature_rumble_out_axi_meta;
+      feature_cheats_active_axi_meta <= core_cheats_active;
+      feature_cheats_active_axi_sync <= feature_cheats_active_axi_meta;
+      feature_rtc_inuse_axi_meta <= core_rtc_inuse;
+      feature_rtc_inuse_axi_sync <= feature_rtc_inuse_axi_meta;
+      feature_slot_echo_axi_meta <= w_core_savestate_slot;
+      feature_slot_echo_axi_sync <= feature_slot_echo_axi_meta;
+      feature_solar_echo_axi_meta <= w_core_sensor_solar;
+      feature_solar_echo_axi_sync <= feature_solar_echo_axi_meta;
+      feature_rtc_out_timestamp_axi_meta <= core_rtc_timestamp_out;
+      feature_rtc_out_timestamp_axi_sync <= feature_rtc_out_timestamp_axi_meta;
+      feature_rtc_out_savedtime_lo_axi_meta <= core_rtc_savedtime_out[31:0];
+      feature_rtc_out_savedtime_lo_axi_sync <= feature_rtc_out_savedtime_lo_axi_meta;
+      feature_rtc_out_savedtime_hi_axi_meta <= {22'd0, core_rtc_savedtime_out[41:32]};
+      feature_rtc_out_savedtime_hi_axi_sync <= feature_rtc_out_savedtime_hi_axi_meta;
+      feature_load_done_toggle_axi_sync <= {feature_load_done_toggle_axi_sync[1:0], feature_load_done_toggle_core};
       bios_wr_ack_sync_axi <= {bios_wr_ack_sync_axi[1:0], bios_wr_ack_toggle_core};
       if (bios_wr_ack_sync_axi[2] ^ bios_wr_ack_sync_axi[1]) begin
         bios_wr_ack_seq_axi <= bios_wr_ack_seq_axi + 32'd1;
@@ -1101,6 +1039,17 @@ module zynq_gba_top #(
     .irq_vsync_pulse     (irq_vsync_pulse_axi),
     .irq_error_pulse     (irq_error_pulse_axi),
     .irq_out             (irq),
+    .stat_feature_savestate_busy(feature_savestate_busy_axi),
+    .stat_feature_load_done_pulse(feature_load_done_pulse_axi),
+    .stat_feature_rewind_active(feature_rewind_active_axi),
+    .stat_feature_rumble_out(feature_rumble_out_axi),
+    .stat_feature_cheats_active(feature_cheats_active_axi),
+    .stat_feature_rtc_inuse(feature_rtc_inuse_axi),
+    .stat_feature_slot_echo(feature_slot_echo_axi),
+    .stat_feature_solar_echo(feature_solar_echo_axi),
+    .stat_rtc_out_timestamp(feature_rtc_out_timestamp_axi),
+    .stat_rtc_out_savedtime_lo(feature_rtc_out_savedtime_lo_axi),
+    .stat_rtc_out_savedtime_hi(feature_rtc_out_savedtime_hi_axi),
     .cfg_ctrl            (w_axi_cfg_ctrl),
     .cfg_keys            (w_axi_cfg_keys),
     .cfg_max_pak_addr    (w_axi_cfg_max_pak_addr),
@@ -1116,32 +1065,20 @@ module zynq_gba_top #(
     .cfg_bios_wr_data    (w_axi_bios_wr_data),
     .cfg_bios_wr_req_toggle(w_axi_bios_wr_req_toggle),
     .stat_bios_wr_ack_seq(bios_wr_ack_seq_axi),
-    .cfg_state_slot      (w_axi_state_slot),
-    .cfg_state_save_toggle(w_axi_state_save_toggle),
-    .cfg_state_load_toggle(w_axi_state_load_toggle),
-    .cfg_rewind_enable   (w_axi_rewind_enable),
-    .cfg_rewind_active   (w_axi_rewind_active),
-    .cfg_cheat_enable    (w_axi_cheat_enable),
-    .cfg_cheat_clear_toggle(w_axi_cheat_clear_toggle),
-    .cfg_cheat_push_toggle(w_axi_cheat_push_toggle),
-    .cfg_cheat_word0     (w_axi_cheat_word0),
-    .cfg_cheat_word1     (w_axi_cheat_word1),
-    .cfg_cheat_word2     (w_axi_cheat_word2),
-    .cfg_cheat_word3     (w_axi_cheat_word3),
-    .cfg_rtc_saved_timestamp(w_axi_rtc_saved_timestamp),
-    .cfg_rtc_savedtime_lo(w_axi_rtc_savedtime_lo),
-    .cfg_rtc_savedtime_hi(w_axi_rtc_savedtime_hi),
-    .cfg_rtc_saved_loaded(w_axi_rtc_saved_loaded),
-    .cfg_sensor_solar    (w_axi_sensor_solar),
-    .cfg_sensor_tilt_x   (w_axi_sensor_tilt_x),
-    .cfg_sensor_tilt_y   (w_axi_sensor_tilt_y),
-    .stat_feature_load_done(load_done_axi_sync),
-    .stat_feature_cheats_active(cheats_active_axi_sync),
-    .stat_feature_rtc_inuse(rtc_inuse_axi_sync),
-    .stat_feature_rumble (rumble_axi_sync),
-    .stat_feature_busy   (feature_busy_axi),
-    .stat_rtc_timestamp_out(rtc_timestamp_out_axi_sync),
-    .stat_rtc_savedtime_out(rtc_savedtime_out_axi_sync)
+    .cfg_feature_ctrl    (w_axi_feature_ctrl),
+    .cfg_feature_action_save_toggle(w_axi_feature_action_save_toggle),
+    .cfg_feature_action_load_toggle(w_axi_feature_action_load_toggle),
+    .cfg_feature_action_cheat_push_toggle(w_axi_feature_action_cheat_push_toggle),
+    .cfg_feature_action_cheat_clear_toggle(w_axi_feature_action_cheat_clear_toggle),
+    .cfg_feature_action_rtc_new_toggle(w_axi_feature_action_rtc_new_toggle),
+    .cfg_savestate_slot  (w_axi_savestate_slot),
+    .cfg_cheat_flags     (w_axi_cheat_flags),
+    .cfg_cheat_addr      (w_axi_cheat_addr),
+    .cfg_cheat_compare   (w_axi_cheat_compare),
+    .cfg_cheat_replace   (w_axi_cheat_replace),
+    .cfg_sensor_input    (w_axi_sensor_input),
+    .cfg_rtc_in_savedtime_lo(w_axi_rtc_in_savedtime_lo),
+    .cfg_rtc_in_savedtime_hi(w_axi_rtc_in_savedtime_hi)
   );
 
   gba_config_mgr u_config_mgr (
@@ -1153,13 +1090,43 @@ module zynq_gba_top #(
     .cfg_cycle_precalc_axi (w_axi_cfg_cycle_precalc),
     .cfg_rtc_timestamp_axi (w_axi_cfg_rtc_timestamp),
     .cfg_commit_toggle_axi (w_axi_cfg_commit_toggle),
+    .cfg_feature_ctrl_axi  (w_axi_feature_ctrl),
+    .cfg_savestate_slot_axi(w_axi_savestate_slot),
+    .cfg_cheat_flags_axi   (w_axi_cheat_flags),
+    .cfg_cheat_addr_axi    (w_axi_cheat_addr),
+    .cfg_cheat_compare_axi (w_axi_cheat_compare),
+    .cfg_cheat_replace_axi (w_axi_cheat_replace),
+    .cfg_sensor_input_axi  (w_axi_sensor_input),
+    .cfg_rtc_savedtime_lo_axi(w_axi_rtc_in_savedtime_lo),
+    .cfg_rtc_savedtime_hi_axi(w_axi_rtc_in_savedtime_hi),
+    .cfg_action_save_toggle_axi(w_axi_feature_action_save_toggle),
+    .cfg_action_load_toggle_axi(w_axi_feature_action_load_toggle),
+    .cfg_action_cheat_push_toggle_axi(w_axi_feature_action_cheat_push_toggle),
+    .cfg_action_cheat_clear_toggle_axi(w_axi_feature_action_cheat_clear_toggle),
+    .cfg_action_rtc_new_toggle_axi(w_axi_feature_action_rtc_new_toggle),
     .btns                  (btns),
     .sws                   (sws),
     .cfg_ctrl_core         (w_core_cfg_ctrl),
     .cfg_keys_core         (w_core_cfg_keys),
     .cfg_max_pak_addr_core (w_core_cfg_max_pak_addr),
     .cfg_cycle_precalc_core(w_core_cfg_cycle_precalc),
-    .cfg_rtc_timestamp_core(w_core_cfg_rtc_timestamp)
+    .cfg_rtc_timestamp_core(w_core_cfg_rtc_timestamp),
+    .cfg_feature_ctrl_core (w_core_feature_ctrl),
+    .cfg_savestate_slot_core(w_core_savestate_slot),
+    .cfg_cheat_flags_core  (w_core_cheat_flags),
+    .cfg_cheat_addr_core   (w_core_cheat_addr),
+    .cfg_cheat_compare_core(w_core_cheat_compare),
+    .cfg_cheat_replace_core(w_core_cheat_replace),
+    .cfg_sensor_solar_core (w_core_sensor_solar),
+    .cfg_sensor_tilt_x_core(w_core_sensor_tilt_x),
+    .cfg_sensor_tilt_y_core(w_core_sensor_tilt_y),
+    .cfg_rtc_savedtime_core(w_core_rtc_savedtime),
+    .cfg_rtc_save_loaded_core(w_core_rtc_save_loaded),
+    .pulse_save_state_core (w_core_pulse_save_state),
+    .pulse_load_state_core (w_core_pulse_load_state),
+    .pulse_cheat_push_core (w_core_pulse_cheat_push),
+    .pulse_cheat_clear_core(w_core_pulse_cheat_clear),
+    .pulse_rtc_new_core    (w_core_pulse_rtc_new)
   );
 
   // ==========================================================================
@@ -1196,7 +1163,7 @@ module zynq_gba_top #(
     .Softmap_GBA_EEPROM_ADDR  (32768),
     .Softmap_GBA_WRam_ADDR    (131072),
     .Softmap_GBA_Gamerom_ADDR (196608),
-    .Softmap_SaveState_ADDR   (58720256),
+    .Softmap_SaveState_ADDR   (67108864),
     .Softmap_Rewind_ADDR      (33554432),
     .turbosound               (1'b0)
   ) u_core (
@@ -1214,31 +1181,31 @@ module zynq_gba_top #(
     .Sram32KMirrorTest     (w_core_cfg_ctrl[13]),
     .memory_remap          (w_core_cfg_ctrl[5]),
     .increaseSSHeaderCount (1'b0),
-    .save_state            (state_save_pulse_core),
-    .load_state            (state_load_pulse_core),
-    .interframe_blend      (GBA_INTERFRAME_BLEND_OFF),
+    .save_state            (w_core_pulse_save_state),
+    .load_state            (w_core_pulse_load_state),
+    .interframe_blend      (2'b00),
     .maxpixels             (1'b0),
-    .shade_mode            (GBA_SHADE_MODE_OFF),
+    .shade_mode            (3'b000),
     .hdmode2x_bg           (1'b0),
     .hdmode2x_obj          (1'b0),
     .specialmodule         (w_core_cfg_ctrl[10]),
-    .solar_in              (sensor_solar_core_sync),
+    .solar_in              (w_core_sensor_solar),
     .tilt                  (w_core_cfg_ctrl[11]),
-    .rewind_on             (rewind_enable_core_sync),
-    .rewind_active         (rewind_active_core_sync),
-    .savestate_number      ({30'd0, state_slot_core_sync}),
-    .RTC_timestampNew      (1'b0),
+    .rewind_on             (w_core_feature_ctrl[0]),
+    .rewind_active         (w_core_rewind_active),
+    .savestate_number      (w_core_savestate_slot),
+    .RTC_timestampNew      (w_core_pulse_rtc_new),
     .RTC_timestampIn       (w_core_cfg_rtc_timestamp),
-    .RTC_timestampSaved    (rtc_saved_timestamp_core_sync),
-    .RTC_savedtimeIn       ({rtc_savedtime_hi_core_sync, rtc_savedtime_lo_core_sync}),
-    .RTC_saveLoaded        (rtc_saved_loaded_core_sync),
+    .RTC_timestampSaved    (w_core_cfg_rtc_timestamp),
+    .RTC_savedtimeIn       (w_core_rtc_savedtime),
+    .RTC_saveLoaded        (w_core_rtc_save_loaded),
     .RTC_timestampOut      (core_rtc_timestamp_out),
     .RTC_savedtimeOut      (core_rtc_savedtime_out),
     .RTC_inuse             (core_rtc_inuse),
-    .cheat_clear           (cheat_clear_pulse_core),
-    .cheats_enabled        (cheat_enable_core_sync),
-    .cheat_on              (cheat_push_pulse_core),
-    .cheat_in              ({cheat_word3_core_sync, cheat_word2_core_sync, cheat_word1_core_sync, cheat_word0_core_sync}),
+    .cheat_clear           (w_core_pulse_cheat_clear),
+    .cheats_enabled        (w_core_feature_ctrl[1]),
+    .cheat_on              (w_core_pulse_cheat_push),
+    .cheat_in              ({w_core_cheat_flags, w_core_cheat_addr, w_core_cheat_compare, w_core_cheat_replace}),
     .cheats_active         (core_cheats_active),
 
     // SDRAM 通道 1 (Core Instruction/Data Fetch)
@@ -1285,8 +1252,8 @@ module zynq_gba_top #(
     .KeyDown               (w_core_cfg_keys[7]),
     .KeyR                  (w_core_cfg_keys[8]),
     .KeyL                  (w_core_cfg_keys[9]),
-    .AnalogTiltX           ($signed(sensor_tilt_x_core_sync)),
-    .AnalogTiltY           ($signed(sensor_tilt_y_core_sync)),
+    .AnalogTiltX           (w_core_sensor_tilt_x),
+    .AnalogTiltY           (w_core_sensor_tilt_y),
     .Rumble                (core_rumble),
     .GBA_BusAddr           (28'd0),
     .GBA_BusRnW            (1'b0),

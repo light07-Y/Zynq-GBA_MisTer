@@ -46,6 +46,10 @@ enum {
     PS_APP_HDMI_ERR_EDID_CHECKSUM_INVALID = 7U
 };
 
+static const u8 s_ps_app_hdmi_link_edid_header[8] = {
+    0x00U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0x00U
+};
+
 static u32 PsAppHdmiLink_GetTick(void) {
     if (xTaskGetSchedulerState() == taskSCHEDULER_NOT_STARTED) {
         return 0U;
@@ -148,12 +152,10 @@ static XStatus PsAppHdmiLink_ReadEdidBlock0(PsAppHdmiLinkContext *ctx, u8 *edid_
 }
 
 static u8 PsAppHdmiLink_IsEdidHeaderValid(const u8 *edid) {
-    static const u8 kHeader[8] = {0x00U, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0x00U};
-
     if (edid == NULL) {
         return 0U;
     }
-    return (memcmp(edid, kHeader, sizeof(kHeader)) == 0) ? 1U : 0U;
+    return (memcmp(edid, s_ps_app_hdmi_link_edid_header, sizeof(s_ps_app_hdmi_link_edid_header)) == 0) ? 1U : 0U;
 }
 
 static u8 PsAppHdmiLink_IsEdidChecksumValid(const u8 *edid) {

@@ -42,9 +42,9 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
                                         u32 bytes_to_write,
                                         PsFatFsStorageWriteResult *result_out);
 
-XStatus PsFatFsStorage_QueryFileSize(const char *path,
-                                     u32 *size_bytes_out,
-                                     FRESULT *fs_result_out);
+/* Deletes a file under the same global FatFs mutex used by read/write paths.
+ * This avoids cross-task reentrancy hazards from direct f_unlink/f_stat calls. */
+XStatus PsFatFsStorage_DeleteFileIfExists(const char *path, u8 *deleted_out);
 
 XStatus PsFatFsStorage_EnsureDirectory(const char *path);
 

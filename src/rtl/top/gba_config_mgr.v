@@ -4,7 +4,7 @@
 module gba_config_mgr (
     input         clk_core,       // 核心频率时钟 (100MHz)
     input         rst_n,          // 系统复位
-    
+
     // AXI 控制寄存器接口 (来自 AXI Domain)
     input [31:0]  cfg_ctrl_axi,
     input [9:0]   cfg_keys_axi,
@@ -12,17 +12,51 @@ module gba_config_mgr (
     input [15:0]  cfg_cycle_precalc_axi,
     input [31:0]  cfg_rtc_timestamp_axi,
     input         cfg_commit_toggle_axi,
-    
+
+    input [5:0]   cfg_feature_ctrl_axi,
+    input [2:0]   cfg_savestate_slot_axi,
+    input [31:0]  cfg_cheat_flags_axi,
+    input [31:0]  cfg_cheat_addr_axi,
+    input [31:0]  cfg_cheat_compare_axi,
+    input [31:0]  cfg_cheat_replace_axi,
+    input [23:0]  cfg_sensor_input_axi,
+    input [31:0]  cfg_rtc_savedtime_lo_axi,
+    input [31:0]  cfg_rtc_savedtime_hi_axi,
+
+    input         cfg_action_save_toggle_axi,
+    input         cfg_action_load_toggle_axi,
+    input         cfg_action_cheat_push_toggle_axi,
+    input         cfg_action_cheat_clear_toggle_axi,
+    input         cfg_action_rtc_new_toggle_axi,
+
     // 板载物理输入 (来自 Pin Domain)
     input [3:0]   btns,           // 物理按键 (Up, Down, Left, Right)
     input [3:0]   sws,            // 物理拨码 (A, B, Select, Start)
-    
+
     // 同步后的核心配置 (Core Domain)
     output reg [31:0] cfg_ctrl_core,
     output     [9:0]  cfg_keys_core,
     output reg [24:0] cfg_max_pak_addr_core,
     output reg [15:0] cfg_cycle_precalc_core,
-    output reg [31:0] cfg_rtc_timestamp_core
+    output reg [31:0] cfg_rtc_timestamp_core,
+
+    output reg [5:0]  cfg_feature_ctrl_core,
+    output reg [2:0]  cfg_savestate_slot_core,
+    output reg [31:0] cfg_cheat_flags_core,
+    output reg [31:0] cfg_cheat_addr_core,
+    output reg [31:0] cfg_cheat_compare_core,
+    output reg [31:0] cfg_cheat_replace_core,
+    output reg [2:0]  cfg_sensor_solar_core,
+    output reg signed [7:0] cfg_sensor_tilt_x_core,
+    output reg signed [7:0] cfg_sensor_tilt_y_core,
+    output reg [41:0] cfg_rtc_savedtime_core,
+    output reg        cfg_rtc_save_loaded_core,
+
+    output            pulse_save_state_core,
+    output            pulse_load_state_core,
+    output            pulse_cheat_push_core,
+    output            pulse_cheat_clear_core,
+    output            pulse_rtc_new_core
 );
 
     // --- 1. AXI 到 Core Domain 的多级 CDC 同步 ---
@@ -36,8 +70,30 @@ module gba_config_mgr (
     (* ASYNC_REG = "TRUE" *) reg [15:0] cfg_cycle_precalc_meta, cfg_cycle_precalc_sync;
     (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_rtc_timestamp_meta, cfg_rtc_timestamp_sync;
 
+    (* ASYNC_REG = "TRUE" *) reg [5:0]  cfg_feature_ctrl_meta, cfg_feature_ctrl_sync;
+    (* ASYNC_REG = "TRUE" *) reg [2:0]  cfg_savestate_slot_meta, cfg_savestate_slot_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_cheat_flags_meta, cfg_cheat_flags_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_cheat_addr_meta, cfg_cheat_addr_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_cheat_compare_meta, cfg_cheat_compare_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_cheat_replace_meta, cfg_cheat_replace_sync;
+    (* ASYNC_REG = "TRUE" *) reg [23:0] cfg_sensor_input_meta, cfg_sensor_input_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_rtc_savedtime_lo_meta, cfg_rtc_savedtime_lo_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_rtc_savedtime_hi_meta, cfg_rtc_savedtime_hi_sync;
+
+    (* ASYNC_REG = "TRUE" *) reg [2:0] cfg_action_save_sync;
+    (* ASYNC_REG = "TRUE" *) reg [2:0] cfg_action_load_sync;
+    (* ASYNC_REG = "TRUE" *) reg [2:0] cfg_action_cheat_push_sync;
+    (* ASYNC_REG = "TRUE" *) reg [2:0] cfg_action_cheat_clear_sync;
+    (* ASYNC_REG = "TRUE" *) reg [2:0] cfg_action_rtc_new_sync;
+
     // AXI 配置提交脉冲检测
     assign cfg_commit_pulse = (cfg_commit_sync[2] ^ cfg_commit_sync[1]);
+
+    assign pulse_save_state_core  = cfg_action_save_sync[2] ^ cfg_action_save_sync[1];
+    assign pulse_load_state_core  = cfg_action_load_sync[2] ^ cfg_action_load_sync[1];
+    assign pulse_cheat_push_core  = cfg_action_cheat_push_sync[2] ^ cfg_action_cheat_push_sync[1];
+    assign pulse_cheat_clear_core = cfg_action_cheat_clear_sync[2] ^ cfg_action_cheat_clear_sync[1];
+    assign pulse_rtc_new_core     = cfg_action_rtc_new_sync[2] ^ cfg_action_rtc_new_sync[1];
 
     always @(posedge clk_core) begin
         if (!rst_n) begin
@@ -46,6 +102,22 @@ module gba_config_mgr (
             {cfg_max_pak_addr_meta, cfg_max_pak_addr_sync} <= 50'd0;
             {cfg_cycle_precalc_meta, cfg_cycle_precalc_sync} <= 32'd100;
             {cfg_rtc_timestamp_meta, cfg_rtc_timestamp_sync} <= 64'd0;
+
+            {cfg_feature_ctrl_meta, cfg_feature_ctrl_sync} <= {6'h1C, 6'h1C};
+            {cfg_savestate_slot_meta, cfg_savestate_slot_sync} <= 6'd0;
+            {cfg_cheat_flags_meta, cfg_cheat_flags_sync} <= 64'd0;
+            {cfg_cheat_addr_meta, cfg_cheat_addr_sync} <= 64'd0;
+            {cfg_cheat_compare_meta, cfg_cheat_compare_sync} <= 64'd0;
+            {cfg_cheat_replace_meta, cfg_cheat_replace_sync} <= 64'd0;
+            {cfg_sensor_input_meta, cfg_sensor_input_sync} <= {24'h000003, 24'h000003};
+            {cfg_rtc_savedtime_lo_meta, cfg_rtc_savedtime_lo_sync} <= 64'd0;
+            {cfg_rtc_savedtime_hi_meta, cfg_rtc_savedtime_hi_sync} <= 64'd0;
+
+            cfg_action_save_sync <= 3'b000;
+            cfg_action_load_sync <= 3'b000;
+            cfg_action_cheat_push_sync <= 3'b000;
+            cfg_action_cheat_clear_sync <= 3'b000;
+            cfg_action_rtc_new_sync <= 3'b000;
             cfg_commit_sync <= 3'b000;
         end else begin
             // 交叉时钟域采样
@@ -60,6 +132,31 @@ module gba_config_mgr (
             cfg_rtc_timestamp_meta <= cfg_rtc_timestamp_axi;
             cfg_rtc_timestamp_sync <= cfg_rtc_timestamp_meta;
             cfg_commit_sync        <= {cfg_commit_sync[1:0], cfg_commit_toggle_axi};
+
+            cfg_feature_ctrl_meta <= cfg_feature_ctrl_axi;
+            cfg_feature_ctrl_sync <= cfg_feature_ctrl_meta;
+            cfg_savestate_slot_meta <= cfg_savestate_slot_axi;
+            cfg_savestate_slot_sync <= cfg_savestate_slot_meta;
+            cfg_cheat_flags_meta <= cfg_cheat_flags_axi;
+            cfg_cheat_flags_sync <= cfg_cheat_flags_meta;
+            cfg_cheat_addr_meta <= cfg_cheat_addr_axi;
+            cfg_cheat_addr_sync <= cfg_cheat_addr_meta;
+            cfg_cheat_compare_meta <= cfg_cheat_compare_axi;
+            cfg_cheat_compare_sync <= cfg_cheat_compare_meta;
+            cfg_cheat_replace_meta <= cfg_cheat_replace_axi;
+            cfg_cheat_replace_sync <= cfg_cheat_replace_meta;
+            cfg_sensor_input_meta <= cfg_sensor_input_axi;
+            cfg_sensor_input_sync <= cfg_sensor_input_meta;
+            cfg_rtc_savedtime_lo_meta <= cfg_rtc_savedtime_lo_axi;
+            cfg_rtc_savedtime_lo_sync <= cfg_rtc_savedtime_lo_meta;
+            cfg_rtc_savedtime_hi_meta <= cfg_rtc_savedtime_hi_axi;
+            cfg_rtc_savedtime_hi_sync <= cfg_rtc_savedtime_hi_meta;
+
+            cfg_action_save_sync <= {cfg_action_save_sync[1:0], cfg_action_save_toggle_axi};
+            cfg_action_load_sync <= {cfg_action_load_sync[1:0], cfg_action_load_toggle_axi};
+            cfg_action_cheat_push_sync <= {cfg_action_cheat_push_sync[1:0], cfg_action_cheat_push_toggle_axi};
+            cfg_action_cheat_clear_sync <= {cfg_action_cheat_clear_sync[1:0], cfg_action_cheat_clear_toggle_axi};
+            cfg_action_rtc_new_sync <= {cfg_action_rtc_new_sync[1:0], cfg_action_rtc_new_toggle_axi};
         end
     end
 
@@ -81,6 +178,18 @@ module gba_config_mgr (
             cfg_rtc_timestamp_core <= 32'd0;
             cfg_commit_pending     <= 1'b0;
             cfg_commit_settle_count <= 2'd0;
+
+            cfg_feature_ctrl_core <= 6'h1C;
+            cfg_savestate_slot_core <= 3'd0;
+            cfg_cheat_flags_core <= 32'd0;
+            cfg_cheat_addr_core <= 32'd0;
+            cfg_cheat_compare_core <= 32'd0;
+            cfg_cheat_replace_core <= 32'd0;
+            cfg_sensor_solar_core <= 3'd3;
+            cfg_sensor_tilt_x_core <= 8'sd0;
+            cfg_sensor_tilt_y_core <= 8'sd0;
+            cfg_rtc_savedtime_core <= 42'd0;
+            cfg_rtc_save_loaded_core <= 1'b0;
         end else begin
             if (cfg_commit_pulse) begin
                 cfg_commit_pending <= 1'b1;
@@ -97,6 +206,18 @@ module gba_config_mgr (
                     cfg_commit_pending     <= 1'b0;
                 end
             end
+
+            cfg_feature_ctrl_core <= cfg_feature_ctrl_sync;
+            cfg_savestate_slot_core <= cfg_savestate_slot_sync;
+            cfg_cheat_flags_core <= cfg_cheat_flags_sync;
+            cfg_cheat_addr_core <= cfg_cheat_addr_sync;
+            cfg_cheat_compare_core <= cfg_cheat_compare_sync;
+            cfg_cheat_replace_core <= cfg_cheat_replace_sync;
+            cfg_sensor_solar_core <= cfg_sensor_input_sync[2:0];
+            cfg_sensor_tilt_x_core <= $signed(cfg_sensor_input_sync[15:8]);
+            cfg_sensor_tilt_y_core <= $signed(cfg_sensor_input_sync[23:16]);
+            cfg_rtc_savedtime_core <= {cfg_rtc_savedtime_hi_sync[9:0], cfg_rtc_savedtime_lo_sync};
+            cfg_rtc_save_loaded_core <= cfg_rtc_savedtime_hi_sync[31];
         end
     end
 

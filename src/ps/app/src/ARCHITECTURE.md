@@ -2,6 +2,8 @@
 
 ## 1. 文档目的
 
+配套执行规则见 [CONFORMANCE_RULES.md](./CONFORMANCE_RULES.md)，用于将本文的架构原则落地为可检查的命名、分层、接口与验证约束。
+
 本文档用于约束 `src/ps/app/src` 下 PS 端软件的目录组织、分层关系、模块职责、依赖方向、上下文建模方式以及后续扩展规范，目标是让该工程在持续演进过程中始终保持：
 
 - 高内聚、低耦合
@@ -456,8 +458,13 @@ src/
 
 例如：
 
-- `ps_app_runtime.c`
+- `ps_app_runtime_boot.c`
+- `ps_app_runtime_rom.c`
+- `ps_app_runtime_service.c`
 - `ps_app_console.c`
+- `ps_app_console_diag.c`
+- `ps_app_console_runtime.c`
+- `ps_app_console_media.c`
 - `ps_app_video.c`
 - `ps_app_diag.c`
 - `ps_fatfs_storage.c`
@@ -466,10 +473,19 @@ src/
 
 一个文件应围绕一个稳定职责组织：
 
-- 运行时初始化与服务循环放在 `runtime`
-- 控制台命令处理放在 `console`
+- 运行时初始化放在 `runtime_boot`
+- ROM/BIOS 装载与识别放在 `runtime_rom`
+- 运行时服务循环与任务入口放在 `runtime_service`
+- 控制台分发放在 `console`，命令域实现拆分到 `console_diag` / `console_runtime` / `console_media`
 - 视频呈现放在 `video`
 - 诊断输出放在 `diag`
+
+USB Host 的实现层进一步按职责分层：
+
+- `ps_app_usbhost_ulpi.c`：ULPI/PHY 与寄存器控制
+- `ps_app_usbhost_enum_recovery.c`：枚举恢复与低层回调
+- `ps_app_usbhost_report_channel.c`：中断报告通道与 sideband
+- `ps_app_usbhost_impl_internal.h`：内部上下文与模块协作契约
 
 若某文件超过合理规模，优先继续按职责拆分，而不是继续向单文件堆逻辑。
 

@@ -3,24 +3,7 @@
 
 #include "xil_types.h"
 #include "xiicps.h"
-
-#if defined(__has_include)
-#if __has_include("xgpiops.h")
-#include "xgpiops.h"
-#define PS_APP_HDMI_HAS_XGPIOPS_HEADER 1
-#else
-#define PS_APP_HDMI_HAS_XGPIOPS_HEADER 0
-#ifndef PS_APP_XGPIOPS_PLACEHOLDER_DEFINED
-#define PS_APP_XGPIOPS_PLACEHOLDER_DEFINED 1
-typedef struct XGpioPs {
-    unsigned int _placeholder;
-} XGpioPs;
-#endif
-#endif
-#else
-#include "xgpiops.h"
-#define PS_APP_HDMI_HAS_XGPIOPS_HEADER 1
-#endif
+#include "Common/Inc/ps_xgpiops_compat.h"
 
 #include "Common/Inc/ps_app_state.h"
 

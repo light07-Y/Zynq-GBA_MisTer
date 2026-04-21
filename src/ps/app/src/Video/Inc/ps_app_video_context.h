@@ -2,12 +2,13 @@
 #define PS_APP_VIDEO_CONTEXT_H
 
 #include "Common/Inc/ps_app_state.h"
-#include "Gba/Inc/ps_gba_regs.h"
-#include "Vdma/Inc/ps_hdmi_vdma.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct PsHdmiVdma PsHdmiVdma;
+typedef struct PsGbaRegs PsGbaRegs;
 
 typedef struct PsAppVideoContext {
     PsHdmiVdma *vdma;

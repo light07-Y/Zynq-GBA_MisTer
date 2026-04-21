@@ -1,12 +1,15 @@
 #ifndef PS_APP_CONTEXT_H
 #define PS_APP_CONTEXT_H
 
+#include "Audio/Inc/ps_audio_codec.h"
 #include "App/Inc/ps_app_runtime_context.h"
 #include "Diagnostics/Inc/ps_app_diag_context.h"
+#include "Gba/Inc/ps_gba_regs.h"
 #include "Hdmi/Inc/ps_app_hdmi_link_context.h"
 #include "Input/Inc/ps_app_input_context.h"
 #include "Save/Inc/ps_app_save_context.h"
 #include "UsbHost/Inc/ps_app_usbhost_context.h"
+#include "Vdma/Inc/ps_hdmi_vdma.h"
 #include "Video/Inc/ps_app_video_context.h"
 
 #ifdef __cplusplus
@@ -24,6 +27,7 @@ typedef struct {
     PsAppVideoState video;
     PsAppRomState rom;
     PsAppSaveState save;
+    PsAppFeatureState feature;
     PsAppDiagState diag;
     PsAppStateFeatureConfig state_feature;
     PsAppRtcPersistState rtc;

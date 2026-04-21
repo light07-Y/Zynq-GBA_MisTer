@@ -4,8 +4,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
-#include "Gba/Inc/ps_gba_regs.h"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -15,38 +13,47 @@ extern "C" {
 #define PS_APP_HDMI_WIDTH               640U
 #define PS_APP_HDMI_HEIGHT              480U
 #define PS_APP_HDMI_BPP                 4U
+/* GBA save 窗口位于 DDR 起始段：
+ * 0x1000_0000 ~ 0x100B_FFFF (共 768KiB) 由 save/WRAM/映射窗口共用。
+ * 其中 save 逻辑数据并非“线性字节阵列”，而是 core 侧按 32-bit 槽位展开。 */
 #define PS_APP_GBA_SAVE_REGION_BASE_ADDR 0x10000000U
-#define PS_APP_GBA_SAVE_REGION_MAX_BYTES (256U * 1024U)
+/* gba_mister 的外部保存窗口按 32-bit 粒度映射，SRAM/FLASH/EEPROM 逻辑字节在
+ * DDR 中按 stride=4 展开存储。为覆盖 FLASH1M（128KiB 逻辑 -> 512KiB 窗口），
+ * 这里必须保留 512KiB。 */
+#define PS_APP_GBA_SAVE_REGION_MAX_BYTES (512U * 1024U)
 #define PS_APP_GBA_SAVE_SRAM_BYTES      (64U * 1024U)
 #define PS_APP_GBA_SAVE_FLASH_BYTES     (128U * 1024U)
 #define PS_APP_GBA_SAVE_EEPROM_BYTES    (8U * 1024U)
+/* 关键约束：
+ * 磁盘文件尺寸使用“逻辑字节数”（64KiB/128KiB/8KiB），
+ * DDR 访问窗口使用“展开字节数”（逻辑 * 4）。
+ * 任何存档读写都必须先做 expand/compress 变换，否则会出现“文件存在但游戏读不到存档”。 */
+#define PS_APP_GBA_SAVE_EXPAND_STRIDE   4U
+#define PS_APP_GBA_SAVE_SRAM_WINDOW_BYTES   (PS_APP_GBA_SAVE_SRAM_BYTES * PS_APP_GBA_SAVE_EXPAND_STRIDE)
+#define PS_APP_GBA_SAVE_FLASH_WINDOW_BYTES  (PS_APP_GBA_SAVE_FLASH_BYTES * PS_APP_GBA_SAVE_EXPAND_STRIDE)
+#define PS_APP_GBA_SAVE_EEPROM_WINDOW_BYTES (PS_APP_GBA_SAVE_EEPROM_BYTES * PS_APP_GBA_SAVE_EXPAND_STRIDE)
+/* ROM 起始地址后移到 0x100C0000，显式避开前面的 save/softmap 窗口。 */
 #define PS_APP_GBA_ROM_REGION_BASE_ADDR 0x100C0000U
 #define PS_APP_GBA_ROM_REGION_MAX_BYTES (32U * 1024U * 1024U)
+#define PS_APP_GBA_SAVESTATE_REGION_BASE_ADDR 0x14000000U
+#define PS_APP_GBA_SAVESTATE_SLOT_BYTES (512U * 1024U)
 #define PS_APP_ROM_PATH_MAX_CHARS       128U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/bjg.gba"
 #define PS_APP_SAVE_SD_DIR              "0:/saves"
-#define PS_APP_STATE_SD_DIR             "0:/states"
+#define PS_APP_SAVESTATE_SD_DIR         "0:/savestates"
+#define PS_APP_CHEAT_SD_DIR             "0:/cheats"
 #define PS_APP_RTC_SD_DIR               "0:/rtc"
 #define PS_APP_BIOS_SD_PATH             "0:/boot.rom"
 #define PS_APP_GBA_BIOS_BYTES           (16U * 1024U)
 #define PS_APP_GBA_BIOS_WORDS           (PS_APP_GBA_BIOS_BYTES / 4U)
 #define PS_APP_GBA_BIOS_WRITE_TIMEOUT_LOOPS 2000000U
-#define PS_APP_STATE_SLOT_COUNT         4U
-/* MiSTer GBA savestate map (DWORD-based addressing on SAVE_out bus). */
-#define PS_APP_CORE_SAVESTATE_BASE_DWORDS 0x03800000U
-#define PS_APP_CORE_SAVESTATE_SLOT_DWORDS 0x00020000U
-#define PS_APP_STATE_SLOT_BYTES         (PS_APP_CORE_SAVESTATE_SLOT_DWORDS * 4U)
-#define PS_APP_STATE_REGION_BASE_ADDR   (PS_APP_GBA_SAVE_REGION_BASE_ADDR + \
-                                         (PS_APP_CORE_SAVESTATE_BASE_DWORDS * 4U))
-#define PS_APP_STATE_IO_TIMEOUT_TICKS   300U
-#define PS_APP_STATE_IO_FALLBACK_TICKS  5U
 
 #define PS_APP_SYS_TASK_STACK_WORDS       (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_SYS_TASK_PRIORITY          (tskIDLE_PRIORITY + 3U)
 #define PS_APP_VIDEO_TASK_STACK_WORDS     (configMINIMAL_STACK_SIZE * 8U)
 #define PS_APP_VIDEO_TASK_PRIORITY        (tskIDLE_PRIORITY + 2U)
-/* Console 栈需要兼顾命令解析与日志打印，但过大也会挤占 FreeRTOS heap。 */
-#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 12U)
+/* Console path includes command parsing and large help output. */
+#define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
 /* 关键防坑：
  * save 线程会经过 FatFs + SD 驱动 + 日志打印的深调用链。
@@ -87,12 +94,13 @@ extern "C" {
 #define PS_APP_USBHOST_STALE_DETACH_TICKS            80U
 #define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_BASE_TICKS 400U
 #define PS_APP_USBHOST_ENUM_RETRY_COOLDOWN_MAX_TICKS  3000U
-#define PS_APP_RTC_FLUSH_TICKS            500U
-#define PS_APP_RUMBLE_STRENGTH_ON         180U
-#define PS_APP_RUMBLE_STRENGTH_OFF        0U
-#define PS_APP_VIDEO_INTERFRAME_DEFAULT   0U
-#define PS_APP_VIDEO_SHADE_DEFAULT        0U
-#define PS_APP_SAVE_FLUSH_QUIET_TICKS     25U
+/* 保存落盘策略：
+ * quiet_ticks 控制“最后一次写入事件之后等待多久再落盘”，
+ * hard_ticks 是兜底上限（即使一直有零碎写入，也必须强制落盘一次）。 */
+#define PS_APP_SAVE_FLUSH_QUIET_TICKS     10U
+#define PS_APP_SAVE_FLUSH_HARD_TICKS      200U
+#define PS_APP_REWIND_CKPT_INTERVAL_MS    10000U
+#define PS_APP_REWIND_CKPT_COUNT          120U
 #define PS_APP_TRACE_DEFAULT_SAMPLES      20U
 #define PS_APP_TRACE_DEFAULT_INTERVAL_MS  100U
 #define PS_APP_TRACE_MAX_SAMPLES          200U
@@ -108,8 +116,10 @@ extern "C" {
 #define PS_APP_FBSCAN_WHITE_PIXEL         0x00FFFFFFU
 #define PS_APP_FBSCAN_BLACK_PIXEL         0x00000000U
 
-#define PS_APP_GBA_CTRL_BOOT_REQUIRED \
-    (GBA_CTRL_LOCK_SPEED | GBA_CTRL_SRAM_FLASH_EN)
+/* 启动阶段需要保持的控制位：
+ * bit1=LOCK_SPEED, bit4=SRAM_FLASH_EN。
+ * 这里使用局部常量，避免 Common 配置头对 Gba 寄存器头产生传递依赖。 */
+#define PS_APP_GBA_CTRL_BOOT_REQUIRED  ((1U << 1U) | (1U << 4U))
 
 #define PS_APP_SAVE_STATUS_SRAM_DIRTY      (1U << 0)
 #define PS_APP_SAVE_STATUS_FLASH_DIRTY     (1U << 1)

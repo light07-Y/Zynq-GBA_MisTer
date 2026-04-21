@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PsHdmiVdma {
     XAxiVdma vdma;
     UINTPTR frame_addrs[3];
     u32 width;

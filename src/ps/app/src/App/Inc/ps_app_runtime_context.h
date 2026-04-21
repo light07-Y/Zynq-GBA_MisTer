@@ -2,32 +2,17 @@
 #define PS_APP_RUNTIME_CONTEXT_H
 
 #include "xuartps.h"
-#if defined(__has_include)
-#if __has_include("xgpiops.h")
-#include "xgpiops.h"
-#define PS_APP_HAS_XGPIOPS_HEADER 1
-#else
-#define PS_APP_HAS_XGPIOPS_HEADER 0
-#ifndef PS_APP_XGPIOPS_PLACEHOLDER_DEFINED
-#define PS_APP_XGPIOPS_PLACEHOLDER_DEFINED 1
-typedef struct XGpioPs {
-    unsigned int _placeholder;
-} XGpioPs;
-#endif
-#endif
-#else
-#include "xgpiops.h"
-#define PS_APP_HAS_XGPIOPS_HEADER 1
-#endif
+#include "Common/Inc/ps_xgpiops_compat.h"
 
-#include "Audio/Inc/ps_audio_codec.h"
 #include "Common/Inc/ps_app_state.h"
-#include "Gba/Inc/ps_gba_regs.h"
-#include "Vdma/Inc/ps_hdmi_vdma.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct PsAudioCodec PsAudioCodec;
+typedef struct PsHdmiVdma PsHdmiVdma;
+typedef struct PsGbaRegs PsGbaRegs;
 
 struct PsAppDiagContext;
 struct PsAppSaveContext;
@@ -47,6 +32,7 @@ typedef struct PsAppRuntimeContext {
     PsAppVideoState *video;
     PsAppRomState *rom;
     PsAppSaveState *save;
+    PsAppFeatureState *feature;
     PsAppDiagState *diag;
     PsAppStateFeatureConfig *state_feature;
     PsAppRtcPersistState *rtc;

@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct PsAudioCodec {
     XIicPs i2c;
     u16 slave_addr;
     u8 is_ready;

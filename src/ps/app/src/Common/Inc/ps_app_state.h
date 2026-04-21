@@ -32,6 +32,30 @@ typedef struct {
 } PsAppShadowConfig;
 
 typedef struct {
+    u8 savestate_slot;
+    u8 rewind_enabled;
+    u8 rewind_active;
+    u8 solar_level;
+    s8 tilt_x;
+    s8 tilt_y;
+    u8 rumble_state;
+    u8 cheats_enabled;
+    u32 cheat_entry_count;
+    u32 checkpoint_head;
+    u32 checkpoint_last_ts;
+    u32 rtc_last_tick_ts;
+    u32 rtc_last_persist_ts;
+    u32 rom_crc32;
+    u32 input_prev_buttons;
+    u8 input_prev_lt;
+    u8 input_prev_rt;
+    u8 pending_save;
+    u8 pending_load;
+    u16 reserved0;
+    char rom_id[24];
+} PsAppFeatureState;
+
+typedef struct {
     u32 sample_rate_hz;
     u16 bits_per_sample;
     u8 mute;
@@ -159,6 +183,9 @@ typedef struct {
 
 typedef struct {
     u8 loaded;
+    /* ROM 切换门控位：
+     * 1 表示正在装载/切换 ROM。后台周期任务（保存、RTC 持久化等）应暂停，
+     * 避免与主加载链路争用 FatFs 锁导致“切 ROM 卡死”。 */
     u8 is_loading;
     u8 sig_flash1m;
     u8 sig_flash;
@@ -186,13 +213,23 @@ typedef struct {
 } PsAppRomState;
 
 typedef struct {
+    /* 来自 GBA_REG_SAVE_STATUS 的原始计数快照（8bit x 3 通道）：
+     * [7:0] SRAM, [15:8] FLASH, [23:16] EEPROM。
+     * 这里保存“上一次看到的计数值”，用于检测哪一类 save 发生新写入事件。 */
     u32 event_counters;
+    /* 成功落盘次数，便于现场确认“确实写过 SD”。 */
     u32 flush_count;
+    /* dirty 后累计静默时长；到 quiet 阈值会触发一次写盘。 */
     u32 quiet_ticks;
+    /* dirty 后累计总时长；用于 hard 阈值兜底，防止持续小写入导致永不落盘。 */
+    u32 dirty_age_ticks;
     u32 last_bytes;
     u32 last_checksum;
+    /* 当前判定脏数据所属类型（SRAM/FLASH/EEPROM）。 */
     u8 active_kind;
+    /* 1 表示有待落盘的变更。 */
     u8 dirty;
+    /* 最近一次 PrepareForRom 是否从 SD 成功加载到窗口。 */
     u8 loaded_from_sd;
     u8 reserved0;
     char path[PS_APP_ROM_PATH_MAX_CHARS];

@@ -1,7 +1,5 @@
 #include "Video/Inc/ps_app_video.h"
 
-#include <string.h>
-
 #include "FreeRTOS.h"
 #include "portmacro.h"
 #include "task.h"
@@ -11,6 +9,9 @@
 #include "xiltimer.h"
 #include "xinterrupt_wrap.h"
 #include "xparameters.h"
+
+#include "Gba/Inc/ps_gba_regs.h"
+#include "Vdma/Inc/ps_hdmi_vdma.h"
 
 #if defined(XPAR_ZYNQ_GBA_SYSTEM_FB_CAP_BRAM_CTRL_0_S_AXI_BASEADDR)
 #define PS_APP_FB_CAP_BRAM_BASE_ADDR XPAR_ZYNQ_GBA_SYSTEM_FB_CAP_BRAM_CTRL_0_S_AXI_BASEADDR
@@ -40,77 +41,25 @@
  */
 #define PS_APP_VDMA_READ_IRQ_MASK XAXIVDMA_IXR_ERROR_MASK
 
-static u16 s_capture_shadow[PS_APP_GBA_FRAME_WIDTH * PS_APP_GBA_FRAME_HEIGHT];
-static u16 s_capture_prev[PS_APP_GBA_FRAME_WIDTH * PS_APP_GBA_FRAME_HEIGHT];
-static u16 s_scale_x_lut[PS_APP_HDMI_WIDTH];
-static u16 s_scale_y_lut[PS_APP_HDMI_HEIGHT];
-static u32 s_scale_lut_w = 0U;
-static u32 s_scale_lut_h = 0U;
-static u32 s_shade_lut[5][65536];
-static u8 s_shade_lut_ready = 0U;
+static u16 s_ps_app_video_capture_shadow[PS_APP_GBA_FRAME_WIDTH * PS_APP_GBA_FRAME_HEIGHT];
+static u16 s_ps_app_video_scale_x_lut[PS_APP_HDMI_WIDTH];
+static u16 s_ps_app_video_scale_y_lut[PS_APP_HDMI_HEIGHT];
+static u32 s_ps_app_video_scale_lut_width = 0U;
+static u32 s_ps_app_video_scale_lut_height = 0U;
+static u32 s_ps_app_video_blit_fail_log_count = 0U;
 
-static u16 PsAppVideo_BlendRgb565(u16 a, u16 b) {
-    u32 ar;
-    u32 ag;
-    u32 ab;
-    u32 br;
-    u32 bg;
-    u32 bb;
-
-    ar = (a >> 11) & 0x1FU;
-    ag = (a >> 5) & 0x3FU;
-    ab = a & 0x1FU;
-    br = (b >> 11) & 0x1FU;
-    bg = (b >> 5) & 0x3FU;
-    bb = b & 0x1FU;
-
-    return (u16)((((ar + br) >> 1) << 11) |
-                 (((ag + bg) >> 1) << 5) |
-                 (((ab + bb) >> 1) << 0));
+static u8 PsAppVideo_IsCoreContextValid(const PsAppVideoContext *ctx) {
+    if ((ctx == NULL) || (ctx->vdma == NULL) || (ctx->regs == NULL) || (ctx->state == NULL)) {
+        return 0U;
+    }
+    return 1U;
 }
 
-static void PsAppVideo_EnsureShadeLut(void) {
-    u32 pixel;
-    u32 mode;
-
-    if (s_shade_lut_ready != 0U) {
-        return;
+static u8 PsAppVideo_IsPresentContextValid(const PsAppVideoContext *ctx) {
+    if ((PsAppVideo_IsCoreContextValid(ctx) == 0U) || (ctx->rom == NULL)) {
+        return 0U;
     }
-
-    for (pixel = 0U; pixel <= 0xFFFFU; ++pixel) {
-        u32 r5;
-        u32 g6;
-        u32 b5;
-        u32 r8;
-        u32 g8;
-        u32 b8;
-        u32 gray;
-
-        r5 = (pixel >> 11) & 0x1FU;
-        g6 = (pixel >> 5) & 0x3FU;
-        b5 = pixel & 0x1FU;
-        r8 = (r5 << 3) | (r5 >> 2);
-        g8 = (g6 << 2) | (g6 >> 4);
-        b8 = (b5 << 3) | (b5 >> 2);
-        gray = ((r8 * 30U) + (g8 * 59U) + (b8 * 11U) + 50U) / 100U;
-
-        s_shade_lut[0][pixel] = (r8 << 16) | (g8 << 8) | b8;
-        for (mode = 1U; mode <= 4U; ++mode) {
-            u32 out_r;
-            u32 out_g;
-            u32 out_b;
-
-            out_r = ((r8 * (4U - mode)) + (gray * mode) + 2U) / 4U;
-            out_g = ((g8 * (4U - mode)) + (gray * mode) + 2U) / 4U;
-            out_b = ((b8 * (4U - mode)) + (gray * mode) + 2U) / 4U;
-
-            s_shade_lut[mode][pixel] = ((out_r & 0xFFU) << 16) |
-                                       ((out_g & 0xFFU) << 8) |
-                                       (out_b & 0xFFU);
-        }
-    }
-
-    s_shade_lut_ready = 1U;
+    return 1U;
 }
 
 static void PsAppVideo_UpdateDisplayFrameState(PsAppVideoContext *ctx) {
@@ -217,8 +166,8 @@ static void PsAppVideo_LoadCaptureShadowFromBram(u32 buf_idx) {
     pixel_idx = 0U;
     for (word_idx = 0U; word_idx < PS_APP_GBA_FB_CAPTURE_WORDS; ++word_idx) {
         u32 packed = src_words[word_idx];
-        s_capture_shadow[pixel_idx++] = (u16)(packed & 0xFFFFU);
-        s_capture_shadow[pixel_idx++] = (u16)((packed >> 16) & 0xFFFFU);
+        s_ps_app_video_capture_shadow[pixel_idx++] = (u16)(packed & 0xFFFFU);
+        s_ps_app_video_capture_shadow[pixel_idx++] = (u16)((packed >> 16) & 0xFFFFU);
     }
 }
 
@@ -232,7 +181,7 @@ static void PsAppVideo_UpdateScaleLut(u32 dst_w, u32 dst_h) {
     if (dst_h > PS_APP_HDMI_HEIGHT) {
         dst_h = PS_APP_HDMI_HEIGHT;
     }
-    if ((dst_w == s_scale_lut_w) && (dst_h == s_scale_lut_h)) {
+    if ((dst_w == s_ps_app_video_scale_lut_width) && (dst_h == s_ps_app_video_scale_lut_height)) {
         return;
     }
 
@@ -241,7 +190,7 @@ static void PsAppVideo_UpdateScaleLut(u32 dst_w, u32 dst_h) {
         if (src_x >= PS_APP_GBA_FRAME_WIDTH) {
             src_x = PS_APP_GBA_FRAME_WIDTH - 1U;
         }
-        s_scale_x_lut[dst_px] = (u16)src_x;
+        s_ps_app_video_scale_x_lut[dst_px] = (u16)src_x;
     }
 
     for (dst_py = 0U; dst_py < dst_h; ++dst_py) {
@@ -249,11 +198,11 @@ static void PsAppVideo_UpdateScaleLut(u32 dst_w, u32 dst_h) {
         if (src_y >= PS_APP_GBA_FRAME_HEIGHT) {
             src_y = PS_APP_GBA_FRAME_HEIGHT - 1U;
         }
-        s_scale_y_lut[dst_py] = (u16)src_y;
+        s_ps_app_video_scale_y_lut[dst_py] = (u16)src_y;
     }
 
-    s_scale_lut_w = dst_w;
-    s_scale_lut_h = dst_h;
+    s_ps_app_video_scale_lut_width = dst_w;
+    s_ps_app_video_scale_lut_height = dst_h;
 }
 
 static u32 PsAppVideo_TicksToUs(u64 ticks) {
@@ -310,8 +259,6 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
     XTime tick_end;
     UINTPTR flush_base_addr;
     u32 flush_bytes;
-    u8 interframe_mode;
-    u8 shade_mode;
 
     if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
         return XST_FAILURE;
@@ -338,38 +285,18 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
 
     PsAppVideo_LoadCaptureShadowFromBram(buf_idx);
     PsAppVideo_UpdateScaleLut(dst_w, dst_h);
-    interframe_mode = ctx->state->fx.interframe_mode;
-    shade_mode = ctx->state->fx.shade_mode;
-    if (shade_mode > 4U) {
-        shade_mode = 0U;
-    }
-    if (shade_mode != 0U) {
-        PsAppVideo_EnsureShadeLut();
-    }
 
     for (dst_py = 0U; dst_py < dst_h; ++dst_py) {
         UINTPTR line_base =
             (UINTPTR)fb32 +
             (((dst_y + dst_py) * ctx->vdma->line_stride_bytes) + (dst_x * sizeof(u32)));
         u32 *line_ptr = (u32 *)line_base;
-        const u16 *src_row = &s_capture_shadow[s_scale_y_lut[dst_py] * PS_APP_GBA_FRAME_WIDTH];
-        const u16 *prev_row = &s_capture_prev[s_scale_y_lut[dst_py] * PS_APP_GBA_FRAME_WIDTH];
+        const u16 *src_row = &s_ps_app_video_capture_shadow[s_ps_app_video_scale_y_lut[dst_py] * PS_APP_GBA_FRAME_WIDTH];
         u32 dst_px;
 
         for (dst_px = 0U; dst_px < dst_w; ++dst_px) {
-            u16 src565;
-
-            src565 = src_row[s_scale_x_lut[dst_px]];
-            if ((interframe_mode == PS_APP_VIDEO_INTERFRAME_BLEND) &&
-                (ctx->state->fx.prev_capture_valid != 0U)) {
-                src565 = PsAppVideo_BlendRgb565(src565, prev_row[s_scale_x_lut[dst_px]]);
-            }
-
-            if (shade_mode != 0U) {
-                line_ptr[dst_px] = s_shade_lut[shade_mode][src565];
-            } else {
-                line_ptr[dst_px] = PsAppVideo_ConvertRgb565ToXrgb8888(src565);
-            }
+            line_ptr[dst_px] =
+                PsAppVideo_ConvertRgb565ToXrgb8888(src_row[s_ps_app_video_scale_x_lut[dst_px]]);
         }
     }
 
@@ -387,8 +314,6 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
                                prev_frame_seq,
                                frame_seq,
                                PsAppVideo_TicksToUs((u64)(tick_end - tick_begin)));
-    memcpy(s_capture_prev, s_capture_shadow, sizeof(s_capture_shadow));
-    ctx->state->fx.prev_capture_valid = 1U;
     ctx->state->fbcap_last_frame_seq = frame_seq;
     ctx->state->fbcap_last_buf_idx = (u8)(buf_idx & 0x1U);
     ctx->state->fbcap_last_frame_idx = (u8)target_frame;
@@ -398,7 +323,7 @@ static XStatus PsAppVideo_BlitCapturedFrameToHdmi(PsAppVideoContext *ctx, u32 fr
 XStatus PsAppVideo_InitInterrupts(PsAppVideoContext *ctx) {
     XStatus status;
 
-    if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
+    if ((PsAppVideo_IsCoreContextValid(ctx) == 0U) || (ctx->vdma->is_ready == 0U)) {
         return XST_FAILURE;
     }
 
@@ -466,7 +391,7 @@ XStatus PsAppVideo_RequestFrame(PsAppVideoContext *ctx, u32 frame_idx) {
     u32 current_frame;
     u32 vdma_status;
 
-    if ((ctx == NULL) || (ctx->vdma->is_ready == 0U)) {
+    if ((PsAppVideo_IsCoreContextValid(ctx) == 0U) || (ctx->vdma->is_ready == 0U)) {
         return XST_FAILURE;
     }
 
@@ -517,7 +442,7 @@ XStatus PsAppVideo_RequestFrame(PsAppVideoContext *ctx, u32 frame_idx) {
 void PsAppVideo_AttemptRecover(PsAppVideoContext *ctx, u32 vdma_status, u32 vdma_errs) {
     u32 is_halted;
 
-    if (ctx == NULL) {
+    if (PsAppVideo_IsCoreContextValid(ctx) == 0U) {
         return;
     }
 
@@ -558,7 +483,7 @@ void PsAppVideo_SyncDisplayFrame(PsAppVideoContext *ctx) {
 XStatus PsAppVideo_RenderBootFrames(PsAppVideoContext *ctx) {
     XStatus status;
 
-    if (ctx == NULL) {
+    if (PsAppVideo_IsCoreContextValid(ctx) == 0U) {
         return XST_FAILURE;
     }
 
@@ -567,8 +492,6 @@ XStatus PsAppVideo_RenderBootFrames(PsAppVideoContext *ctx) {
         return status;
     }
 
-    ctx->state->fx.prev_capture_valid = 0U;
-    ctx->state->fx.frame30_phase = 0U;
     (void)PsAppVideo_RequestFrame(ctx, 0U);
     PsAppVideo_SyncDisplayFrame(ctx);
     return XST_SUCCESS;
@@ -580,9 +503,7 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
     u32 status;
     u32 last_seq;
     u32 sampled_buf_idx;
-    static u32 blit_fail_log_count = 0U;
-
-    if ((ctx == NULL) || (ctx->rom->loaded == 0U)) {
+    if ((PsAppVideo_IsPresentContextValid(ctx) == 0U) || (ctx->rom->loaded == 0U)) {
         return;
     }
 
@@ -603,76 +524,21 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
         }
     }
 
-    if (ctx->state->fx.interframe_mode == PS_APP_VIDEO_INTERFRAME_30HZ) {
-        ctx->state->fx.frame30_phase ^= 1U;
-        if (ctx->state->fx.frame30_phase != 0U) {
-            ctx->state->fbcap_last_frame_seq = seq1;
-            ctx->state->fbcap_last_buf_idx = (u8)(sampled_buf_idx & 0x1U);
-            return;
-        }
-    }
-
     if (PsAppVideo_BlitCapturedFrameToHdmi(ctx, seq1, sampled_buf_idx) != XST_SUCCESS) {
-        if (blit_fail_log_count < 5U) {
+        if (s_ps_app_video_blit_fail_log_count < 5U) {
             xil_printf("[BLIT] fail seq=%u buf=%u\r\n",
                        (unsigned int)seq1,
                        (unsigned int)sampled_buf_idx);
-            blit_fail_log_count++;
+            s_ps_app_video_blit_fail_log_count++;
         }
     }
-}
-
-void PsAppVideo_SetInterframeMode(PsAppVideoContext *ctx, u32 mode) {
-    if ((ctx == NULL) || (ctx->state == NULL)) {
-        return;
-    }
-
-    if (mode > PS_APP_VIDEO_INTERFRAME_30HZ) {
-        mode = PS_APP_VIDEO_INTERFRAME_OFF;
-    }
-
-    if (ctx->state->fx.interframe_mode != (u8)mode) {
-        ctx->state->fx.interframe_mode = (u8)mode;
-        ctx->state->fx.frame30_phase = 0U;
-    }
-    if (mode != PS_APP_VIDEO_INTERFRAME_BLEND) {
-        ctx->state->fx.prev_capture_valid = 0U;
-    }
-}
-
-void PsAppVideo_SetShadeMode(PsAppVideoContext *ctx, u32 mode) {
-    if ((ctx == NULL) || (ctx->state == NULL)) {
-        return;
-    }
-
-    if (mode > 4U) {
-        mode = 0U;
-    }
-    if (mode != 0U) {
-        PsAppVideo_EnsureShadeLut();
-    }
-    ctx->state->fx.shade_mode = (u8)mode;
-}
-
-u32 PsAppVideo_GetInterframeMode(const PsAppVideoContext *ctx) {
-    if ((ctx == NULL) || (ctx->state == NULL)) {
-        return 0U;
-    }
-    return (u32)ctx->state->fx.interframe_mode;
-}
-
-u32 PsAppVideo_GetShadeMode(const PsAppVideoContext *ctx) {
-    if ((ctx == NULL) || (ctx->state == NULL)) {
-        return 0U;
-    }
-    return (u32)ctx->state->fx.shade_mode;
 }
 
 u32 PsAppVideo_DefaultCaptureBuffer(PsAppVideoContext *ctx) {
     u32 seq;
     u32 buf_idx;
 
-    if (ctx == NULL) {
+    if (PsAppVideo_IsCoreContextValid(ctx) == 0U) {
         return 0U;
     }
 
@@ -688,7 +554,7 @@ u32 PsAppVideo_DefaultCaptureBuffer(PsAppVideoContext *ctx) {
 u32 PsAppVideo_DefaultFrameIndex(PsAppVideoContext *ctx) {
     u32 frame_idx;
 
-    if (ctx == NULL) {
+    if (PsAppVideo_IsCoreContextValid(ctx) == 0U) {
         return 0U;
     }
 
@@ -713,7 +579,7 @@ void PsAppVideo_ReadCaptureStatus(PsAppVideoContext *ctx, u32 *seq_out, u32 *buf
     u32 seq1;
     u32 status;
 
-    if ((ctx == NULL) || (seq_out == NULL) || (buf_out == NULL)) {
+    if ((PsAppVideo_IsCoreContextValid(ctx) == 0U) || (seq_out == NULL) || (buf_out == NULL)) {
         return;
     }
 
@@ -855,7 +721,7 @@ u32 PsAppVideo_ComputeSparseHash(UINTPTR base_addr, u32 bytes, u32 samples) {
 u32 PsAppVideo_ReadHdmiFramePixel(PsAppVideoContext *ctx, u32 frame_idx, u32 x, u32 y) {
     UINTPTR addr;
 
-    if ((ctx == NULL) || (ctx->vdma->is_ready == 0U) ||
+    if ((PsAppVideo_IsCoreContextValid(ctx) == 0U) || (ctx->vdma->is_ready == 0U) ||
         (frame_idx >= ctx->vdma->frame_count) ||
         (x >= ctx->vdma->width) ||
         (y >= ctx->vdma->height)) {
@@ -904,7 +770,7 @@ void PsAppVideo_ComputeDisplayWindow(PsAppVideoContext *ctx,
     w = 0U;
     h = 0U;
 
-    if ((ctx != NULL) && (ctx->vdma->is_ready != 0U) &&
+    if ((PsAppVideo_IsCoreContextValid(ctx) != 0U) && (ctx->vdma->is_ready != 0U) &&
         (ctx->vdma->width != 0U) && (ctx->vdma->height != 0U)) {
         if ((ctx->vdma->width * PS_APP_GBA_FRAME_HEIGHT) <=
             (ctx->vdma->height * PS_APP_GBA_FRAME_WIDTH)) {
@@ -939,3 +805,4 @@ void PsAppVideo_ComputeDisplayWindow(PsAppVideoContext *ctx,
         *h_out = h;
     }
 }
+

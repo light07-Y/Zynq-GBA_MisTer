@@ -11,6 +11,10 @@
 #define PS_FATFS_STORAGE_DRIVE_PATH       "0:/"
 #define PS_FATFS_STORAGE_READ_CHUNK_BYTES  (128U * 1024U)
 #define PS_FATFS_STORAGE_WRITE_CHUNK_BYTES (8U * 1024U)
+/* 不允许无限期等待存储锁：
+ * ROM 切换、RTC 持久化、save 周期落盘会并发触发 FatFs 访问。
+ * 若某条路径异常卡住，有限超时可以避免整个 PS 运行时被“连坐”死锁。 */
+#define PS_FATFS_STORAGE_LOCK_TIMEOUT_MS   3000U
 #define PS_FATFS_STORAGE_SAVEWR_VERBOSE    0U
 
 #if PS_FATFS_STORAGE_SAVEWR_VERBOSE
@@ -19,13 +23,15 @@
 #define PS_SAVEWR_LOG(...) do { } while (0)
 #endif
 
-static FATFS g_ps_fatfs;
-static SemaphoreHandle_t g_ps_fatfs_lock;
+/* 模块内统一采用“单 FATFS 实例 + 全局互斥锁”模型：
+ * 所有直接 FatFs 调用都必须放在这把锁内，避免跨任务重入导致不可预测行为。 */
+static FATFS s_ps_fatfs_storage_fs;
+static SemaphoreHandle_t s_ps_fatfs_storage_lock;
 
 static SemaphoreHandle_t PsFatFsStorage_GetLock(void) {
     SemaphoreHandle_t lock;
 
-    lock = g_ps_fatfs_lock;
+    lock = s_ps_fatfs_storage_lock;
     if (lock != NULL) {
         return lock;
     }
@@ -35,28 +41,43 @@ static SemaphoreHandle_t PsFatFsStorage_GetLock(void) {
         return NULL;
     }
 
-    if (g_ps_fatfs_lock == NULL) {
-        g_ps_fatfs_lock = lock;
-        return g_ps_fatfs_lock;
+    if (s_ps_fatfs_storage_lock == NULL) {
+        s_ps_fatfs_storage_lock = lock;
+        return s_ps_fatfs_storage_lock;
     }
 
     (void)vSemaphoreDelete(lock);
-    return g_ps_fatfs_lock;
+    return s_ps_fatfs_storage_lock;
 }
 
-static void PsFatFsStorage_Lock(void) {
+static XStatus PsFatFsStorage_Lock(void) {
     SemaphoreHandle_t lock;
+    TickType_t wait_ticks;
 
     if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
-        return;
+        return XST_SUCCESS;
     }
 
     lock = PsFatFsStorage_GetLock();
-    if (lock != NULL) {
-        xil_printf("[SAVEWR] lock wait\r\n");
-        (void)xSemaphoreTake(lock, portMAX_DELAY);
-        xil_printf("[SAVEWR] lock ok\r\n");
+    if (lock == NULL) {
+        return XST_FAILURE;
     }
+
+    /* 使用有限等待而非 portMAX_DELAY：
+     * 超时按“可恢复失败”返回给上层，由上层决定重试/降级，而不是整机硬挂。 */
+    wait_ticks = pdMS_TO_TICKS(PS_FATFS_STORAGE_LOCK_TIMEOUT_MS);
+    if (wait_ticks == 0U) {
+        wait_ticks = 1U;
+    }
+
+    PS_SAVEWR_LOG("[SAVEWR] lock wait\r\n");
+    if (xSemaphoreTake(lock, wait_ticks) != pdTRUE) {
+        xil_printf("[FATFS] lock timeout after %u ms\r\n",
+                   (unsigned int)PS_FATFS_STORAGE_LOCK_TIMEOUT_MS);
+        return XST_FAILURE;
+    }
+    PS_SAVEWR_LOG("[SAVEWR] lock ok\r\n");
+    return XST_SUCCESS;
 }
 
 static void PsFatFsStorage_Unlock(void) {
@@ -64,8 +85,8 @@ static void PsFatFsStorage_Unlock(void) {
         return;
     }
 
-    if (g_ps_fatfs_lock != NULL) {
-        (void)xSemaphoreGive(g_ps_fatfs_lock);
+    if (s_ps_fatfs_storage_lock != NULL) {
+        (void)xSemaphoreGive(s_ps_fatfs_storage_lock);
     }
 }
 
@@ -75,29 +96,8 @@ static void PsFatFsStorage_YieldAfterWriteChunk(void) {
     }
 }
 
-static TickType_t PsFatFsStorage_GetTickNow(void) {
-    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
-        return xTaskGetTickCount();
-    }
-    return 0U;
-}
-
-static u32 PsFatFsStorage_ElapsedMs(TickType_t start_tick) {
-    TickType_t delta_ticks;
-    u64 elapsed_ms;
-    if (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
-        return 0U;
-    }
-    delta_ticks = xTaskGetTickCount() - start_tick;
-    elapsed_ms = ((u64)delta_ticks * 1000ULL) / (u64)configTICK_RATE_HZ;
-    if (elapsed_ms > 0xFFFFFFFFULL) {
-        return 0xFFFFFFFFU;
-    }
-    return (u32)elapsed_ms;
-}
-
 static FRESULT PsFatFsStorage_Mount(void) {
-    return f_mount(&g_ps_fatfs, PS_FATFS_STORAGE_DRIVE_PATH, 0);
+    return f_mount(&s_ps_fatfs_storage_fs, PS_FATFS_STORAGE_DRIVE_PATH, 0);
 }
 
 const char *PsFatFsStorage_StrError(FRESULT result) {
@@ -153,7 +153,14 @@ XStatus PsFatFsStorage_ReadFileToMemoryEx(const char *path,
     dst_ptr = (u8 *)dst_addr;
     offset = 0U;
     memset(&file, 0, sizeof(file));
-    PsFatFsStorage_Lock();
+    /* 如果全局存储锁超时，立即失败返回：
+     * 让调用方决定重试策略，避免后台线程永久阻塞。 */
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        if (result_out != NULL) {
+            result_out->fs_result = FR_TIMEOUT;
+        }
+        return XST_FAILURE;
+    }
 
     fs_result = PsFatFsStorage_Mount();
     if (result_out != NULL) {
@@ -172,26 +179,7 @@ XStatus PsFatFsStorage_ReadFileToMemoryEx(const char *path,
     }
 
     file_size = f_size(&file);
-    if (result_out != NULL) {
-        /*
-         * 这里提前回填“文件真实大小”，即使后续因容量不匹配失败也保留给上层：
-         * 上层可据此区分 empty / oversize / 其他 IO 错误，避免只看到统一失败码。
-         */
-        if (file_size > (FSIZE_t)0xFFFFFFFFU) {
-            result_out->bytes_loaded = 0xFFFFFFFFU;
-        } else {
-            result_out->bytes_loaded = (u32)file_size;
-        }
-    }
-
     if ((file_size == 0U) || (file_size > (FSIZE_t)capacity_bytes)) {
-        if (result_out != NULL) {
-            /*
-             * 约定：对象存在但尺寸/布局不符合调用者预期时，返回 FR_INVALID_OBJECT。
-             * 这样上层可把“路径存在但格式不对”与 “FR_NO_FILE/FR_NO_PATH”分开处理。
-             */
-            result_out->fs_result = FR_INVALID_OBJECT;
-        }
         (void)f_close(&file);
         goto cleanup;
     }
@@ -252,15 +240,11 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
                                         PsFatFsStorageWriteResult *result_out) {
     FIL file;
     FRESULT fs_result;
-    FRESULT close_result;
     UINT bytes_written;
     const u8 *src_ptr;
     u32 offset;
     u32 chunk_index;
-    u32 chunk_total;
     XStatus status;
-    TickType_t total_start_tick;
-    TickType_t step_start_tick;
 
     if (result_out != NULL) {
         memset(result_out, 0, sizeof(*result_out));
@@ -275,128 +259,104 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
     src_ptr = (const u8 *)src_addr;
     offset = 0U;
     chunk_index = 0U;
-    chunk_total = (bytes_to_write + (PS_FATFS_STORAGE_WRITE_CHUNK_BYTES - 1U)) /
-                  PS_FATFS_STORAGE_WRITE_CHUNK_BYTES;
     memset(&file, 0, sizeof(file));
-    total_start_tick = PsFatFsStorage_GetTickNow();
-    xil_printf("[SAVEWR] enter path=%s src=0x%08x bytes=%u\r\n",
-               (path != NULL) ? path : "(null)",
-               (unsigned int)src_addr,
-               (unsigned int)bytes_to_write);
-    PS_SAVEWR_LOG("[SAVEWR] begin path=%s bytes=%u chunk=%u total_chunks=%u\r\n",
+    PS_SAVEWR_LOG("[SAVEWR] begin path=%s bytes=%u chunk=%u\r\n",
                   path,
                   (unsigned int)bytes_to_write,
-                  (unsigned int)PS_FATFS_STORAGE_WRITE_CHUNK_BYTES,
-                  (unsigned int)chunk_total);
-    PsFatFsStorage_Lock();
+                  (unsigned int)PS_FATFS_STORAGE_WRITE_CHUNK_BYTES);
+    /* 写路径与读路径采用同一套有界锁策略，保证行为一致。 */
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        if (result_out != NULL) {
+            result_out->fs_result = FR_TIMEOUT;
+        }
+        return XST_FAILURE;
+    }
 
-    step_start_tick = PsFatFsStorage_GetTickNow();
-    xil_printf("[SAVEWR] mount begin\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] mount begin\r\n");
     fs_result = PsFatFsStorage_Mount();
     if (result_out != NULL) {
         result_out->fs_result = fs_result;
     }
-    PS_SAVEWR_LOG("[SAVEWR] mount fs=%s dt=%u ms\r\n",
-                  PsFatFsStorage_StrError(fs_result),
-                  (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+    PS_SAVEWR_LOG("[SAVEWR] mount fs=%s\r\n",
+                  PsFatFsStorage_StrError(fs_result));
     if (fs_result != FR_OK) {
         goto cleanup;
     }
-    xil_printf("[SAVEWR] mount ok\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] mount ok\r\n");
 
-    step_start_tick = PsFatFsStorage_GetTickNow();
-    xil_printf("[SAVEWR] open begin\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] open begin\r\n");
     fs_result = f_open(&file, path, FA_CREATE_ALWAYS | FA_WRITE);
     if (result_out != NULL) {
         result_out->fs_result = fs_result;
     }
-    PS_SAVEWR_LOG("[SAVEWR] open fs=%s dt=%u ms\r\n",
-                  PsFatFsStorage_StrError(fs_result),
-                  (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+    PS_SAVEWR_LOG("[SAVEWR] open fs=%s\r\n",
+                  PsFatFsStorage_StrError(fs_result));
     if (fs_result != FR_OK) {
         goto cleanup;
     }
-    xil_printf("[SAVEWR] open ok\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] open ok\r\n");
 
-    step_start_tick = PsFatFsStorage_GetTickNow();
     Xil_DCacheFlushRange((INTPTR)src_addr, bytes_to_write);
-    xil_printf("[SAVEWR] dcache flush ok\r\n");
-    PS_SAVEWR_LOG("[SAVEWR] dcache flush bytes=%u dt=%u ms\r\n",
-                  (unsigned int)bytes_to_write,
-                  (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+    PS_SAVEWR_LOG("[SAVEWR] dcache flush ok\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] dcache flush bytes=%u\r\n",
+                  (unsigned int)bytes_to_write);
 
     while (offset < bytes_to_write) {
         u32 chunk_bytes;
-        TickType_t chunk_start_tick;
 
         chunk_bytes = bytes_to_write - offset;
         if (chunk_bytes > PS_FATFS_STORAGE_WRITE_CHUNK_BYTES) {
             chunk_bytes = PS_FATFS_STORAGE_WRITE_CHUNK_BYTES;
         }
 
-        chunk_start_tick = PsFatFsStorage_GetTickNow();
         bytes_written = 0U;
         if (chunk_index == 0U) {
-            xil_printf("[SAVEWR] first chunk begin off=%u size=%u\r\n",
-                       (unsigned int)offset,
-                       (unsigned int)chunk_bytes);
+            PS_SAVEWR_LOG("[SAVEWR] first chunk begin off=%u size=%u\r\n",
+                          (unsigned int)offset,
+                          (unsigned int)chunk_bytes);
         }
         fs_result = f_write(&file, &src_ptr[offset], chunk_bytes, &bytes_written);
         if (result_out != NULL) {
             result_out->fs_result = fs_result;
         }
         chunk_index++;
-        PS_SAVEWR_LOG("[SAVEWR] chunk %u/%u off=%u req=%u wrote=%u fs=%s dt=%u ms\r\n",
+        PS_SAVEWR_LOG("[SAVEWR] chunk %u off=%u req=%u wrote=%u fs=%s\r\n",
                       (unsigned int)chunk_index,
-                      (unsigned int)chunk_total,
                       (unsigned int)offset,
                       (unsigned int)chunk_bytes,
                       (unsigned int)bytes_written,
-                      PsFatFsStorage_StrError(fs_result),
-                      (unsigned int)PsFatFsStorage_ElapsedMs(chunk_start_tick));
+                      PsFatFsStorage_StrError(fs_result));
         if ((fs_result != FR_OK) || (bytes_written != chunk_bytes)) {
-            step_start_tick = PsFatFsStorage_GetTickNow();
-            close_result = f_close(&file);
-            PS_SAVEWR_LOG("[SAVEWR] close_after_write_fail fs=%s dt=%u ms\r\n",
-                          PsFatFsStorage_StrError(close_result),
-                          (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+            (void)f_close(&file);
             goto cleanup;
         }
         if (chunk_index == 1U) {
-            xil_printf("[SAVEWR] first chunk ok wrote=%u\r\n", (unsigned int)bytes_written);
+            PS_SAVEWR_LOG("[SAVEWR] first chunk ok wrote=%u\r\n", (unsigned int)bytes_written);
         }
 
         offset += bytes_written;
         PsFatFsStorage_YieldAfterWriteChunk();
     }
 
-    step_start_tick = PsFatFsStorage_GetTickNow();
-    xil_printf("[SAVEWR] sync begin\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] sync begin\r\n");
     fs_result = f_sync(&file);
     if (result_out != NULL) {
         result_out->fs_result = fs_result;
     }
-    PS_SAVEWR_LOG("[SAVEWR] sync fs=%s dt=%u ms\r\n",
-                  PsFatFsStorage_StrError(fs_result),
-                  (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+    PS_SAVEWR_LOG("[SAVEWR] sync fs=%s\r\n",
+                  PsFatFsStorage_StrError(fs_result));
     if (fs_result != FR_OK) {
-        step_start_tick = PsFatFsStorage_GetTickNow();
-        close_result = f_close(&file);
-        PS_SAVEWR_LOG("[SAVEWR] close_after_sync_fail fs=%s dt=%u ms\r\n",
-                      PsFatFsStorage_StrError(close_result),
-                      (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+        (void)f_close(&file);
         goto cleanup;
     }
-    xil_printf("[SAVEWR] sync ok\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] sync ok\r\n");
 
-    step_start_tick = PsFatFsStorage_GetTickNow();
-    xil_printf("[SAVEWR] close begin\r\n");
-    close_result = f_close(&file);
-    PS_SAVEWR_LOG("[SAVEWR] close fs=%s dt=%u ms\r\n",
-                  PsFatFsStorage_StrError(close_result),
-                  (unsigned int)PsFatFsStorage_ElapsedMs(step_start_tick));
+    PS_SAVEWR_LOG("[SAVEWR] close begin\r\n");
+    fs_result = f_close(&file);
+    PS_SAVEWR_LOG("[SAVEWR] close fs=%s\r\n",
+                  PsFatFsStorage_StrError(fs_result));
 
-    xil_printf("[SAVEWR] close done\r\n");
+    PS_SAVEWR_LOG("[SAVEWR] close done\r\n");
 
     if (result_out != NULL) {
         result_out->bytes_written = bytes_to_write;
@@ -405,76 +365,51 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
     status = XST_SUCCESS;
 
 cleanup:
-    PS_SAVEWR_LOG("[SAVEWR] end status=%s fs=%s bytes=%u total=%u ms\r\n",
+    PS_SAVEWR_LOG("[SAVEWR] end status=%s fs=%s bytes=%u\r\n",
                   (status == XST_SUCCESS) ? "ok" : "fail",
                   (result_out != NULL) ? PsFatFsStorage_StrError(result_out->fs_result) : "na",
-                  (unsigned int)offset,
-                  (unsigned int)PsFatFsStorage_ElapsedMs(total_start_tick));
+                  (unsigned int)offset);
     PsFatFsStorage_Unlock();
     return status;
 }
 
-XStatus PsFatFsStorage_QueryFileSize(const char *path,
-                                     u32 *size_bytes_out,
-                                     FRESULT *fs_result_out) {
-    FIL file;
-    FSIZE_t file_size;
+XStatus PsFatFsStorage_DeleteFileIfExists(const char *path, u8 *deleted_out) {
     FRESULT fs_result;
     XStatus status;
 
-    if ((path == NULL) || (*path == '\0') || (size_bytes_out == NULL)) {
+    if (deleted_out != NULL) {
+        *deleted_out = 0U;
+    }
+    if ((path == NULL) || (*path == '\0')) {
         return XST_INVALID_PARAM;
     }
 
-    *size_bytes_out = 0U;
-    if (fs_result_out != NULL) {
-        *fs_result_out = FR_INVALID_PARAMETER;
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        return XST_FAILURE;
     }
 
     status = XST_FAILURE;
-    PsFatFsStorage_Lock();
-
     fs_result = PsFatFsStorage_Mount();
-    if (fs_result_out != NULL) {
-        *fs_result_out = fs_result;
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    /* 刻意不做 f_stat 预检查：
+     * 1) f_unlink 本身就能给出“文件不存在/路径不存在”的结果；
+     * 2) 少一次 FatFs API 交互，缩短临界区；
+     * 3) 历史上在高压并发路径里，f_stat 额外分支更容易放大异常。 */
+    fs_result = f_unlink(path);
+    if ((fs_result == FR_NO_FILE) || (fs_result == FR_NO_PATH)) {
+        status = XST_SUCCESS;
+        goto cleanup;
     }
     if (fs_result != FR_OK) {
         goto cleanup;
     }
 
-    memset(&file, 0, sizeof(file));
-    /*
-     * 防坑：这里故意不用 f_stat。
-     * 某些 BSP/FatFs 组合在目录存在、LFN/路径边界场景下，f_stat 稳定性较差，
-     * 会放大“偶发上下文污染”的风险。改为 f_open + f_size + f_close 更稳。
-     */
-    fs_result = f_open(&file, path, FA_READ);
-    if (fs_result_out != NULL) {
-        *fs_result_out = fs_result;
+    if (deleted_out != NULL) {
+        *deleted_out = 1U;
     }
-    if (fs_result != FR_OK) {
-        goto cleanup;
-    }
-
-    file_size = f_size(&file);
-    fs_result = f_close(&file);
-    if (fs_result_out != NULL) {
-        *fs_result_out = fs_result;
-    }
-    if (fs_result != FR_OK) {
-        goto cleanup;
-    }
-
-#if (FF_FS_EXFAT != 0)
-    if (file_size > 0xFFFFFFFFULL) {
-        if (fs_result_out != NULL) {
-            *fs_result_out = FR_INVALID_OBJECT;
-        }
-        goto cleanup;
-    }
-#endif
-
-    *size_bytes_out = (u32)file_size;
     status = XST_SUCCESS;
 
 cleanup:
@@ -486,18 +421,31 @@ XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
     DIR dir;
     FRESULT fs_result;
     XStatus status;
-    u8 dir_opened;
 
     if ((path == NULL) || (*path == '\0')) {
         return XST_INVALID_PARAM;
     }
 
     status = XST_FAILURE;
-    dir_opened = 0U;
-    PsFatFsStorage_Lock();
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
 
     fs_result = PsFatFsStorage_Mount();
     if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    /* 目录存在性同样不走 f_stat：
+     * 直接 f_opendir 检查最简路径，必要时再 mkdir。 */
+    memset(&dir, 0, sizeof(dir));
+    fs_result = f_opendir(&dir, path);
+    if (fs_result == FR_OK) {
+        (void)f_closedir(&dir);
+        status = XST_SUCCESS;
+        goto cleanup;
+    }
+    if ((fs_result != FR_NO_FILE) && (fs_result != FR_NO_PATH)) {
         goto cleanup;
     }
 
@@ -507,22 +455,8 @@ XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
         goto cleanup;
     }
 
-    /*
-     * f_mkdir 失败后再用 f_opendir 二次确认：
-     * 若目录已存在但返回码非 FR_EXIST（某些介质/时序下会出现），
-     * 仍可判定“目录可用”，避免误报失败。
-     */
-    memset(&dir, 0, sizeof(dir));
-    fs_result = f_opendir(&dir, path);
-    if (fs_result == FR_OK) {
-        dir_opened = 1U;
-        status = XST_SUCCESS;
-    }
-
 cleanup:
-    if (dir_opened != 0U) {
-        (void)f_closedir(&dir);
-    }
     PsFatFsStorage_Unlock();
     return status;
 }
+

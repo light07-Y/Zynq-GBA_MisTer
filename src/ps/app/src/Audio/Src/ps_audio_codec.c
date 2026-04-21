@@ -96,6 +96,36 @@ static XStatus PsAudioCodec_WriteRegLogged(PsAudioCodec *ctx, u8 reg, u16 data, 
     return status;
 }
 
+/*
+ * Headphone volume writes are forced to immediate mode (no zero-cross gating).
+ * On some bring-up states, zero-cross can defer one channel update indefinitely
+ * and manifest as "left-only audio".
+ */
+static XStatus PsAudioCodec_WriteHeadphoneVolumeImmediate(PsAudioCodec *ctx, u8 volume_7bit) {
+    XStatus status;
+    u16 reg_value;
+
+    if ((ctx == 0) || (ctx->is_ready == 0U)) {
+        return XST_FAILURE;
+    }
+
+    if (volume_7bit > 0x7FU) {
+        volume_7bit = 0x7FU;
+    }
+
+    reg_value = (u16)volume_7bit;
+    status = PsAudioCodec_WriteReg(ctx, SSM_R2_LEFT_HP_OUT, reg_value);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+
+    status = PsAudioCodec_WriteReg(ctx, SSM_R3_RIGHT_HP_OUT, reg_value);
+    if (status == XST_SUCCESS) {
+        ctx->hp_volume = volume_7bit;
+    }
+    return status;
+}
+
 XStatus PsAudioCodec_Init(PsAudioCodec *ctx, u32 i2c_base_addr, u16 slave_addr, u32 scl_hz) {
     XIicPs_Config *cfg;
     XStatus status;
@@ -224,10 +254,9 @@ XStatus PsAudioCodec_ProgramPlayback(PsAudioCodec *ctx, u32 sample_rate_hz, u16 
     status = PsAudioCodec_WriteRegLogged(ctx, SSM_R1_RIGHT_LINE_IN, 0b010010111U, "R1_RIGHT_LINE_IN");
     if (status != XST_SUCCESS) return status;
 
-    /* Enable zero-cross mode to avoid clicks on volume changes. */
-    status = PsAudioCodec_WriteRegLogged(ctx, SSM_R2_LEFT_HP_OUT, 0b111111001U, "R2_LEFT_HP_OUT");
+    status = PsAudioCodec_WriteRegLogged(ctx, SSM_R2_LEFT_HP_OUT, 0x079U, "R2_LEFT_HP_OUT");
     if (status != XST_SUCCESS) return status;
-    status = PsAudioCodec_WriteRegLogged(ctx, SSM_R3_RIGHT_HP_OUT, 0b111111001U, "R3_RIGHT_HP_OUT");
+    status = PsAudioCodec_WriteRegLogged(ctx, SSM_R3_RIGHT_HP_OUT, 0x079U, "R3_RIGHT_HP_OUT");
     if (status != XST_SUCCESS) return status;
 
     status = PsAudioCodec_WriteRegLogged(ctx, SSM_R4_ANALOG_PATH, 0b000010010U, "R4_ANALOG_PATH");
@@ -288,23 +317,9 @@ XStatus PsAudioCodec_SetMute(PsAudioCodec *ctx, u8 mute) {
 }
 
 XStatus PsAudioCodec_SetHeadphoneVolume(PsAudioCodec *ctx, u8 volume_7bit) {
-    u16 reg;
-    XStatus status;
-
     if (volume_7bit > 0x7FU) {
         volume_7bit = 0x7FU;
     }
 
-    reg = (u16)(0x100U | 0x80U | volume_7bit);
-    status = PsAudioCodec_WriteReg(ctx, SSM_R2_LEFT_HP_OUT, reg);
-    if (status != XST_SUCCESS) {
-        return status;
-    }
-
-    status = PsAudioCodec_WriteReg(ctx, SSM_R3_RIGHT_HP_OUT, reg);
-    if (status == XST_SUCCESS) {
-        ctx->hp_volume = volume_7bit;
-    }
-
-    return status;
+    return PsAudioCodec_WriteHeadphoneVolumeImmediate(ctx, volume_7bit);
 }
