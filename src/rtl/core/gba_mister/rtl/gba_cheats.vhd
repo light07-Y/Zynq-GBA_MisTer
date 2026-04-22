@@ -40,6 +40,7 @@ architecture arch of gba_cheats is
    constant CHEATCOUNT  : integer := 32;
    constant SETTLECOUNT : integer := 100;
    
+   -- flags[3:0] 操作类型（与 PS 侧 PsAppRuntimeFeature_BuildCheatFlags 对齐）
    constant OPTYPE_ALWAYS     : std_logic_vector(3 downto 0) := x"0";
    constant OPTYPE_EQUALS     : std_logic_vector(3 downto 0) := x"1";
    constant OPTYPE_GREATER    : std_logic_vector(3 downto 0) := x"2";
@@ -49,6 +50,8 @@ architecture arch of gba_cheats is
    constant OPTYPE_NOT_EQ     : std_logic_vector(3 downto 0) := x"6"; 
    constant OPTYPE_EMPTY      : std_logic_vector(3 downto 0) := x"F"; 
    
+   -- flags[7:4] 字节使能位。注意这里映射到 cheatdata(103:100)。
+   -- PS 侧若把 mask 编到高位（如 [31:16]）将不会被 core 读取，表现为“命令成功但无效果”。
    constant BYTEMASK_BIT_0    : integer := 100;
    constant BYTEMASK_BIT_1    : integer := 101;
    constant BYTEMASK_BIT_2    : integer := 102;

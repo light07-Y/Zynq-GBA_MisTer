@@ -41,6 +41,7 @@ static void usbh_xbox_class_free(struct usbh_xbox *xbox_class)
 int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
 {
     struct usb_endpoint_descriptor *ep_desc;
+    const struct usb_interface_descriptor *intf_desc;
     uint8_t int_in_found = 0U;
 
     struct usbh_xbox *xbox_class = usbh_xbox_class_alloc();
@@ -53,6 +54,7 @@ int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
     xbox_class->intf = intf;
 
     hport->config.intf[intf].priv = xbox_class;
+    intf_desc = &hport->config.intf[intf].altsetting[0].intf_desc;
 
     for (uint8_t i = 0; i < hport->config.intf[intf].altsetting[0].intf_desc.bNumEndpoints; i++) {
         ep_desc = &hport->config.intf[intf].altsetting[0].ep[i].ep_desc;
@@ -76,6 +78,18 @@ int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
     }
 
     snprintf(hport->config.intf[intf].devname, CONFIG_USBHOST_DEV_NAMELEN, DEV_FORMAT, xbox_class->minor);
+
+    if ((intf_desc->bInterfaceClass != USB_DEVICE_CLASS_VEND_SPECIFIC) ||
+        (intf_desc->bInterfaceSubClass != 0x5d) ||
+        (intf_desc->bInterfaceProtocol != 0x01)) {
+        USB_LOG_WRN("XBOX relaxed bind VID:0x%04x PID:0x%04x intf:%u cls:%02x/%02x/%02x\r\n",
+                    hport->device_desc.idVendor,
+                    hport->device_desc.idProduct,
+                    intf,
+                    intf_desc->bInterfaceClass,
+                    intf_desc->bInterfaceSubClass,
+                    intf_desc->bInterfaceProtocol);
+    }
 
     USB_LOG_INFO("Register XBOX Class:%s\r\n", hport->config.intf[intf].devname);
 
@@ -101,6 +115,11 @@ int usbh_xbox_disconnect(struct usbh_hubport *hport, uint8_t intf)
         if (hport->config.intf[intf].devname[0] != '\0') {
             usb_osal_thread_schedule_other();
             USB_LOG_INFO("Unregister XBOX Class:%s\r\n", hport->config.intf[intf].devname);
+            /*
+             * 注意：底层一旦走到 disconnect，这里会立即回调 stop。
+             * 上层（ps_app_usbhost_report_channel / enum_recovery）需要自行做
+             * “延迟判定 detached”防抖，避免瞬态重枚举造成 UI 抖动。
+             */
             usbh_xbox_stop(xbox_class);
         }
 
@@ -237,12 +256,41 @@ static const uint16_t xbox_id_table[][2] = {
     { 0x0000, 0x0000 }  // end of list
 };
 
+/*
+ * 8BitDo 接收器“宽松匹配”白名单：
+ * 仅放宽接口 class/subclass/protocol，不放宽接口号。
+ * 这里仍强制 interface number == 0（MI_00），避免误绑到 MI_01/MI_02。
+ *
+ * 背景：
+ * 某些上电时序下（接收器先上电、手柄后开机），接收器可能先以非标准接口描述出现，
+ * 之后才切到可用链路。若严格要求 FF/5D/01，会出现 device_present=1 但 xbox_active=0。
+ * 这里先让已知 8BitDo 机型进入 xbox driver，后续由 sideband + report 链路拉起。
+ */
+static const uint16_t xbox_8bitdo_relaxed_id_table[][2] = {
+    { 0x2dc8, 0x3106 }, // 8BitDo Ultimate Wireless / Pro 2 Wired Controller
+    { 0x2dc8, 0x3109 }, // 8BitDo Ultimate Wireless Bluetooth
+    { 0x2dc8, 0x3110 }, // 8BitDo Ultimate 2 Wireless PC
+    { 0x2dc8, 0x3111 }, // 8BitDo Ultimate 2 Wireless variant
+    { 0x2dc8, 0x310b }, // 8BitDo Ultimate 2 Wireless for PC
+    { 0x0000, 0x0000 }  // end of list
+};
+
 CLASS_INFO_DEFINE const struct usbh_class_info xbox_custom_class_info = {
     .match_flags = USB_CLASS_MATCH_VID_PID | USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_SUBCLASS | USB_CLASS_MATCH_INTF_PROTOCOL,
     .bInterfaceClass = USB_DEVICE_CLASS_VEND_SPECIFIC,
     .bInterfaceSubClass = 0x5d,
     .bInterfaceProtocol = 0x01,
     .id_table =  xbox_id_table,
+    .class_driver = &xbox_class_driver
+};
+
+CLASS_INFO_DEFINE const struct usbh_class_info xbox_8bitdo_relaxed_class_info = {
+    .match_flags = USB_CLASS_MATCH_VID_PID | USB_CLASS_MATCH_INTF_NUM,
+    .bInterfaceClass = 0x00,
+    .bInterfaceSubClass = 0x00,
+    .bInterfaceProtocol = 0x00,
+    .bInterfaceNumber = 0x00,
+    .id_table = xbox_8bitdo_relaxed_id_table,
     .class_driver = &xbox_class_driver
 };
 

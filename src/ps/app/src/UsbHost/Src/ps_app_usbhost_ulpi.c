@@ -334,12 +334,25 @@ XStatus PsAppUsbHost_SetVbusDriveByBase(PsAppUsbHostImplContext *impl_ctx, UINTP
     }
     Xil_Out32(base_addr + XUSBPS_OTGCSR_OFFSET, otgcsr_ctrl);
 
-    if (enable != 0U) {
+    {
         u32 portsc;
 
         portsc = Xil_In32(base_addr + XUSBPS_PORTSCR1_OFFSET);
-        portsc |= (XUSBPS_PORTSCR_PP_MASK | PS_APP_USBHOST_PORTSC_CHANGE_BITS);
-        portsc &= ~(XUSBPS_PORTSCR_PHCD_MASK | XUSBPS_PORTSCR_SUSP_MASK | XUSBPS_PORTSCR_FPR_MASK);
+        if (enable != 0U) {
+            portsc |= XUSBPS_PORTSCR_PP_MASK;
+            portsc &= ~(XUSBPS_PORTSCR_PHCD_MASK | XUSBPS_PORTSCR_SUSP_MASK | XUSBPS_PORTSCR_FPR_MASK);
+            /*
+             * 仅确认非连接类变化位，避免误清 CSC 导致 Hub 线程丢失连接变化事件。
+             */
+            portsc |= PS_APP_USBHOST_PORTSC_CHANGE_BITS;
+        } else {
+            /*
+             * 断电分支必须显式清 PP，保证端口真正掉电。
+             * 否则“VBUS bounce”无法制造有效断开沿，恢复会失效。
+             */
+            portsc &= ~XUSBPS_PORTSCR_PP_MASK;
+            portsc |= PS_APP_USBHOST_PORTSC_CHANGE_BITS;
+        }
         Xil_Out32(base_addr + XUSBPS_PORTSCR1_OFFSET, portsc);
     }
 

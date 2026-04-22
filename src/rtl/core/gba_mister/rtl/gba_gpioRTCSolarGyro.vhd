@@ -138,15 +138,19 @@ begin
          end if;
          
          -- precalc for timing purpose
+         -- 光照阈值曲线：
+         -- sensor bit 在 clockslow >= solarsensor 时拉高，阈值越小表示越“亮”。
+         -- 这里将 8 档曲线向 mGBA 的亮度分布靠拢，确保最高档在 Boktai 中
+         -- 能够明显触发实时光照变化（原先最高档偏暗，实机体感变化不明显）。
          case (solar_in) is
-            when "000" => solarsensor <= x"FA";
-            when "001" => solarsensor <= x"F0";
-            when "010" => solarsensor <= x"E9";
-            when "011" => solarsensor <= x"D5";
-            when "100" => solarsensor <= x"B4";
-            when "101" => solarsensor <= x"A7";
-            when "110" => solarsensor <= x"75";
-            when "111" => solarsensor <= x"44";
+            when "000" => solarsensor <= x"E9"; -- dark
+            when "001" => solarsensor <= x"E4";
+            when "010" => solarsensor <= x"D9";
+            when "011" => solarsensor <= x"CE";
+            when "100" => solarsensor <= x"BF";
+            when "101" => solarsensor <= x"95";
+            when "110" => solarsensor <= x"7C";
+            when "111" => solarsensor <= x"32"; -- bright
             when others => null;
          end case;
          

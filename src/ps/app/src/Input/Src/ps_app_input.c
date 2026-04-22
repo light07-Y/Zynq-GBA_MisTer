@@ -176,12 +176,23 @@ static u8 PsAppInput_IsExpectedMainReport(const PsAppInputState *state,
         return 0U;
     }
 
-    /* 8BitDo U2W 的主输入面在协议分析里已经确认是固定 20B/00 14。
-     * 这里收紧筛选，避免把夹杂的非主输入包误判成“按下后又立刻松开”。 */
+    /*
+     * 8BitDo 主输入流常见两种形态：
+     * 1) 20B: 00 14 ...
+     * 2) 19B: 14 ...
+     * 解析器两种都支持，这里的“主输入包筛选”必须同步放宽，否则会出现
+     * “URB 已收包但输入层全部丢弃”的假死现象。
+     *
+     * 另一个容易踩坑点：
+     * 串口里 first input report 可能较晚出现，不一定是“手柄没连上”，
+     * 也可能只是接收器先完成枚举、后续才切到可用报告格式。
+     */
     if (PsXinput_IsLikely8BitDo(state->vendor_id, state->product_id) != 0U) {
-        if ((report_len != 20U) ||
-            (report[0] != PS_XINPUT_REPORT_ID_DEFAULT) ||
-            (report[1] != PS_XINPUT_REPORT_SIZE_INPUT)) {
+        if (!(((report_len >= 20U) &&
+               (report[0] == PS_XINPUT_REPORT_ID_DEFAULT) &&
+               (report[1] == PS_XINPUT_REPORT_SIZE_INPUT)) ||
+              ((report_len >= 19U) &&
+               (report[0] == PS_XINPUT_REPORT_SIZE_INPUT)))) {
             return 0U;
         }
     }

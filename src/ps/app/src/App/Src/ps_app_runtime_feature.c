@@ -17,6 +17,11 @@
 #include "Storage/Inc/ps_fatfs_storage.h"
 #include "UsbHost/Inc/ps_app_usbhost.h"
 
+/*
+ * PS 侧缓存上限。注意：core 侧 gba_cheats.vhd 当前 CHEATCOUNT=32。
+ * 因此 PS 可以维护更多条目并持久化到 .gcht，但单次回放到 core 后，
+ * 真正常驻并参与每帧执行的条目数量受 core 上限限制。
+ */
 #define PS_APP_FEATURE_CHEAT_MAX_ENTRIES 256U
 #define PS_APP_FEATURE_REWIND_SLOT       7U
 #define PS_APP_FEATURE_CHEAT_OP_EQ       0U
@@ -31,6 +36,7 @@
 #define PS_APP_FEATURE_RUMBLE_SMALL_ON   0x60U
 #define PS_APP_FEATURE_TRIGGER_THRESH    80U
 #define PS_APP_FEATURE_SENSOR_DEADZONE   4096
+#define PS_APP_FEATURE_SENSOR_ECHO_RETRY 6U
 #define PS_APP_FEATURE_RTC_PERSIST_INTERVAL_MS 30000U
 
 #define PS_APP_GBA_KEY_SELECT_BIT (1U << 2U)
@@ -53,6 +59,16 @@ typedef struct {
 
 static PsGbaCheatCodeWords s_ps_app_feature_cheat_entries[PS_APP_FEATURE_CHEAT_MAX_ENTRIES];
 static u32 s_ps_app_feature_cheat_count = 0U;
+/*
+ * 重要说明（防踩坑）：
+ * "cons" 控制台任务栈空间有限。历史版本在 SaveCheatsToFile() 里使用了
+ * 10KB 级别的局部 text_buf，执行 "cheat add ..." 时会在控制台任务上下文内
+ * 触发栈溢出（[RTOS][FATAL] stack overflow task=cons）。
+ *
+ * 这里将大缓冲改为静态区，避免大块临时内存占用任务栈。
+ * cheat 文件读写由运行时路径串行触发，不做并发重入设计。
+ */
+static char s_ps_app_feature_cheat_text_buf[PS_APP_FEATURE_CHEAT_MAX_ENTRIES * 40U];
 
 static u32 PsAppRuntimeFeature_NowMs(void) {
     TickType_t ticks;
@@ -97,6 +113,95 @@ static s8 PsAppRuntimeFeature_S16ToS8(s16 value) {
     return (s8)shifted;
 }
 
+static void PsAppRuntimeFeature_WriteSensorInputRaw(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) || (ctx->feature == NULL) || (ctx->regs == NULL)) {
+        return;
+    }
+
+    PsGbaRegs_SetSensorInput(ctx->regs,
+                             ctx->feature->solar_level,
+                             ctx->feature->tilt_x,
+                             ctx->feature->tilt_y);
+
+    if (ctx->sensor != NULL) {
+        ctx->sensor->solar = (u8)(ctx->feature->solar_level & 0x7U);
+        ctx->sensor->tilt_x = ctx->feature->tilt_x;
+        ctx->sensor->tilt_y = ctx->feature->tilt_y;
+        ctx->sensor->sensor_update_count++;
+    }
+}
+
+static void PsAppRuntimeFeature_WriteSolarAndVerify(PsAppRuntimeContext *ctx, u8 verbose_ok_log) {
+    u8 desired_solar;
+    u8 reg_solar;
+    u8 echo_solar;
+    u32 status;
+    u32 sensor_raw;
+    u32 retry;
+
+    if ((ctx == NULL) || (ctx->feature == NULL) || (ctx->regs == NULL)) {
+        return;
+    }
+
+    desired_solar = (u8)(ctx->feature->solar_level & 0x7U);
+    echo_solar = 0xFFU;
+
+    PsAppRuntimeFeature_WriteSensorInputRaw(ctx);
+
+    sensor_raw = PsGbaRegs_Read(ctx->regs, GBA_REG_SENSOR_INPUT);
+    reg_solar = (u8)(sensor_raw & 0x7U);
+    for (retry = 0U; retry < PS_APP_FEATURE_SENSOR_ECHO_RETRY; ++retry) {
+        status = PsGbaRegs_ReadFeatureStatus(ctx->regs);
+        echo_solar = (u8)((status & GBA_FEATURE_STATUS_SOLAR_ECHO_MASK) >>
+                          GBA_FEATURE_STATUS_SOLAR_ECHO_SHIFT);
+        if (echo_solar == desired_solar) {
+            break;
+        }
+    }
+
+    if ((reg_solar != desired_solar) || (echo_solar != desired_solar)) {
+        /* 兜底重写一次：规避极端时序下的寄存器采样不一致。 */
+        PsAppRuntimeFeature_WriteSensorInputRaw(ctx);
+        sensor_raw = PsGbaRegs_Read(ctx->regs, GBA_REG_SENSOR_INPUT);
+        reg_solar = (u8)(sensor_raw & 0x7U);
+        status = PsGbaRegs_ReadFeatureStatus(ctx->regs);
+        echo_solar = (u8)((status & GBA_FEATURE_STATUS_SOLAR_ECHO_MASK) >>
+                          GBA_FEATURE_STATUS_SOLAR_ECHO_SHIFT);
+
+        xil_printf("[SENSOR] sync des=%u reg=%u echo=%u ctrl_gpio=%u\r\n",
+                   (unsigned int)desired_solar,
+                   (unsigned int)reg_solar,
+                   (unsigned int)echo_solar,
+                   (unsigned int)((ctx->config != NULL) &&
+                                  ((ctx->config->ctrl & GBA_CTRL_SPECIAL_GPIO) != 0U)));
+        return;
+    }
+
+    if (verbose_ok_log != 0U) {
+        xil_printf("[SENSOR] solar=%u reg=%u echo=%u\r\n",
+                   (unsigned int)desired_solar,
+                   (unsigned int)reg_solar,
+                   (unsigned int)echo_solar);
+    }
+}
+
+static void PsAppRuntimeFeature_EnsureSolarGpioRouting(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) || (ctx->rom == NULL) || (ctx->config == NULL)) {
+        return;
+    }
+    if (ctx->rom->quirk_solar == 0U) {
+        return;
+    }
+
+    if ((ctx->config->ctrl & GBA_CTRL_SPECIAL_GPIO) == 0U) {
+        /* Boktai 类 ROM 的光照传感器经由 gamepak GPIO 地址窗口访问，
+         * 若 SPECIAL_GPIO 位被覆盖清零，游戏会表现为“传感器无响应”。 */
+        ctx->config->ctrl |= GBA_CTRL_SPECIAL_GPIO;
+        PsAppRuntime_ApplyShadowConfig(ctx);
+        xil_printf("[SENSOR] force special-gpio route\r\n");
+    }
+}
+
 static u8 PsAppRuntimeFeature_EnsureFeatureCtrl(PsAppRuntimeContext *ctx) {
     u32 feature_ctrl;
 
@@ -120,10 +225,7 @@ static u8 PsAppRuntimeFeature_EnsureFeatureCtrl(PsAppRuntimeContext *ctx) {
 
     PsGbaRegs_SetFeatureCtrl(ctx->regs, feature_ctrl);
     PsGbaRegs_SetSavestateSlot(ctx->regs, ctx->feature->savestate_slot);
-    PsGbaRegs_SetSensorInput(ctx->regs,
-                             ctx->feature->solar_level,
-                             ctx->feature->tilt_x,
-                             ctx->feature->tilt_y);
+    PsAppRuntimeFeature_WriteSensorInputRaw(ctx);
     return 1U;
 }
 
@@ -542,7 +644,6 @@ static int PsAppRuntimeFeature_ParseHex32(const char *text, u32 *out_value) {
 
 static XStatus PsAppRuntimeFeature_SaveCheatsToFile(PsAppRuntimeContext *ctx) {
     char cheat_path[PS_APP_ROM_PATH_MAX_CHARS];
-    char text_buf[PS_APP_FEATURE_CHEAT_MAX_ENTRIES * 40U];
     PsFatFsStorageWriteResult write_result;
     u32 idx;
     u32 off;
@@ -566,36 +667,40 @@ static XStatus PsAppRuntimeFeature_SaveCheatsToFile(PsAppRuntimeContext *ctx) {
     }
 
     off = 0U;
-    memset(text_buf, 0, sizeof(text_buf));
+    memset(s_ps_app_feature_cheat_text_buf, 0, sizeof(s_ps_app_feature_cheat_text_buf));
     for (idx = 0U; idx < s_ps_app_feature_cheat_count; ++idx) {
         int wrote;
+        size_t remaining;
 
-        wrote = snprintf(&text_buf[off],
-                         sizeof(text_buf) - off,
+        remaining = sizeof(s_ps_app_feature_cheat_text_buf) - off;
+
+        /*
+         * 持久化格式（每行一条 128bit 原始码）：
+         *   flags(8hex) + addr(8hex) + compare(8hex) + replace(8hex) + '\n'
+         * 即 33 字节/行。
+         */
+        wrote = snprintf(&s_ps_app_feature_cheat_text_buf[off],
+                         remaining,
                          "%08X%08X%08X%08X\n",
                          (unsigned int)s_ps_app_feature_cheat_entries[idx].flags,
                          (unsigned int)s_ps_app_feature_cheat_entries[idx].addr,
                          (unsigned int)s_ps_app_feature_cheat_entries[idx].compare,
                          (unsigned int)s_ps_app_feature_cheat_entries[idx].replace);
-        if (wrote <= 0) {
+        if ((wrote <= 0) || ((size_t)wrote >= remaining)) {
             return XST_FAILURE;
         }
         off += (u32)wrote;
-        if (off >= sizeof(text_buf)) {
-            return XST_FAILURE;
-        }
     }
 
     memset(&write_result, 0, sizeof(write_result));
     return PsFatFsStorage_WriteMemoryToFile(cheat_path,
-                                            (UINTPTR)text_buf,
+                                            (UINTPTR)s_ps_app_feature_cheat_text_buf,
                                             off,
                                             &write_result);
 }
 
 static XStatus PsAppRuntimeFeature_LoadCheatsFromFile(PsAppRuntimeContext *ctx) {
     char cheat_path[PS_APP_ROM_PATH_MAX_CHARS];
-    static char text_buf[PS_APP_FEATURE_CHEAT_MAX_ENTRIES * 40U];
     PsFatFsStorageReadResult read_result;
     u32 cursor;
 
@@ -606,8 +711,8 @@ static XStatus PsAppRuntimeFeature_LoadCheatsFromFile(PsAppRuntimeContext *ctx) 
     PsAppRuntimeFeature_BuildCheatPath(ctx, cheat_path, sizeof(cheat_path));
     memset(&read_result, 0, sizeof(read_result));
     if (PsFatFsStorage_ReadFileToMemory(cheat_path,
-                                        (UINTPTR)text_buf,
-                                        (u32)sizeof(text_buf),
+                                        (UINTPTR)s_ps_app_feature_cheat_text_buf,
+                                        (u32)sizeof(s_ps_app_feature_cheat_text_buf),
                                         &read_result) != XST_SUCCESS) {
         s_ps_app_feature_cheat_count = 0U;
         if (ctx->feature != NULL) {
@@ -616,11 +721,15 @@ static XStatus PsAppRuntimeFeature_LoadCheatsFromFile(PsAppRuntimeContext *ctx) 
         return XST_FAILURE;
     }
 
-    text_buf[read_result.bytes_loaded < sizeof(text_buf) ? read_result.bytes_loaded : (sizeof(text_buf) - 1U)] = '\0';
+    s_ps_app_feature_cheat_text_buf[
+        read_result.bytes_loaded < sizeof(s_ps_app_feature_cheat_text_buf)
+            ? read_result.bytes_loaded
+            : (sizeof(s_ps_app_feature_cheat_text_buf) - 1U)
+    ] = '\0';
     s_ps_app_feature_cheat_count = 0U;
 
     cursor = 0U;
-    while ((text_buf[cursor] != '\0') &&
+    while ((s_ps_app_feature_cheat_text_buf[cursor] != '\0') &&
            (s_ps_app_feature_cheat_count < PS_APP_FEATURE_CHEAT_MAX_ENTRIES)) {
         char line[40];
         u32 line_len;
@@ -630,15 +739,20 @@ static XStatus PsAppRuntimeFeature_LoadCheatsFromFile(PsAppRuntimeContext *ctx) 
         u32 w3;
 
         line_len = 0U;
-        while ((text_buf[cursor] != '\0') && (text_buf[cursor] != '\n') &&
+        while ((s_ps_app_feature_cheat_text_buf[cursor] != '\0') &&
+               (s_ps_app_feature_cheat_text_buf[cursor] != '\n') &&
                (line_len < (sizeof(line) - 1U))) {
-            line[line_len++] = text_buf[cursor++];
+            line[line_len++] = s_ps_app_feature_cheat_text_buf[cursor++];
         }
         line[line_len] = '\0';
-        if (text_buf[cursor] == '\n') {
+        if (s_ps_app_feature_cheat_text_buf[cursor] == '\n') {
             cursor++;
         }
 
+        /*
+         * 仅接受 32 个 hex 字符（不含换行）。异常行直接跳过，
+         * 这样即使 .gcht 局部损坏也不会阻塞 ROM 启动流程。
+         */
         if (line_len != 32U) {
             continue;
         }
@@ -670,6 +784,10 @@ static void PsAppRuntimeFeature_ReplayCheats(PsAppRuntimeContext *ctx) {
         return;
     }
 
+    /*
+     * 回放策略：先清 core 端 cheat RAM，再按缓存顺序逐条 push。
+     * 这能保证“cheat off/on”与重启自动回放后得到同一组生效条目。
+     */
     PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_CHEAT_CLEAR_TRIG);
     for (idx = 0U; idx < s_ps_app_feature_cheat_count; ++idx) {
         PsGbaRegs_SetCheatCodeWords(ctx->regs, &s_ps_app_feature_cheat_entries[idx]);
@@ -826,6 +944,8 @@ void PsAppRuntimeFeature_OnRomLoaded(PsAppRuntimeContext *ctx) {
     PsAppRuntimeFeature_LoadRtcIn(ctx);
     (void)PsAppRuntimeFeature_RestoreLatestCheckpoint(ctx);
     (void)PsAppRuntimeFeature_EnsureFeatureCtrl(ctx);
+    PsAppRuntimeFeature_EnsureSolarGpioRouting(ctx);
+    PsAppRuntimeFeature_WriteSolarAndVerify(ctx, 0U);
 }
 
 void PsAppRuntimeFeature_ServiceFast(PsAppRuntimeContext *ctx) {
@@ -840,6 +960,8 @@ void PsAppRuntimeFeature_ServiceFast(PsAppRuntimeContext *ctx) {
     if ((ctx == NULL) || (ctx->feature == NULL) || (ctx->input == NULL) || (ctx->config == NULL)) {
         return;
     }
+
+    PsAppRuntimeFeature_EnsureSolarGpioRouting(ctx);
 
     buttons = (u32)ctx->input->buttons;
     prev_buttons = ctx->feature->input_prev_buttons;
@@ -912,10 +1034,7 @@ void PsAppRuntimeFeature_ServiceFast(PsAppRuntimeContext *ctx) {
     if ((ctx->feature->tilt_x != tilt_x) || (ctx->feature->tilt_y != tilt_y)) {
         ctx->feature->tilt_x = tilt_x;
         ctx->feature->tilt_y = tilt_y;
-        PsGbaRegs_SetSensorInput(ctx->regs,
-                                 ctx->feature->solar_level,
-                                 ctx->feature->tilt_x,
-                                 ctx->feature->tilt_y);
+        PsAppRuntimeFeature_WriteSensorInputRaw(ctx);
     }
 
     if ((ctx->rom != NULL) && (ctx->rom->quirk_solar != 0U)) {
@@ -923,21 +1042,13 @@ void PsAppRuntimeFeature_ServiceFast(PsAppRuntimeContext *ctx) {
             (ctx->feature->input_prev_lt < PS_APP_FEATURE_TRIGGER_THRESH) &&
             (ctx->feature->solar_level < 7U)) {
             ctx->feature->solar_level++;
-            PsGbaRegs_SetSensorInput(ctx->regs,
-                                     ctx->feature->solar_level,
-                                     ctx->feature->tilt_x,
-                                     ctx->feature->tilt_y);
-            xil_printf("[SENSOR] solar=%u\r\n", (unsigned int)ctx->feature->solar_level);
+            PsAppRuntimeFeature_WriteSolarAndVerify(ctx, 1U);
         }
         if ((ctx->input->rt >= PS_APP_FEATURE_TRIGGER_THRESH) &&
             (ctx->feature->input_prev_rt < PS_APP_FEATURE_TRIGGER_THRESH) &&
             (ctx->feature->solar_level > 0U)) {
             ctx->feature->solar_level--;
-            PsGbaRegs_SetSensorInput(ctx->regs,
-                                     ctx->feature->solar_level,
-                                     ctx->feature->tilt_x,
-                                     ctx->feature->tilt_y);
-            xil_printf("[SENSOR] solar=%u\r\n", (unsigned int)ctx->feature->solar_level);
+            PsAppRuntimeFeature_WriteSolarAndVerify(ctx, 1U);
         }
     }
 
@@ -1043,6 +1154,7 @@ static u32 PsAppRuntimeFeature_ParseU32(const char *text, u8 *ok_out) {
         return 0U;
     }
 
+    /* base=0: 同时支持十进制与 0x 十六进制，便于串口命令直接粘贴地址。 */
     value = strtoul(text, &end_ptr, 0);
     if ((end_ptr == text) || ((end_ptr != NULL) && (*end_ptr != '\0'))) {
         return 0U;
@@ -1058,6 +1170,7 @@ static int PsAppRuntimeFeature_ParseCheatOp(const char *op_text) {
     if (op_text == NULL) {
         return -1;
     }
+    /* 允许文本别名 + 符号别名，降低串口输入出错率。 */
     if ((strcmp(op_text, "eq") == 0) || (strcmp(op_text, "==") == 0)) return PS_APP_FEATURE_CHEAT_OP_EQ;
     if ((strcmp(op_text, "ne") == 0) || (strcmp(op_text, "!=") == 0)) return PS_APP_FEATURE_CHEAT_OP_NE;
     if ((strcmp(op_text, "lt") == 0) || (strcmp(op_text, "<") == 0)) return PS_APP_FEATURE_CHEAT_OP_LT;
@@ -1065,6 +1178,52 @@ static int PsAppRuntimeFeature_ParseCheatOp(const char *op_text) {
     if ((strcmp(op_text, "gt") == 0) || (strcmp(op_text, ">") == 0)) return PS_APP_FEATURE_CHEAT_OP_GT;
     if ((strcmp(op_text, "ge") == 0) || (strcmp(op_text, ">=") == 0)) return PS_APP_FEATURE_CHEAT_OP_GE;
     return -1;
+}
+
+/*
+ * gba_cheats.vhd 位段约定（cheat_in[127:96] = flags）：
+ *   flags[3:0]  : operation type (0=always, 1=eq, 2=gt, 3=lt, 4=ge, 5=le, 6=ne)
+ *   flags[7:4]  : byte enable mask (bit0..3 -> data byte0..3)
+ *
+ * 旧版本将 mask 放在 flags[31:16]，core 不读取该位段，会导致“命令成功但游戏无效果”。
+ */
+static u8 PsAppRuntimeFeature_CheatMaskToByteEnable(u32 mask) {
+    u8 byte_en = 0U;
+
+    /*
+     * 控制台 mask 是 32bit 位掩码语义；core 侧需要按字节使能：
+     * - mask[7:0]   非零 -> 使能 byte0
+     * - mask[15:8]  非零 -> 使能 byte1
+     * - mask[23:16] 非零 -> 使能 byte2
+     * - mask[31:24] 非零 -> 使能 byte3
+     */
+    if ((mask & 0x000000FFU) != 0U) byte_en |= (1U << 0);
+    if ((mask & 0x0000FF00U) != 0U) byte_en |= (1U << 1);
+    if ((mask & 0x00FF0000U) != 0U) byte_en |= (1U << 2);
+    if ((mask & 0xFF000000U) != 0U) byte_en |= (1U << 3);
+
+    return byte_en;
+}
+
+static int PsAppRuntimeFeature_MapCondOpToCoreOp(int op) {
+    /*
+     * 命令层 op 枚举与 core OPTYPE 常量值不同，必须显式映射。
+     * 这里若改错，会出现“命令通过但条件方向反了”的隐蔽故障。
+     */
+    switch (op) {
+        case PS_APP_FEATURE_CHEAT_OP_EQ: return 1; /* OPTYPE_EQUALS */
+        case PS_APP_FEATURE_CHEAT_OP_NE: return 6; /* OPTYPE_NOT_EQ */
+        case PS_APP_FEATURE_CHEAT_OP_LT: return 3; /* OPTYPE_LESS */
+        case PS_APP_FEATURE_CHEAT_OP_LE: return 5; /* OPTYPE_LESS_EQ */
+        case PS_APP_FEATURE_CHEAT_OP_GT: return 2; /* OPTYPE_GREATER */
+        case PS_APP_FEATURE_CHEAT_OP_GE: return 4; /* OPTYPE_GREATER_EQ */
+        default: return -1;
+    }
+}
+
+static u32 PsAppRuntimeFeature_BuildCheatFlags(u8 core_op, u8 byte_en) {
+    /* flags[3:0]=op, flags[7:4]=byte enable，其余位当前保留。 */
+    return (((u32)(byte_en & 0x0FU)) << 4) | ((u32)(core_op & 0x0FU));
 }
 
 static void PsAppRuntimeFeature_AddCheatEntry(const PsGbaCheatCodeWords *entry) {
@@ -1154,6 +1313,10 @@ u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) 
             ctx->feature->cheats_enabled = (u8)((strcmp(sub, "on") == 0) ? 1U : 0U);
             (void)PsAppRuntimeFeature_EnsureFeatureCtrl(ctx);
             if (ctx->feature->cheats_enabled != 0U) {
+                /*
+                 * 关键语义：cheat on 不只是打开开关，还要把当前缓存回放到 core。
+                 * 否则在“先 add（off 状态）再 on”的场景中，core 端不会拿到条目。
+                 */
                 PsAppRuntimeFeature_ReplayCheats(ctx);
             }
             xil_printf("[CMD] cheat=%u count=%u\r\n",
@@ -1191,6 +1354,7 @@ u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) 
                 u8 ok_addr;
                 u8 ok_value;
                 u8 ok_mask = 1U;
+                u8 byte_en;
                 u32 addr;
                 u32 value;
                 u32 mask = 0xFFFFU;
@@ -1208,8 +1372,17 @@ u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) 
                     xil_printf("[CMD] usage: cheat add always <addr> <value> [mask]\r\n");
                     return 1U;
                 }
+                byte_en = PsAppRuntimeFeature_CheatMaskToByteEnable(mask);
+                if (byte_en == 0U) {
+                    xil_printf("[CMD] usage: cheat add always <addr> <value> [mask]\r\n");
+                    return 1U;
+                }
 
-                entry.flags = 0x00000001U | ((mask & 0xFFFFU) << 16);
+                /*
+                 * always 写码：每帧都会按 byte_en 覆写目标地址。
+                 * 例如写 0x04000000 bit7=1 会出现“白屏但声音继续”，属预期。
+                 */
+                entry.flags = PsAppRuntimeFeature_BuildCheatFlags(0U, byte_en);
                 entry.addr = addr;
                 entry.compare = 0U;
                 entry.replace = value;
@@ -1231,15 +1404,18 @@ u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) 
                 u8 ok_then;
                 u8 ok_val;
                 u8 ok_mask = 1U;
+                u8 byte_en;
                 u32 addr;
                 u32 compare;
                 u32 value;
                 u32 mask = 0xFFFFU;
                 int op;
+                int core_op;
                 PsGbaCheatCodeWords cond_entry;
                 PsGbaCheatCodeWords write_entry;
 
                 op = PsAppRuntimeFeature_ParseCheatOp(op_text);
+                core_op = PsAppRuntimeFeature_MapCondOpToCoreOp(op);
                 addr = PsAppRuntimeFeature_ParseU32(strtok(NULL, " \t"), &ok_addr);
                 compare = PsAppRuntimeFeature_ParseU32(strtok(NULL, " \t"), &ok_cmp);
                 {
@@ -1254,18 +1430,25 @@ u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) 
                     }
                 }
 
-                if ((op < 0) || (ok_addr == 0U) || (ok_cmp == 0U) ||
+                byte_en = PsAppRuntimeFeature_CheatMaskToByteEnable(mask);
+                if ((core_op < 0) || (ok_addr == 0U) || (ok_cmp == 0U) ||
                     (ok_then == 0U) || (ok_val == 0U) || (ok_mask == 0U) ||
+                    (byte_en == 0U) ||
                     (s_ps_app_feature_cheat_count > (PS_APP_FEATURE_CHEAT_MAX_ENTRIES - 2U))) {
                     xil_printf("[CMD] usage: cheat add if <op> <addr> <compare> then <value> [mask]\r\n");
                     return 1U;
                 }
 
-                cond_entry.flags = 0x00000002U | ((u32)op << 2) | ((mask & 0xFFFFU) << 16);
+                /*
+                 * if-op-then 在底层会展开为两条码，顺序不可交换：
+                 * 1) 条件码 cond_entry
+                 * 2) 写入码 write_entry（仅在条件满足时执行）
+                 */
+                cond_entry.flags = PsAppRuntimeFeature_BuildCheatFlags((u8)core_op, byte_en);
                 cond_entry.addr = addr;
                 cond_entry.compare = compare;
                 cond_entry.replace = 0U;
-                write_entry.flags = 0x00000001U | ((mask & 0xFFFFU) << 16);
+                write_entry.flags = PsAppRuntimeFeature_BuildCheatFlags(0U, byte_en);
                 write_entry.addr = addr;
                 write_entry.compare = 0U;
                 write_entry.replace = value;
