@@ -94,6 +94,7 @@ static void PsAppUsbHost_IntInComplete(void *arg, int nbytes)
     PsAppUsbHostImplContext *impl_ctx;
     PsAppUsbHostState *state;
     struct usbh_xbox *xbox_class;
+    u8 first_report_after_attach;
 
     impl_ctx = PsAppUsbHost_ImplGetContext();
     state = PsAppUsbHost_GetState(impl_ctx);
@@ -103,16 +104,22 @@ static void PsAppUsbHost_IntInComplete(void *arg, int nbytes)
         return;
     }
 
+    first_report_after_attach = 0U;
+
     if (nbytes > 0) {
         state->in_report_count++;
+        first_report_after_attach = impl_ctx->waiting_first_input_after_attach;
         impl_ctx->no_report_ticks = 0U;
         impl_ctx->waiting_first_input_after_attach = 0U;
-        if (state->in_report_count == 1U) {
+        if (first_report_after_attach != 0U) {
             /*
              * “first input report”是输入链路真正打通的关键里程碑。
              * 注意它可能晚于 attach 日志：
              * - 接收器可能先完成 USB 枚举，再等待手柄无线链路建立；
              * - 8BitDo 可能要等到 one-shot sideband/超时兜底后才开始稳定出包。
+             *
+             * 这里按“每次 attach 的首包”打印，而不是按全局累计 in_report_count==1，
+             * 避免重连后虽然已恢复输入，但日志不再出现首包提示而造成误判。
              */
             xil_printf("[USBH] first input report len=%d hdr=%02x %02x\r\n",
                        nbytes,

@@ -418,11 +418,14 @@ void PsAppUsbHost_ServiceImpl(PsAppUsbHostContext *ctx)
                  * - 仅在长期无首包输入时尝试一次
                  * - 不做高频重试，避免再次进入抖动循环
                  */
-                if ((impl_ctx->waiting_first_input_after_attach == 0U) ||
-                    (state->in_report_count != 0U)) {
+                if (impl_ctx->waiting_first_input_after_attach == 0U) {
                     /*
                      * 防竞态：
                      * IN 回调可能刚在并行上下文收到了首包，这里再次确认后直接放弃 sideband。
+                     *
+                     * 注意：这里不能再用 state->in_report_count 这类“全局累计计数”判定，
+                     * 否则重连后会把上一次连接的历史首包误当成“本次 attach 已收包”，
+                     * 导致 one-shot fallback 被错误跳过，表现为“已 attached 但手柄无反应”。
                      */
                     impl_ctx->waiting_first_input_after_attach = 0U;
                     impl_ctx->no_report_ticks = 0U;
