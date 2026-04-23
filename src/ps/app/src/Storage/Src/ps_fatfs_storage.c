@@ -27,6 +27,7 @@
  * 所有直接 FatFs 调用都必须放在这把锁内，避免跨任务重入导致不可预测行为。 */
 static FATFS s_ps_fatfs_storage_fs;
 static SemaphoreHandle_t s_ps_fatfs_storage_lock;
+static u8 s_ps_fatfs_list_cfg_logged;
 
 static SemaphoreHandle_t PsFatFsStorage_GetLock(void) {
     SemaphoreHandle_t lock;
@@ -454,6 +455,125 @@ XStatus PsFatFsStorage_EnsureDirectory(const char *path) {
         status = XST_SUCCESS;
         goto cleanup;
     }
+
+cleanup:
+    PsFatFsStorage_Unlock();
+    return status;
+}
+
+XStatus PsFatFsStorage_ListDirectory(const char *path,
+                                     PsFatFsStorageListEntryCallback callback,
+                                     void *user_ctx) {
+    DIR dir;
+    FILINFO info;
+    FRESULT fs_result;
+    XStatus status;
+    size_t base_len;
+    u8 need_separator;
+    u32 visited_count;
+
+    if ((path == NULL) || (*path == '\0')) {
+        return XST_INVALID_PARAM;
+    }
+
+    status = XST_FAILURE;
+    visited_count = 0U;
+
+    if (s_ps_fatfs_list_cfg_logged == 0U) {
+        s_ps_fatfs_list_cfg_logged = 1U;
+        /* 启动后首次扫描打印一次 FatFs 关键配置，便于现场定位：
+         * - lfn: 是否启用长文件名
+         * - cp:  代码页
+         * - FILINFO/DIR 大小：可快速判断编译配置是否一致 */
+        xil_printf("[FATFS] list cfg lfn=%d cp=%d filinfo=%u dir=%u\r\n",
+                   (int)FF_USE_LFN,
+                   (int)FF_CODE_PAGE,
+                   (unsigned int)sizeof(FILINFO),
+                   (unsigned int)sizeof(DIR));
+    }
+
+    /* 目录遍历和读写共用同一把全局存储锁，确保 FatFs 单入口访问。 */
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    fs_result = PsFatFsStorage_Mount();
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    memset(&dir, 0, sizeof(dir));
+    fs_result = f_opendir(&dir, path);
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    base_len = strlen(path);
+    need_separator = (u8)((base_len > 0U) &&
+                          (path[base_len - 1U] != '/') &&
+                          (path[base_len - 1U] != '\\') ? 1U : 0U);
+
+    for (;;) {
+        char full_path[320];
+        size_t name_len;
+        size_t full_len;
+        u8 is_dir;
+
+        memset(&info, 0, sizeof(info));
+        fs_result = f_readdir(&dir, &info);
+        if (fs_result != FR_OK) {
+            if (visited_count > 0U) {
+                /* 这里最常见的是 FR_INVALID_OBJECT：
+                 * 说明目录对象在遍历过程中失效（例如底层状态变化）。
+                 * 日志保留“已读取条目数”，方便区分“全失败”还是“中途失败”。 */
+                xil_printf("[FATFS] list warn: %s (%u entries kept)\r\n",
+                           PsFatFsStorage_StrError(fs_result),
+                           (unsigned int)visited_count);
+            }
+            /* 返回失败让上层感知“扫描不完整”，由 UI 决定显示“部分可用”。 */
+            status = XST_FAILURE;
+            break;
+        }
+
+        if (info.fname[0] == '\0') {
+            status = XST_SUCCESS;
+            break;
+        }
+
+        /* 跳过伪目录项。 */
+        if ((strcmp(info.fname, ".") == 0) || (strcmp(info.fname, "..") == 0)) {
+            continue;
+        }
+        visited_count++;
+
+        name_len = strlen(info.fname);
+        full_len = base_len + (size_t)need_separator + name_len;
+        /* 超过缓冲上限则跳过该项，避免路径拼接溢出。 */
+        if (full_len >= sizeof(full_path)) {
+            continue;
+        }
+
+        memcpy(full_path, path, base_len);
+        if (need_separator != 0U) {
+            full_path[base_len] = '/';
+            memcpy(&full_path[base_len + 1U], info.fname, name_len);
+            full_path[base_len + 1U + name_len] = '\0';
+        } else {
+            memcpy(&full_path[base_len], info.fname, name_len);
+            full_path[base_len + name_len] = '\0';
+        }
+
+        is_dir = (u8)(((info.fattrib & AM_DIR) != 0U) ? 1U : 0U);
+        if (callback != NULL) {
+            /* 回调返回 0 表示上层主动停止遍历（如达到上限）。 */
+            if (callback(info.fname, full_path, is_dir, user_ctx) == 0U) {
+                status = XST_SUCCESS;
+                break;
+            }
+        }
+    }
+
+    (void)f_closedir(&dir);
 
 cleanup:
     PsFatFsStorage_Unlock();

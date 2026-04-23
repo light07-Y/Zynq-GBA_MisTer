@@ -39,6 +39,8 @@ extern "C" {
 #define PS_APP_GBA_SAVESTATE_SLOT_BYTES (512U * 1024U)
 #define PS_APP_ROM_PATH_MAX_CHARS       128U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/bjg.gba"
+#define PS_APP_GAMES_SD_DIR             "0:/games"
+#define PS_APP_AUTOLOAD_DEFAULT_ROM     0U
 #define PS_APP_SAVE_SD_DIR              "0:/saves"
 #define PS_APP_SAVESTATE_SD_DIR         "0:/savestates"
 #define PS_APP_CHEAT_SD_DIR             "0:/cheats"
@@ -55,6 +57,8 @@ extern "C" {
 /* Console path includes command parsing and large help output. */
 #define PS_APP_CONSOLE_TASK_STACK_WORDS   (configMINIMAL_STACK_SIZE * 10U)
 #define PS_APP_CONSOLE_TASK_PRIORITY      (tskIDLE_PRIORITY + 2U)
+#define PS_APP_UI_TASK_STACK_WORDS        (configMINIMAL_STACK_SIZE * 14U)
+#define PS_APP_UI_TASK_PRIORITY           (tskIDLE_PRIORITY + 2U)
 /* 关键防坑：
  * save 线程会经过 FatFs + SD 驱动 + 日志打印的深调用链。
  * 之前栈偏小时出现过上下文指针异常（例如 0x00736576）并导致保存后卡死，
@@ -75,6 +79,11 @@ extern "C" {
  * 短按会随机表现成漏按或多按，因此单独给输入路径更高的服务频率。 */
 #define PS_APP_INPUT_SERVICE_INTERVAL_MS  1U
 #define PS_APP_INPUT_ENABLE_DEFAULT       1U
+#define PS_APP_UI_SERVICE_INTERVAL_MS     10U
+#define PS_APP_UI_MAX_GAMES               128U
+#define PS_APP_UI_GAME_NAME_MAX_CHARS     64U
+#define PS_APP_UI_LT_EXIT_THRESHOLD       250U
+#define PS_APP_UI_LT_EXIT_HOLD_MS         5000U
 #define PS_APP_INPUT_MAP_AB_BY_POSITION   0U
 #define PS_APP_INPUT_LSTICK_DEADZONE      12000
 #define PS_APP_INPUT_TRIGGER_THRESHOLD    80U

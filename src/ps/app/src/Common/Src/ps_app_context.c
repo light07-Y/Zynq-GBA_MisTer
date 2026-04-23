@@ -34,6 +34,9 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->hdmi_ctx.state = &ctx->hdmi;
     ctx->hdmi_ctx.ps_gpio = &ctx->ps_gpio;
 
+    ctx->ui_ctx.state = &ctx->ui;
+    ctx->ui_ctx.video = &ctx->video_ctx;
+
     ctx->runtime_ctx.codec = &ctx->codec;
     ctx->runtime_ctx.vdma = &ctx->vdma;
     ctx->runtime_ctx.regs = &ctx->regs;
@@ -52,12 +55,16 @@ void PsAppContext_Init(PsAppContext *ctx) {
     ctx->runtime_ctx.usb_host = &ctx->usb_host;
     ctx->runtime_ctx.input = &ctx->input;
     ctx->runtime_ctx.hdmi = &ctx->hdmi;
+    ctx->runtime_ctx.ui = &ctx->ui;
     ctx->runtime_ctx.save_ctx = &ctx->save_ctx;
     ctx->runtime_ctx.input_ctx = &ctx->input_ctx;
     ctx->runtime_ctx.usb_host_ctx = &ctx->usb_host_ctx;
     ctx->runtime_ctx.video_ctx = &ctx->video_ctx;
     ctx->runtime_ctx.diag_ctx = &ctx->diag_ctx;
     ctx->runtime_ctx.hdmi_ctx = &ctx->hdmi_ctx;
+    ctx->runtime_ctx.ui_ctx = &ctx->ui_ctx;
+
+    ctx->ui_ctx.runtime = &ctx->runtime_ctx;
 
     ctx->console_ctx.runtime = &ctx->runtime_ctx;
     ctx->console_ctx.video = &ctx->video_ctx;

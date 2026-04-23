@@ -12,6 +12,9 @@ enable_language(C ASM CXX)
 # Example : Adding VERBOSE=1 will pass -DVERBOSE=1 to the compiler.
 set(USER_COMPILE_DEFINITIONS
 "CONFIG_USB_DBG_LEVEL=-1"
+# 启用 FatFs 长文件名支持：
+# 菜单需要显示 games 目录下完整 ROM 名称，关闭 LFN 时会退化为 8.3（如 xxx~1）。
+"FILE_SYSTEM_USE_LFN=1"
 )
 
 # Undefine any previously specified compiler definitions, either built in or provided with a -D option
@@ -27,6 +30,7 @@ set(USER_UNDEFINED_SYMBOLS
 # Example 3: Adding ${CMAKE_SOURCE_DIR}/data/include to add data/include from this project.
 
 set(USER_INCLUDE_DIRECTORIES
+${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/lvgl
 ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB
 ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/common
 ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/CherryUSB/core

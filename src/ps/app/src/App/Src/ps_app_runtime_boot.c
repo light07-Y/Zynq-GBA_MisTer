@@ -424,10 +424,23 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->hdmi->last_hpd_change_tick = 0U;
     memset(ctx->hdmi->edid_block0, 0, sizeof(ctx->hdmi->edid_block0));
 
+    ctx->ui->mode = (u8)PS_APP_UI_MODE_MENU;
+    ctx->ui->selected_index = 0U;
+    ctx->ui->game_count = 0U;
+    ctx->ui->refresh_requested = 1U;
+    ctx->ui->launch_requested = 0U;
+    ctx->ui->launch_index = 0U;
+    ctx->ui->lt_exit_latched = 0U;
+    ctx->ui->lt_hold_ms = 0U;
+    ctx->ui->last_buttons = 0U;
+    ctx->ui->launch_path[0] = '\0';
+    ctx->ui->status_line[0] = '\0';
+
     ctx->ps_gpio_ready = 0U;
     ctx->ps_btn_last_mask = 0U;
 }
 
+#if (PS_APP_AUTOLOAD_DEFAULT_ROM != 0U)
 static XStatus PsAppRuntime_AutoloadDefaultRom(PsAppRuntimeContext *ctx) {
     XStatus status;
 
@@ -442,6 +455,7 @@ static XStatus PsAppRuntime_AutoloadDefaultRom(PsAppRuntimeContext *ctx) {
 
     return status;
 }
+#endif
 
 void PsAppRuntime_ApplyShadowConfig(PsAppRuntimeContext *ctx) {
     if (ctx == NULL) {
@@ -610,10 +624,14 @@ XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx) {
         (void)PsAppUsbHost_PrintStatusChecked(ctx->usb_host_ctx);
     }
 
-    xil_printf("[INIT] 9: rom autoload\r\n");
+    xil_printf("[INIT] 9: startup ui menu mode (autoload disabled)\r\n");
+#if (PS_APP_AUTOLOAD_DEFAULT_ROM != 0U)
     if (PsAppRuntime_AutoloadDefaultRom(ctx) != XST_SUCCESS) {
         xil_printf("[INIT] 9 warning: ROM autoload skipped\r\n");
     }
+#else
+    xil_printf("[INIT] 9 info: use UI launcher or 'rom load <path>' to start a game\r\n");
+#endif
 
     return XST_SUCCESS;
 }

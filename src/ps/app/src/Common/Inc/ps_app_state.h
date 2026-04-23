@@ -22,6 +22,12 @@ typedef enum {
     PS_APP_BIOS_MODE_FALLBACK = 2U
 } PsAppBiosMode;
 
+typedef enum {
+    PS_APP_UI_MODE_MENU = 0U,
+    PS_APP_UI_MODE_LOADING = 1U,
+    PS_APP_UI_MODE_GAME = 2U
+} PsAppUiMode;
+
 typedef struct {
     u32 ctrl;
     u32 keys;
@@ -333,6 +339,21 @@ typedef struct {
     u8 reserved4;
     u8 last_report[32];
 } PsAppInputState;
+
+typedef struct {
+    u8 mode;
+    u8 selected_index;
+    u8 game_count;
+    u8 refresh_requested;
+    u8 launch_requested;
+    u8 launch_index;
+    u8 lt_exit_latched;
+    u8 reserved0;
+    u32 lt_hold_ms;
+    u32 last_buttons;
+    char launch_path[PS_APP_ROM_PATH_MAX_CHARS];
+    char status_line[PS_APP_UI_GAME_NAME_MAX_CHARS];
+} PsAppUiState;
 
 #ifdef __cplusplus
 }

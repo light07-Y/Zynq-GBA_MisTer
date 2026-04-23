@@ -14,6 +14,7 @@ XStatus PsAppRuntime_InitUart(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_InitPsGpio(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_InitSystem(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *requested_path);
+XStatus PsAppRuntime_UnloadRom(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_ProgramAudio(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_ApplyAudioOutputState(PsAppRuntimeContext *ctx);
 XStatus PsAppRuntime_SetAudioVolume(PsAppRuntimeContext *ctx, u32 volume_percent);

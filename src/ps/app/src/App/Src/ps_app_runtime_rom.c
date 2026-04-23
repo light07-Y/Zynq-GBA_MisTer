@@ -501,3 +501,76 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
     return XST_SUCCESS;
 }
 
+XStatus PsAppRuntime_UnloadRom(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) ||
+        (ctx->rom == NULL) ||
+        (ctx->config == NULL) ||
+        (ctx->regs == NULL)) {
+        return XST_FAILURE;
+    }
+
+    if (ctx->rom->is_loading != 0U) {
+        return XST_DEVICE_BUSY;
+    }
+
+    ctx->rom->is_loading = 1U;
+    PsAppRuntimeFeature_OnRomPreUnload(ctx);
+
+    ctx->config->keys = 0U;
+    ctx->config->max_pak_addr = 0U;
+    ctx->config->ctrl |= PS_APP_GBA_CTRL_BOOT_REQUIRED;
+    ctx->config->ctrl &= ~(GBA_CTRL_CORE_ON |
+                           GBA_CTRL_ROM_LOADING |
+                           GBA_CTRL_MEMORY_REMAP |
+                           GBA_CTRL_FLASH_1M |
+                           GBA_CTRL_SPECIAL_GPIO |
+                           GBA_CTRL_TILT);
+    ctx->config->ctrl |= GBA_CTRL_SRAM_FLASH_EN;
+    PsAppRuntime_ApplyShadowConfig(ctx);
+
+    PsGbaRegs_SetSwReset(ctx->regs, 1U);
+    usleep(2000U);
+
+    ctx->rom->loaded = 0U;
+    ctx->rom->size_bytes = 0U;
+    ctx->rom->size_aligned = 0U;
+    ctx->rom->sig_flash1m = 0U;
+    ctx->rom->sig_flash = 0U;
+    ctx->rom->sig_sram = 0U;
+    ctx->rom->sig_eeprom = 0U;
+    ctx->rom->quirk_remap = 0U;
+    ctx->rom->quirk_sram_disable = 0U;
+    ctx->rom->quirk_gpio = 0U;
+    ctx->rom->quirk_tilt = 0U;
+    ctx->rom->quirk_solar = 0U;
+    ctx->rom->bios_mode = (u8)PS_APP_BIOS_MODE_INTERNAL;
+    ctx->rom->bios_load_ok = 0U;
+    ctx->rom->bios_external_present = 0U;
+    ctx->rom->bios_bytes_loaded = 0U;
+    ctx->rom->flash1m_offset = 0xFFFFFFFFU;
+    ctx->rom->flash_offset = 0xFFFFFFFFU;
+    ctx->rom->sram_offset = 0xFFFFFFFFU;
+    ctx->rom->eeprom_offset = 0xFFFFFFFFU;
+    ctx->rom->game_code[0] = '\0';
+    ctx->rom->maker_code[0] = '\0';
+    ctx->rom->path[0] = '\0';
+
+    if (ctx->feature != NULL) {
+        ctx->feature->pending_save = 0U;
+        ctx->feature->pending_load = 0U;
+        ctx->feature->rewind_active = 0U;
+        ctx->feature->input_prev_buttons = 0U;
+        ctx->feature->input_prev_lt = 0U;
+        ctx->feature->input_prev_rt = 0U;
+    }
+
+    if ((ctx->video_ctx != NULL) && (ctx->vdma != NULL)) {
+        (void)PsHdmiVdma_FillAllFrames(ctx->vdma, 0x00000000U);
+        (void)PsAppVideo_RequestFrame(ctx->video_ctx, 0U);
+        PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
+    }
+
+    ctx->rom->is_loading = 0U;
+    return XST_SUCCESS;
+}
+

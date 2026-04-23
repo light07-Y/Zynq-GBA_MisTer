@@ -10,6 +10,7 @@
 #include "Common/Inc/ps_app_context.h"
 #include "Diagnostics/Inc/ps_app_diag.h"
 #include "App/Inc/ps_app_runtime.h"
+#include "Ui/Inc/ps_app_ui.h"
 #include "Video/Inc/ps_app_video.h"
 
 static PsAppContext s_ps_app_context;
@@ -85,6 +86,17 @@ int main(void) {
                      NULL);
     if (ok != pdPASS) {
         xil_printf("[PS] failed to create console task\r\n");
+        return 1;
+    }
+
+    ok = xTaskCreate(PsAppUiTask,
+                     "ui",
+                     PS_APP_UI_TASK_STACK_WORDS,
+                     &s_ps_app_context.ui_ctx,
+                     PS_APP_UI_TASK_PRIORITY,
+                     NULL);
+    if (ok != pdPASS) {
+        xil_printf("[PS] failed to create ui task\r\n");
         return 1;
     }
 

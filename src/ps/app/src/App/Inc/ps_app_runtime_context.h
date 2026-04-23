@@ -20,6 +20,7 @@ struct PsAppInputContext;
 struct PsAppUsbHostContext;
 struct PsAppVideoContext;
 struct PsAppHdmiLinkContext;
+struct PsAppUiContext;
 
 typedef struct PsAppRuntimeContext {
     PsAudioCodec *codec;
@@ -40,6 +41,7 @@ typedef struct PsAppRuntimeContext {
     PsAppUsbHostState *usb_host;
     PsAppInputState *input;
     PsAppHdmiLinkState *hdmi;
+    PsAppUiState *ui;
     u8 ps_gpio_ready;
     u8 reserved0;
     u8 reserved1;
@@ -51,6 +53,7 @@ typedef struct PsAppRuntimeContext {
     struct PsAppVideoContext *video_ctx;
     struct PsAppDiagContext *diag_ctx;
     struct PsAppHdmiLinkContext *hdmi_ctx;
+    struct PsAppUiContext *ui_ctx;
 } PsAppRuntimeContext;
 
 typedef struct PsAppConsoleContext {

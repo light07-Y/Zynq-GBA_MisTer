@@ -26,6 +26,11 @@ typedef struct {
     FRESULT fs_result;
 } PsFatFsStorageWriteResult;
 
+typedef u8 (*PsFatFsStorageListEntryCallback)(const char *name,
+                                              const char *full_path,
+                                              u8 is_dir,
+                                              void *user_ctx);
+
 XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
                                        UINTPTR dst_addr,
                                        u32 capacity_bytes,
@@ -47,6 +52,9 @@ XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
 XStatus PsFatFsStorage_DeleteFileIfExists(const char *path, u8 *deleted_out);
 
 XStatus PsFatFsStorage_EnsureDirectory(const char *path);
+XStatus PsFatFsStorage_ListDirectory(const char *path,
+                                     PsFatFsStorageListEntryCallback callback,
+                                     void *user_ctx);
 
 const char *PsFatFsStorage_StrError(FRESULT result);
 
