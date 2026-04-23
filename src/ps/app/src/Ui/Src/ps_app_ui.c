@@ -12,6 +12,7 @@
 
 #include "App/Inc/ps_app_runtime.h"
 #include "Common/Inc/ps_project_config.h"
+#include "Gba/Inc/ps_gba_regs.h"
 #include "Input/Inc/ps_app_input.h"
 #include "Input/Inc/ps_xinput_xbox360.h"
 #include "Storage/Inc/ps_fatfs_storage.h"
@@ -28,6 +29,16 @@
 #define PS_APP_UI_SWEEP_PERIOD_MS     720U
 #define PS_APP_UI_SWEEP_WIDTH_PX      20U
 #define PS_APP_UI_CURSOR_WIDTH_PX     6U
+/* STATUS0 低 10 位的物理按键定义与 GBA key bit 一致：
+ * bit0=A, bit1=B, bit2=SELECT, bit3=START, bit4=RIGHT, bit5=LEFT, bit6=UP, bit7=DOWN, bit8=R, bit9=L */
+#define PS_APP_UI_PHY_KEY_A      (1U << 0U)
+#define PS_APP_UI_PHY_KEY_B      (1U << 1U)
+#define PS_APP_UI_PHY_KEY_SELECT (1U << 2U)
+#define PS_APP_UI_PHY_KEY_START  (1U << 3U)
+#define PS_APP_UI_PHY_KEY_RIGHT  (1U << 4U)
+#define PS_APP_UI_PHY_KEY_LEFT   (1U << 5U)
+#define PS_APP_UI_PHY_KEY_UP     (1U << 6U)
+#define PS_APP_UI_PHY_KEY_DOWN   (1U << 7U)
 
 typedef struct {
     char name[PS_APP_UI_GAME_NAME_MAX_CHARS];
@@ -614,18 +625,65 @@ static u8 PsAppUi_ButtonPressedEdge(u16 prev_buttons, u16 cur_buttons, u16 butto
     return 0U;
 }
 
+static u32 PsAppUi_ReadPhysicalKeys(const PsAppRuntimeContext *runtime) {
+    if ((runtime == NULL) || (runtime->regs == NULL)) {
+        return 0U;
+    }
+
+    /* 板载按键来自 PL 侧状态寄存器，不依赖 USB 手柄链路。 */
+    return PsGbaRegs_Read(runtime->regs, GBA_REG_STATUS0) & 0x3FFU;
+}
+
+static u16 PsAppUi_MapPhysicalKeysToMenuButtons(u32 physical_keys) {
+    u16 buttons;
+
+    buttons = 0U;
+
+    if ((physical_keys & PS_APP_UI_PHY_KEY_UP) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_UP;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_DOWN) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_DOWN;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_LEFT) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_LEFT;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_RIGHT) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_RIGHT;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_A) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_A;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_B) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_B;
+    }
+    /* 板载菜单映射：
+     * START(物理 bit3) -> 刷新（等价 X）
+     * SELECT(物理 bit2) -> 关于（等价 Y） */
+    if ((physical_keys & PS_APP_UI_PHY_KEY_START) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_X;
+    }
+    if ((physical_keys & PS_APP_UI_PHY_KEY_SELECT) != 0U) {
+        buttons |= PS_XINPUT_BUTTON_MASK_Y;
+    }
+
+    return buttons;
+}
+
 static u16 PsAppUi_GetMenuButtonMask(const PsAppRuntimeContext *runtime) {
     const PsAppInputState *input;
     u16 buttons;
     u32 src_mask;
+    u32 physical_keys;
 
-    if ((runtime == NULL) || (runtime->input == NULL)) {
+    if (runtime == NULL) {
         return 0U;
     }
 
     input = runtime->input;
-    buttons = input->buttons;
-    src_mask = input->source_snapshot_mask;
+    buttons = (input != NULL) ? input->buttons : 0U;
+    src_mask = (input != NULL) ? input->source_snapshot_mask : 0U;
+    physical_keys = PsAppUi_ReadPhysicalKeys(runtime);
 
     /* 兼容首进菜单阶段的方向输入来源差异：
      * 某些手柄/接收器在启动初期会把方向优先体现在左摇杆阈值位，
@@ -643,6 +701,9 @@ static u16 PsAppUi_GetMenuButtonMask(const PsAppRuntimeContext *runtime) {
     if ((src_mask & PS_APP_INPUT_SRC_MASK_LS_RIGHT) != 0U) {
         buttons |= PS_XINPUT_BUTTON_MASK_RIGHT;
     }
+
+    /* 菜单输入最终来源 = 手柄输入 OR 板载物理键输入。 */
+    buttons |= PsAppUi_MapPhysicalKeysToMenuButtons(physical_keys);
 
     return buttons;
 }
@@ -801,6 +862,8 @@ static void PsAppUi_ProcessLaunch(PsAppUiContext *ctx) {
         state->mode = (u8)PS_APP_UI_MODE_GAME;
         state->lt_hold_ms = 0U;
         state->lt_exit_latched = 0U;
+        state->board_exit_hold_ms = 0U;
+        state->board_exit_latched = 0U;
         state->last_buttons = PsAppUi_GetMenuButtonMask(ctx->runtime);
         PsAppUi_SetStatus(ctx, "游戏运行中");
         PsAppUi_UpdateMetaLabels(ctx);
@@ -809,17 +872,67 @@ static void PsAppUi_ProcessLaunch(PsAppUiContext *ctx) {
         /* 加载失败则回菜单并请求刷新列表，便于立即重试。 */
         state->mode = (u8)PS_APP_UI_MODE_MENU;
         state->refresh_requested = 1U;
+        state->board_exit_hold_ms = 0U;
+        state->board_exit_latched = 0U;
         PsAppUi_SetStatus(ctx, "加载失败");
         PsAppUi_RebuildList(ctx);
         xil_printf("[UI] launch failed: %s\r\n", state->launch_path);
     }
 }
 
+static void PsAppUi_ExitGameToMenu(PsAppUiContext *ctx, const char *trigger_name) {
+    PsAppUiState *state;
+    PsAppRuntimeContext *runtime;
+    XStatus unload_status;
+
+    if ((ctx == NULL) || (ctx->state == NULL) || (ctx->runtime == NULL)) {
+        return;
+    }
+
+    state = ctx->state;
+    runtime = ctx->runtime;
+    state->mode = (u8)PS_APP_UI_MODE_LOADING;
+    PsAppUi_SetStatus(ctx, "正在返回菜单...");
+    PsAppUi_EnsureMenuScreen();
+    PsAppUi_RebuildList(ctx);
+    lv_tick_inc(1U);
+    (void)lv_timer_handler();
+
+    unload_status = PsAppRuntime_UnloadRom(runtime);
+    if (unload_status == XST_SUCCESS) {
+        /* 必须走安全卸载后再回菜单，避免 save/rtc 状态丢失。 */
+        state->mode = (u8)PS_APP_UI_MODE_MENU;
+        state->refresh_requested = 1U;
+        state->lt_hold_ms = 0U;
+        state->lt_exit_latched = 0U;
+        state->board_exit_hold_ms = 0U;
+        state->board_exit_latched = 0U;
+        state->last_buttons = PsAppUi_GetMenuButtonMask(runtime);
+        PsAppUi_SetStatus(ctx, "已返回菜单");
+        PsAppUi_RebuildList(ctx);
+        /* 退出 GAME 后强制整屏重绘，消除局部刷新的残影。 */
+        PsAppUi_ForceFullRedraw();
+        xil_printf("[UI] %s exit: back to menu\r\n",
+                   (trigger_name != NULL) ? trigger_name : "game");
+    } else {
+        state->mode = (u8)PS_APP_UI_MODE_GAME;
+        PsAppUi_SetStatus(ctx, "退出失败");
+        PsAppUi_UpdateMetaLabels(ctx);
+        xil_printf("[UI] %s exit failed: %d\r\n",
+                   (trigger_name != NULL) ? trigger_name : "game",
+                   unload_status);
+    }
+}
+
 static void PsAppUi_ProcessGameInput(PsAppUiContext *ctx) {
     PsAppUiState *state;
     PsAppRuntimeContext *runtime;
+    u32 ps_btn_mask;
     u8 lt_value;
+    u8 board_combo_pressed;
     u32 next_hold_ms;
+    u8 lt_triggered;
+    u8 board_triggered;
 
     if ((ctx == NULL) || (ctx->state == NULL) || (ctx->runtime == NULL)) {
         return;
@@ -828,6 +941,11 @@ static void PsAppUi_ProcessGameInput(PsAppUiContext *ctx) {
     state = ctx->state;
     runtime = ctx->runtime;
     lt_value = (runtime->input != NULL) ? runtime->input->lt : 0U;
+    ps_btn_mask = PsAppRuntime_ReadPsButtonMask(runtime);
+    board_combo_pressed = (u8)(((ps_btn_mask & PS_APP_UI_BOARD_EXIT_BTN_MASK) ==
+                                PS_APP_UI_BOARD_EXIT_BTN_MASK) ? 1U : 0U);
+    lt_triggered = 0U;
+    board_triggered = 0U;
 
     /* LT 需要“按到底并持续 5 秒”才触发退出，短按/抖动不会误退出。 */
     if (lt_value >= PS_APP_UI_LT_EXIT_THRESHOLD) {
@@ -839,38 +957,39 @@ static void PsAppUi_ProcessGameInput(PsAppUiContext *ctx) {
 
         if ((state->lt_hold_ms >= PS_APP_UI_LT_EXIT_HOLD_MS) &&
             (state->lt_exit_latched == 0U)) {
-            XStatus unload_status;
-
             state->lt_exit_latched = 1U;
-            state->mode = (u8)PS_APP_UI_MODE_LOADING;
-            PsAppUi_SetStatus(ctx, "正在返回菜单...");
-            PsAppUi_EnsureMenuScreen();
-            PsAppUi_RebuildList(ctx);
-            lv_tick_inc(1U);
-            (void)lv_timer_handler();
-
-            unload_status = PsAppRuntime_UnloadRom(runtime);
-            if (unload_status == XST_SUCCESS) {
-                /* 必须走安全卸载后再回菜单，避免 save/rtc 状态丢失。 */
-                state->mode = (u8)PS_APP_UI_MODE_MENU;
-                state->refresh_requested = 1U;
-                state->last_buttons = PsAppUi_GetMenuButtonMask(runtime);
-                PsAppUi_SetStatus(ctx, "已返回菜单");
-                PsAppUi_RebuildList(ctx);
-                /* 退出 GAME 后强制整屏重绘，消除局部刷新的残影。 */
-                PsAppUi_ForceFullRedraw();
-                xil_printf("[UI] LT hold exit: back to menu\r\n");
-            } else {
-                state->mode = (u8)PS_APP_UI_MODE_GAME;
-                PsAppUi_SetStatus(ctx, "退出失败");
-                PsAppUi_UpdateMetaLabels(ctx);
-                xil_printf("[UI] LT hold exit failed: %d\r\n", unload_status);
-            }
+            lt_triggered = 1U;
         }
     } else {
         /* LT 放开后清零计时与锁存，下一次长按才允许重新触发。 */
         state->lt_hold_ms = 0U;
         state->lt_exit_latched = 0U;
+    }
+
+    /* 板载系统键退出：BTN4+BTN5 同时按住 2 秒触发一次退出。
+     * 该通道与 LT 长按并行存在，用于无手柄或手柄异常时兜底返回菜单。 */
+    if (board_combo_pressed != 0U) {
+        next_hold_ms = state->board_exit_hold_ms + PS_APP_UI_SERVICE_INTERVAL_MS;
+        if (next_hold_ms > PS_APP_UI_BOARD_EXIT_HOLD_MS) {
+            next_hold_ms = PS_APP_UI_BOARD_EXIT_HOLD_MS;
+        }
+        state->board_exit_hold_ms = next_hold_ms;
+
+        if ((state->board_exit_hold_ms >= PS_APP_UI_BOARD_EXIT_HOLD_MS) &&
+            (state->board_exit_latched == 0U)) {
+            state->board_exit_latched = 1U;
+            board_triggered = 1U;
+        }
+    } else {
+        state->board_exit_hold_ms = 0U;
+        state->board_exit_latched = 0U;
+    }
+
+    if (lt_triggered != 0U) {
+        /* 两个退出条件同周期同时满足时，优先记录 LT 触发。 */
+        PsAppUi_ExitGameToMenu(ctx, "LT hold");
+    } else if (board_triggered != 0U) {
+        PsAppUi_ExitGameToMenu(ctx, "BTN4+BTN5 hold");
     }
 }
 
@@ -900,6 +1019,8 @@ static void PsAppUi_SyncModeWithRuntime(PsAppUiContext *ctx) {
             state->mode = (u8)PS_APP_UI_MODE_GAME;
             state->lt_hold_ms = 0U;
             state->lt_exit_latched = 0U;
+            state->board_exit_hold_ms = 0U;
+            state->board_exit_latched = 0U;
             state->last_buttons = PsAppUi_GetMenuButtonMask(runtime);
             PsAppUi_SetStatus(ctx, "游戏运行中");
             PsAppUi_UpdateMetaLabels(ctx);
@@ -911,6 +1032,8 @@ static void PsAppUi_SyncModeWithRuntime(PsAppUiContext *ctx) {
         state->launch_requested = 0U;
         state->lt_hold_ms = 0U;
         state->lt_exit_latched = 0U;
+        state->board_exit_hold_ms = 0U;
+        state->board_exit_latched = 0U;
         state->last_buttons = PsAppUi_GetMenuButtonMask(runtime);
         PsAppUi_SetStatus(ctx, "菜单就绪");
         PsAppUi_RebuildList(ctx);
@@ -1111,7 +1234,7 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
                                                                0x12192A,
                                                                0x485779);
     list_title = lv_label_create(s_ps_app_ui_runtime.list_panel);
-    lv_label_set_text(list_title, "游戏列表  X刷新  Y关于");
+    lv_label_set_text(list_title, "游戏列表  X/START刷新  Y/SELECT关于");
     lv_obj_set_style_text_font(list_title, &ps_ui_font_fusion_12, 0);
     lv_obj_set_style_text_color(list_title, PsAppUi_HexColor(0xC7D9FC), 0);
     lv_obj_set_pos(list_title, 10, 4);
@@ -1157,7 +1280,8 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
     s_ps_app_ui_runtime.hint_label = lv_label_create(s_ps_app_ui_runtime.status_panel);
     lv_obj_set_width(s_ps_app_ui_runtime.hint_label, 568);
     lv_label_set_text(s_ps_app_ui_runtime.hint_label,
-                      "方向键 上下选择 A启动 X刷新 Y关于 LT长按5秒退出游戏");
+                      "方向键上下 A启动 X/START刷新 Y/SELECT关于\n"
+                      "LT长按5秒 / BTN4+BTN5长按2秒退出游戏");
     lv_obj_set_style_text_font(s_ps_app_ui_runtime.hint_label, &ps_ui_font_fusion_12, 0);
     lv_obj_set_style_text_color(s_ps_app_ui_runtime.hint_label, PsAppUi_HexColor(0x2A3D63), 0);
     lv_obj_set_pos(s_ps_app_ui_runtime.hint_label, 8, 34);
@@ -1198,7 +1322,7 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
                                              0xC9DBFF,
                                              0x41547D);
     s_ps_app_ui_runtime.about_title_label = lv_label_create(about_content);
-    lv_label_set_text(s_ps_app_ui_runtime.about_title_label, "关于 / 致谢");
+    lv_label_set_text(s_ps_app_ui_runtime.about_title_label, "关于/致谢");
     lv_obj_set_style_text_font(s_ps_app_ui_runtime.about_title_label, &ps_ui_font_fusion_12, 0);
     lv_obj_set_style_text_color(s_ps_app_ui_runtime.about_title_label, PsAppUi_HexColor(0xD8E6FF), 0);
     lv_obj_set_pos(s_ps_app_ui_runtime.about_title_label, 10, 8);
@@ -1207,13 +1331,14 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
     lv_obj_set_width(s_ps_app_ui_runtime.about_body_label, 532);
     lv_label_set_long_mode(s_ps_app_ui_runtime.about_body_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_ps_app_ui_runtime.about_body_label,
-                      "作者: 上海电机学院2022级计算机科学与技术专业学生潘子彧\n"
+                      "作者: 上海电机学院2022级\n"
+                      "计算机科学与技术专业学生 潘子彧\n"
                       "\n"
                       "致谢开源库与代码:\n"
                       "1. LVGL 图形界面库\n"
                       "2. FreeRTOS 任务调度\n"
                       "3. FatFs 文件系统\n"
-                      "4. TinyUSB USB Host 协议栈\n"
+                      "4. CherryUSB USB Host 协议栈\n"
                       "5. Xilinx embeddedsw / Vitis 驱动代码\n"
                       "\n"
                       "相关信息请查看项目源码与对应 LICENSE。");
@@ -1222,7 +1347,7 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
     lv_obj_set_pos(s_ps_app_ui_runtime.about_body_label, 10, 30);
 
     s_ps_app_ui_runtime.about_hint_label = lv_label_create(about_content);
-    lv_label_set_text(s_ps_app_ui_runtime.about_hint_label, "Y关闭  B返回");
+    lv_label_set_text(s_ps_app_ui_runtime.about_hint_label, "Y/SELECT关闭  B返回");
     lv_obj_set_style_text_font(s_ps_app_ui_runtime.about_hint_label, &ps_ui_font_fusion_12, 0);
     lv_obj_set_style_text_color(s_ps_app_ui_runtime.about_hint_label, PsAppUi_HexColor(0x8FB8FF), 0);
     lv_obj_align(s_ps_app_ui_runtime.about_hint_label, LV_ALIGN_BOTTOM_LEFT, 10, -8);
@@ -1307,6 +1432,8 @@ void PsAppUiTask(void *arg) {
     state->launch_requested = 0U;
     state->lt_hold_ms = 0U;
     state->lt_exit_latched = 0U;
+    state->board_exit_hold_ms = 0U;
+    state->board_exit_latched = 0U;
     state->last_buttons = PsAppUi_GetMenuButtonMask(ctx->runtime);
     s_ps_app_ui_runtime.anim_elapsed_ms = 0U;
     s_ps_app_ui_runtime.blink_elapsed_ms = 0U;

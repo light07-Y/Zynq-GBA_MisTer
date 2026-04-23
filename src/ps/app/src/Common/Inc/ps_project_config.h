@@ -84,6 +84,10 @@ extern "C" {
 #define PS_APP_UI_GAME_NAME_MAX_CHARS     64U
 #define PS_APP_UI_LT_EXIT_THRESHOLD       250U
 #define PS_APP_UI_LT_EXIT_HOLD_MS         5000U
+/* 板载系统键退出：BTN4+BTN5 组合长按 2 秒触发一次退出。
+ * 这里保留和音量按键并存，允许先发生一次音量变化再退出。 */
+#define PS_APP_UI_BOARD_EXIT_HOLD_MS      2000U
+#define PS_APP_UI_BOARD_EXIT_BTN_MASK     (PS_APP_BTN4_MASK | PS_APP_BTN5_MASK)
 #define PS_APP_INPUT_MAP_AB_BY_POSITION   0U
 #define PS_APP_INPUT_LSTICK_DEADZONE      12000
 #define PS_APP_INPUT_TRIGGER_THRESHOLD    80U

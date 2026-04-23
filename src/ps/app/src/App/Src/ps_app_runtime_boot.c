@@ -431,7 +431,9 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->ui->launch_requested = 0U;
     ctx->ui->launch_index = 0U;
     ctx->ui->lt_exit_latched = 0U;
+    ctx->ui->board_exit_latched = 0U;
     ctx->ui->lt_hold_ms = 0U;
+    ctx->ui->board_exit_hold_ms = 0U;
     ctx->ui->last_buttons = 0U;
     ctx->ui->launch_path[0] = '\0';
     ctx->ui->status_line[0] = '\0';

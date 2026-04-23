@@ -348,8 +348,11 @@ typedef struct {
     u8 launch_requested;
     u8 launch_index;
     u8 lt_exit_latched;
+    u8 board_exit_latched;
     u8 reserved0;
+    u8 reserved1;
     u32 lt_hold_ms;
+    u32 board_exit_hold_ms;
     u32 last_buttons;
     char launch_path[PS_APP_ROM_PATH_MAX_CHARS];
     char status_line[PS_APP_UI_GAME_NAME_MAX_CHARS];
