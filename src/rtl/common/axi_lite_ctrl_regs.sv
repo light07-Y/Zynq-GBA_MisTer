@@ -84,6 +84,7 @@ module axi_lite_ctrl_regs #(
   output logic [24:0]          cfg_max_pak_addr,
   output logic [15:0]          cfg_cycle_precalc,
   output logic [31:0]          cfg_rtc_timestamp,
+  output logic [31:0]          cfg_rtc_timestamp_saved,
   output logic [1:0]           cfg_display_frame_idx,
   output logic                 cfg_sw_reset,
   output logic                 cfg_commit_toggle,
@@ -175,12 +176,14 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_RTC_OUT_SAVEDTIME_HI  = 12'h0F4;
   localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS        = 12'h0F8;
   localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS_CLR    = 12'h0FC;
+  localparam logic [ADDR_W-1:0] REG_RTC_TIMESTAMP_SAVED   = 12'h100;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
   logic [24:0] shadow_max_pak_addr;
   logic [15:0] shadow_cycle_precalc;
   logic [31:0] shadow_rtc_timestamp;
+  logic [31:0] shadow_rtc_timestamp_saved;
   logic [11:0] shadow_bios_wr_addr;
   logic [31:0] shadow_bios_wr_data;
 
@@ -233,6 +236,7 @@ module axi_lite_ctrl_regs #(
       shadow_max_pak_addr        <= '0;
       shadow_cycle_precalc       <= 16'd100;
       shadow_rtc_timestamp       <= '0;
+      shadow_rtc_timestamp_saved <= '0;
       shadow_bios_wr_addr        <= 12'd0;
       shadow_bios_wr_data        <= 32'd0;
 
@@ -251,6 +255,7 @@ module axi_lite_ctrl_regs #(
       cfg_max_pak_addr           <= '0;
       cfg_cycle_precalc          <= 16'd100;
       cfg_rtc_timestamp          <= '0;
+      cfg_rtc_timestamp_saved    <= '0;
       cfg_display_frame_idx      <= 2'd0;
       cfg_sw_reset               <= 1'b0;
       cfg_commit_toggle          <= 1'b0;
@@ -342,6 +347,9 @@ module axi_lite_ctrl_regs #(
           REG_RTC_TIMESTAMP: begin
             shadow_rtc_timestamp <= apply_wstrb(shadow_rtc_timestamp, s_axi_wdata, s_axi_wstrb[3:0]);
           end
+          REG_RTC_TIMESTAMP_SAVED: begin
+            shadow_rtc_timestamp_saved <= apply_wstrb(shadow_rtc_timestamp_saved, s_axi_wdata, s_axi_wstrb[3:0]);
+          end
           REG_BIOS_WR_ADDR: begin
             merged32           = apply_wstrb({20'd0, shadow_bios_wr_addr}, s_axi_wdata, s_axi_wstrb[3:0]);
             shadow_bios_wr_addr <= merged32[11:0];
@@ -362,6 +370,7 @@ module axi_lite_ctrl_regs #(
             cfg_max_pak_addr  <= shadow_max_pak_addr;
             cfg_cycle_precalc <= shadow_cycle_precalc;
             cfg_rtc_timestamp <= shadow_rtc_timestamp;
+            cfg_rtc_timestamp_saved <= shadow_rtc_timestamp_saved;
             cfg_commit_toggle <= ~cfg_commit_toggle;
           end
           REG_SW_RESET: begin
@@ -461,6 +470,7 @@ module axi_lite_ctrl_regs #(
           REG_MAX_PAK_ADDR:        rdata_next = {7'd0, cfg_max_pak_addr};
           REG_CYCLE_PRECALC:       rdata_next = {16'd0, cfg_cycle_precalc};
           REG_RTC_TIMESTAMP:       rdata_next = cfg_rtc_timestamp;
+          REG_RTC_TIMESTAMP_SAVED: rdata_next = cfg_rtc_timestamp_saved;
           REG_STATUS0:             rdata_next = {22'd0, stat_physical_keys};
           REG_STATUS1:             rdata_next = {stat_cycles_vsync_speed, stat_cycles_missing, stat_fb_frame_idx};
           REG_SW_RESET:            rdata_next = {31'd0, cfg_sw_reset};

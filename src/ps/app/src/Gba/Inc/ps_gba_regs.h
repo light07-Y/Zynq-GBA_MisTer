@@ -77,7 +77,8 @@ enum {
     GBA_REG_RTC_OUT_SAVEDTIME_LO   = 0x0F0,
     GBA_REG_RTC_OUT_SAVEDTIME_HI   = 0x0F4,
     GBA_REG_FEATURE_STATUS         = 0x0F8,
-    GBA_REG_FEATURE_STATUS_CLR     = 0x0FC
+    GBA_REG_FEATURE_STATUS_CLR     = 0x0FC,
+    GBA_REG_RTC_TIMESTAMP_SAVED    = 0x100
 };
 
 enum {
@@ -143,7 +144,8 @@ void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
                             u32 keys,
                             u32 max_pak_addr,
                             u32 cycle_precalc,
-                            u32 rtc_timestamp);
+                            u32 rtc_timestamp,
+                            u32 rtc_timestamp_saved);
 void PsGbaRegs_ApplyBootDefaults(PsGbaRegs *ctx);
 void PsGbaRegs_SetIrqEnable(PsGbaRegs *ctx, u32 irq_mask);
 void PsGbaRegs_ClearIrqStatus(PsGbaRegs *ctx, u32 irq_w1c_bits);

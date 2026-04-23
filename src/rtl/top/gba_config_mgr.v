@@ -11,6 +11,7 @@ module gba_config_mgr (
     input [24:0]  cfg_max_pak_addr_axi,
     input [15:0]  cfg_cycle_precalc_axi,
     input [31:0]  cfg_rtc_timestamp_axi,
+    input [31:0]  cfg_rtc_timestamp_saved_axi,
     input         cfg_commit_toggle_axi,
 
     input [5:0]   cfg_feature_ctrl_axi,
@@ -39,6 +40,7 @@ module gba_config_mgr (
     output reg [24:0] cfg_max_pak_addr_core,
     output reg [15:0] cfg_cycle_precalc_core,
     output reg [31:0] cfg_rtc_timestamp_core,
+    output reg [31:0] cfg_rtc_timestamp_saved_core,
 
     output reg [5:0]  cfg_feature_ctrl_core,
     output reg [2:0]  cfg_savestate_slot_core,
@@ -69,6 +71,7 @@ module gba_config_mgr (
     (* ASYNC_REG = "TRUE" *) reg [24:0] cfg_max_pak_addr_meta, cfg_max_pak_addr_sync;
     (* ASYNC_REG = "TRUE" *) reg [15:0] cfg_cycle_precalc_meta, cfg_cycle_precalc_sync;
     (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_rtc_timestamp_meta, cfg_rtc_timestamp_sync;
+    (* ASYNC_REG = "TRUE" *) reg [31:0] cfg_rtc_timestamp_saved_meta, cfg_rtc_timestamp_saved_sync;
 
     (* ASYNC_REG = "TRUE" *) reg [5:0]  cfg_feature_ctrl_meta, cfg_feature_ctrl_sync;
     (* ASYNC_REG = "TRUE" *) reg [2:0]  cfg_savestate_slot_meta, cfg_savestate_slot_sync;
@@ -102,6 +105,7 @@ module gba_config_mgr (
             {cfg_max_pak_addr_meta, cfg_max_pak_addr_sync} <= 50'd0;
             {cfg_cycle_precalc_meta, cfg_cycle_precalc_sync} <= 32'd100;
             {cfg_rtc_timestamp_meta, cfg_rtc_timestamp_sync} <= 64'd0;
+            {cfg_rtc_timestamp_saved_meta, cfg_rtc_timestamp_saved_sync} <= 64'd0;
 
             {cfg_feature_ctrl_meta, cfg_feature_ctrl_sync} <= {6'h1C, 6'h1C};
             {cfg_savestate_slot_meta, cfg_savestate_slot_sync} <= 6'd0;
@@ -131,6 +135,8 @@ module gba_config_mgr (
             cfg_cycle_precalc_sync <= cfg_cycle_precalc_meta;
             cfg_rtc_timestamp_meta <= cfg_rtc_timestamp_axi;
             cfg_rtc_timestamp_sync <= cfg_rtc_timestamp_meta;
+            cfg_rtc_timestamp_saved_meta <= cfg_rtc_timestamp_saved_axi;
+            cfg_rtc_timestamp_saved_sync <= cfg_rtc_timestamp_saved_meta;
             cfg_commit_sync        <= {cfg_commit_sync[1:0], cfg_commit_toggle_axi};
 
             cfg_feature_ctrl_meta <= cfg_feature_ctrl_axi;
@@ -176,6 +182,7 @@ module gba_config_mgr (
             cfg_max_pak_addr_core  <= 25'd0;
             cfg_cycle_precalc_core <= 16'd100;
             cfg_rtc_timestamp_core <= 32'd0;
+            cfg_rtc_timestamp_saved_core <= 32'd0;
             cfg_commit_pending     <= 1'b0;
             cfg_commit_settle_count <= 2'd0;
 
@@ -203,6 +210,7 @@ module gba_config_mgr (
                     cfg_max_pak_addr_core  <= cfg_max_pak_addr_sync;
                     cfg_cycle_precalc_core <= cfg_cycle_precalc_sync;
                     cfg_rtc_timestamp_core <= cfg_rtc_timestamp_sync;
+                    cfg_rtc_timestamp_saved_core <= cfg_rtc_timestamp_saved_sync;
                     cfg_commit_pending     <= 1'b0;
                 end
             end

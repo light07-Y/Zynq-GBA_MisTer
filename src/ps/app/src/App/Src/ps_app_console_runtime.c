@@ -30,7 +30,7 @@ void PsAppConsole_PrintRuntimeHelp(void) {
     xil_printf("  key <name> on|off   (a/b/select/start/right/left/up/down/r/l)\r\n");
     xil_printf("  keymask <hex>\r\n");
     xil_printf("  btn status           (PS-side BTN4/BTN5 on MIO50/51)\r\n");
-    xil_printf("  rtc <hex>\r\n");
+    xil_printf("  rtc status | rtc sync <unix> [uncert_s] | rtc <unix>\r\n");
     xil_printf("  cycle <dec>\r\n");
     xil_printf("  maxpak <hex>\r\n");
     xil_printf("  commit\r\n");

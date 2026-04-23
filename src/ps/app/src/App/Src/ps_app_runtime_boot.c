@@ -272,6 +272,7 @@ static void PsAppRuntime_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->config->max_pak_addr = 0U;
     ctx->config->cycle_precalc = 100U;
     ctx->config->rtc_timestamp = 0U;
+    ctx->config->rtc_timestamp_saved = 0U;
     ctx->config->irq_enable = PS_APP_IRQ_MASK_DEFAULT;
 
     ctx->audio->sample_rate_hz = 48000U;
@@ -469,7 +470,8 @@ void PsAppRuntime_ApplyShadowConfig(PsAppRuntimeContext *ctx) {
                            ctx->config->keys,
                            ctx->config->max_pak_addr,
                            ctx->config->cycle_precalc,
-                           ctx->config->rtc_timestamp);
+                           ctx->config->rtc_timestamp,
+                           ctx->config->rtc_timestamp_saved);
 }
 
 XStatus PsAppRuntime_InitUart(PsAppRuntimeContext *ctx) {

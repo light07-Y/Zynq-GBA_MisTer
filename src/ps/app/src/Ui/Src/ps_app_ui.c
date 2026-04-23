@@ -29,6 +29,8 @@
 #define PS_APP_UI_SWEEP_PERIOD_MS     720U
 #define PS_APP_UI_SWEEP_WIDTH_PX      20U
 #define PS_APP_UI_CURSOR_WIDTH_PX     6U
+#define PS_APP_UI_BJ_OFFSET_SEC       28800LL
+#define PS_APP_UI_CLOCK_INVALID_UNIX  0xFFFFFFFFU
 /* STATUS0 低 10 位的物理按键定义与 GBA key bit 一致：
  * bit0=A, bit1=B, bit2=SELECT, bit3=START, bit4=RIGHT, bit5=LEFT, bit6=UP, bit7=DOWN, bit8=R, bit9=L */
 #define PS_APP_UI_PHY_KEY_A      (1U << 0U)
@@ -55,6 +57,7 @@ typedef struct {
     lv_obj_t *header_panel;
     lv_obj_t *title_label;
     lv_obj_t *meta_label;
+    lv_obj_t *clock_label;
     lv_obj_t *led;
     lv_obj_t *list_panel;
     lv_obj_t *list;
@@ -69,6 +72,7 @@ typedef struct {
     lv_obj_t *cursor;
     u32 anim_elapsed_ms;
     u32 blink_elapsed_ms;
+    u32 last_clock_unix;
     u16 game_button_count;
     u8 blink_phase;
     u8 about_visible;
@@ -259,6 +263,109 @@ static void PsAppUi_UpdateMetaLabels(PsAppUiContext *ctx) {
                    PsAppUi_ModeName((PsAppUiMode)ctx->state->mode),
                    (unsigned int)ctx->state->game_count);
     lv_label_set_text(s_ps_app_ui_runtime.meta_label, meta_text);
+}
+
+static void PsAppUi_UnixToDateTime(s64 unix_sec,
+                                   s64 tz_offset_sec,
+                                   s32 *year_out,
+                                   u8 *month_out,
+                                   u8 *day_out,
+                                   u8 *hour_out,
+                                   u8 *min_out,
+                                   u8 *sec_out) {
+    s64 shifted_sec;
+    s64 days;
+    s64 rem;
+    s64 z;
+    s64 era;
+    u32 doe;
+    u32 yoe;
+    s64 y;
+    u32 doy;
+    u32 mp;
+    u32 day;
+    s32 month;
+
+    if ((year_out == NULL) || (month_out == NULL) || (day_out == NULL) ||
+        (hour_out == NULL) || (min_out == NULL) || (sec_out == NULL)) {
+        return;
+    }
+
+    shifted_sec = unix_sec + tz_offset_sec;
+    days = shifted_sec / 86400LL;
+    rem = shifted_sec % 86400LL;
+    if (rem < 0LL) {
+        rem += 86400LL;
+        days -= 1LL;
+    }
+
+    z = days + 719468LL;
+    era = (z >= 0LL) ? (z / 146097LL) : ((z - 146096LL) / 146097LL);
+    doe = (u32)(z - era * 146097LL);
+    yoe = (doe - (doe / 1460U) + (doe / 36524U) - (doe / 146096U)) / 365U;
+    y = (s64)yoe + era * 400LL;
+    doy = doe - (365U * yoe + (yoe / 4U) - (yoe / 100U));
+    mp = (5U * doy + 2U) / 153U;
+    day = doy - (153U * mp + 2U) / 5U + 1U;
+    month = (s32)mp + (((s32)mp < 10) ? 3 : -9);
+    if (month <= 2) {
+        y += 1LL;
+    }
+
+    *year_out = (s32)y;
+    *month_out = (u8)month;
+    *day_out = (u8)day;
+    *hour_out = (u8)(rem / 3600LL);
+    *min_out = (u8)((rem % 3600LL) / 60LL);
+    *sec_out = (u8)(rem % 60LL);
+}
+
+static void PsAppUi_UpdateClockLabel(PsAppUiContext *ctx) {
+    u32 unix_sec;
+    s32 year;
+    u8 month;
+    u8 day;
+    u8 hour;
+    u8 minute;
+    u8 second;
+    char clock_text[48];
+
+    if (s_ps_app_ui_runtime.clock_label == NULL) {
+        return;
+    }
+    if ((ctx == NULL) || (ctx->runtime == NULL) || (ctx->runtime->config == NULL) ||
+        (ctx->runtime->rtc == NULL) || (ctx->runtime->rtc->model_ready == 0U)) {
+        if (s_ps_app_ui_runtime.last_clock_unix != PS_APP_UI_CLOCK_INVALID_UNIX) {
+            lv_label_set_text(s_ps_app_ui_runtime.clock_label, "BJ ----/--/-- --:--:--");
+            s_ps_app_ui_runtime.last_clock_unix = PS_APP_UI_CLOCK_INVALID_UNIX;
+        }
+        return;
+    }
+
+    unix_sec = ctx->runtime->config->rtc_timestamp;
+    if (unix_sec == s_ps_app_ui_runtime.last_clock_unix) {
+        return;
+    }
+
+    PsAppUi_UnixToDateTime((s64)unix_sec,
+                           PS_APP_UI_BJ_OFFSET_SEC,
+                           &year,
+                           &month,
+                           &day,
+                           &hour,
+                           &minute,
+                           &second);
+    (void)snprintf(clock_text,
+                   sizeof(clock_text),
+                   "BJ %04d-%02u-%02u %02u:%02u:%02u",
+                   (int)year,
+                   (unsigned int)month,
+                   (unsigned int)day,
+                   (unsigned int)hour,
+                   (unsigned int)minute,
+                   (unsigned int)second);
+    lv_label_set_text(s_ps_app_ui_runtime.clock_label, clock_text);
+    s_ps_app_ui_runtime.last_clock_unix = unix_sec;
 }
 
 static lv_obj_t *PsAppUi_CreatePixelPanel(lv_obj_t *parent,
@@ -1212,6 +1319,15 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
     lv_obj_set_style_text_color(s_ps_app_ui_runtime.meta_label, PsAppUi_HexColor(0x1F2A44), 0);
     lv_obj_align(s_ps_app_ui_runtime.meta_label, LV_ALIGN_BOTTOM_LEFT, 10, -6);
 
+    s_ps_app_ui_runtime.clock_label = lv_label_create(s_ps_app_ui_runtime.header_panel);
+    lv_obj_set_width(s_ps_app_ui_runtime.clock_label, 300);
+    lv_obj_set_style_text_font(s_ps_app_ui_runtime.clock_label, &ps_ui_font_fusion_12, 0);
+    lv_obj_set_style_text_color(s_ps_app_ui_runtime.clock_label, PsAppUi_HexColor(0x1F2A44), 0);
+    lv_obj_set_style_text_align(s_ps_app_ui_runtime.clock_label, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_ps_app_ui_runtime.clock_label, LV_ALIGN_BOTTOM_RIGHT, -10, -6);
+    lv_label_set_text(s_ps_app_ui_runtime.clock_label, "BJ ----/--/-- --:--:--");
+    s_ps_app_ui_runtime.last_clock_unix = PS_APP_UI_CLOCK_INVALID_UNIX;
+
     s_ps_app_ui_runtime.led = PsAppUi_CreatePixelBlock(s_ps_app_ui_runtime.header_panel,
                                                         546,
                                                         8,
@@ -1356,6 +1472,7 @@ static void PsAppUi_BuildScreen(PsAppUiContext *ctx) {
     s_ps_app_ui_runtime.about_visible = 0U;
 
     PsAppUi_UpdateMetaLabels(ctx);
+    PsAppUi_UpdateClockLabel(ctx);
     PsAppUi_SetStatus(ctx, "菜单就绪");
     PsAppUi_RebuildList(ctx);
     lv_screen_load(s_ps_app_ui_runtime.screen);
@@ -1453,6 +1570,7 @@ void PsAppUiTask(void *arg) {
         if ((state->mode == (u8)PS_APP_UI_MODE_MENU) ||
             (state->mode == (u8)PS_APP_UI_MODE_LOADING)) {
             PsAppUi_EnsureMenuScreen();
+            PsAppUi_UpdateClockLabel(ctx);
         }
 
         if (state->mode == (u8)PS_APP_UI_MODE_MENU) {

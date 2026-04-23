@@ -34,6 +34,7 @@ typedef struct {
     u32 max_pak_addr;
     u32 cycle_precalc;
     u32 rtc_timestamp;
+    u32 rtc_timestamp_saved;
     u32 irq_enable;
 } PsAppShadowConfig;
 
@@ -136,16 +137,21 @@ typedef struct {
 } PsAppStateFeatureConfig;
 
 typedef struct {
-    u8 loaded;
-    u8 in_use;
-    u8 dirty;
+    u8 model_ready;
+    u8 uncert_infinite;
+    u8 has_last_cal;
     u8 reserved0;
-    u32 save_interval_ticks;
-    u32 save_countdown;
-    u32 timestamp_saved;
-    u64 saved_time;
-    u32 last_timestamp_out;
-    u64 last_savedtime_out;
+    u32 last_current_unix;
+    u32 last_uncert_us;
+    s32 ppm_cal_ppb;
+    u32 ppm_sigma_ppb;
+    u64 anchor_met_us;
+    u64 anchor_utc_us;
+    u64 last_cal_met_us;
+    u64 last_cal_utc_us;
+    u64 base_uncert_us;
+    u32 last_saved_unix;
+    u64 last_saved_time;
     char path[PS_APP_ROM_PATH_MAX_CHARS];
 } PsAppRtcPersistState;
 

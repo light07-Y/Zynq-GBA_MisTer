@@ -157,6 +157,7 @@ module zynq_gba_top #(
   wire [24:0] w_core_cfg_max_pak_addr;
   wire [15:0] w_core_cfg_cycle_precalc;
   wire [31:0] w_core_cfg_rtc_timestamp;
+  wire [31:0] w_core_cfg_rtc_timestamp_saved;
   wire [5:0]  w_core_feature_ctrl;
   wire [2:0]  w_core_savestate_slot;
   wire [31:0] w_core_cheat_flags;
@@ -181,6 +182,7 @@ module zynq_gba_top #(
   wire [24:0] w_axi_cfg_max_pak_addr;
   wire [15:0] w_axi_cfg_cycle_precalc;
   wire [31:0] w_axi_cfg_rtc_timestamp;
+  wire [31:0] w_axi_cfg_rtc_timestamp_saved;
   wire [1:0]  w_axi_display_frame_idx;
   wire        w_axi_cfg_commit_toggle;
   wire        w_axi_cfg_sw_reset;
@@ -932,7 +934,7 @@ module zynq_gba_top #(
       feature_rtc_out_timestamp_axi_sync <= feature_rtc_out_timestamp_axi_meta;
       feature_rtc_out_savedtime_lo_axi_meta <= core_rtc_savedtime_out[31:0];
       feature_rtc_out_savedtime_lo_axi_sync <= feature_rtc_out_savedtime_lo_axi_meta;
-      feature_rtc_out_savedtime_hi_axi_meta <= {22'd0, core_rtc_savedtime_out[41:32]};
+      feature_rtc_out_savedtime_hi_axi_meta <= {21'd0, w_core_rtc_save_loaded, core_rtc_savedtime_out[41:32]};
       feature_rtc_out_savedtime_hi_axi_sync <= feature_rtc_out_savedtime_hi_axi_meta;
       feature_load_done_toggle_axi_sync <= {feature_load_done_toggle_axi_sync[1:0], feature_load_done_toggle_core};
       bios_wr_ack_sync_axi <= {bios_wr_ack_sync_axi[1:0], bios_wr_ack_toggle_core};
@@ -1055,6 +1057,7 @@ module zynq_gba_top #(
     .cfg_max_pak_addr    (w_axi_cfg_max_pak_addr),
     .cfg_cycle_precalc   (w_axi_cfg_cycle_precalc),
     .cfg_rtc_timestamp   (w_axi_cfg_rtc_timestamp),
+    .cfg_rtc_timestamp_saved(w_axi_cfg_rtc_timestamp_saved),
     .cfg_display_frame_idx(w_axi_display_frame_idx),
     .cfg_sw_reset        (w_axi_cfg_sw_reset),
     .cfg_commit_toggle   (w_axi_cfg_commit_toggle),
@@ -1089,6 +1092,7 @@ module zynq_gba_top #(
     .cfg_max_pak_addr_axi  (w_axi_cfg_max_pak_addr),
     .cfg_cycle_precalc_axi (w_axi_cfg_cycle_precalc),
     .cfg_rtc_timestamp_axi (w_axi_cfg_rtc_timestamp),
+    .cfg_rtc_timestamp_saved_axi(w_axi_cfg_rtc_timestamp_saved),
     .cfg_commit_toggle_axi (w_axi_cfg_commit_toggle),
     .cfg_feature_ctrl_axi  (w_axi_feature_ctrl),
     .cfg_savestate_slot_axi(w_axi_savestate_slot),
@@ -1111,6 +1115,7 @@ module zynq_gba_top #(
     .cfg_max_pak_addr_core (w_core_cfg_max_pak_addr),
     .cfg_cycle_precalc_core(w_core_cfg_cycle_precalc),
     .cfg_rtc_timestamp_core(w_core_cfg_rtc_timestamp),
+    .cfg_rtc_timestamp_saved_core(w_core_cfg_rtc_timestamp_saved),
     .cfg_feature_ctrl_core (w_core_feature_ctrl),
     .cfg_savestate_slot_core(w_core_savestate_slot),
     .cfg_cheat_flags_core  (w_core_cheat_flags),
@@ -1196,7 +1201,7 @@ module zynq_gba_top #(
     .savestate_number      (w_core_savestate_slot),
     .RTC_timestampNew      (w_core_pulse_rtc_new),
     .RTC_timestampIn       (w_core_cfg_rtc_timestamp),
-    .RTC_timestampSaved    (w_core_cfg_rtc_timestamp),
+    .RTC_timestampSaved    (w_core_cfg_rtc_timestamp_saved),
     .RTC_savedtimeIn       (w_core_rtc_savedtime),
     .RTC_saveLoaded        (w_core_rtc_save_loaded),
     .RTC_timestampOut      (core_rtc_timestamp_out),

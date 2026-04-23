@@ -10,6 +10,7 @@
 #include "sleep.h"
 #include "xil_cache.h"
 #include "xil_printf.h"
+#include "xiltimer.h"
 
 #include "Gba/Inc/ps_gba_regs.h"
 #include "Input/Inc/ps_xinput_xbox360.h"
@@ -30,7 +31,10 @@
 #define PS_APP_FEATURE_CHEAT_OP_LE       3U
 #define PS_APP_FEATURE_CHEAT_OP_GT       4U
 #define PS_APP_FEATURE_CHEAT_OP_GE       5U
-#define PS_APP_FEATURE_RTC_MAGIC         0x52544331U
+#define PS_APP_FEATURE_RTC2_MAGIC        0x32435452U /* "RTC2" */
+#define PS_APP_FEATURE_RTC2_VERSION      2U
+#define PS_APP_FEATURE_RTC2_FLAG_HAS_HISTORY  (1U << 0U)
+#define PS_APP_FEATURE_RTC2_FLAG_HAS_CAL      (1U << 1U)
 #define PS_APP_FEATURE_CKPT_MAGIC        0x434B5054U
 #define PS_APP_FEATURE_RUMBLE_LARGE_ON   0xC0U
 #define PS_APP_FEATURE_RUMBLE_SMALL_ON   0x60U
@@ -38,6 +42,18 @@
 #define PS_APP_FEATURE_SENSOR_DEADZONE   4096
 #define PS_APP_FEATURE_SENSOR_ECHO_RETRY 6U
 #define PS_APP_FEATURE_RTC_PERSIST_INTERVAL_MS 30000U
+#define PS_APP_FEATURE_RTC_SEED_PATH     "0:/rtc/time_seed.txt"
+#define PS_APP_FEATURE_RTC_GLOBAL_PATH   "0:/rtc/system.rtc2"
+#define PS_APP_FEATURE_RTC_DEFAULT_SYNC_UNCERT_S 1U
+#define PS_APP_FEATURE_RTC_DEFAULT_SEED_UNCERT_S 5U
+#define PS_APP_FEATURE_RTC_PPM_ABS_MAX_PPB 200000
+#define PS_APP_FEATURE_RTC_SIGMA_MIN_PPB 5000U
+#define PS_APP_FEATURE_RTC_SIGMA_MAX_PPB 200000U
+#define PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB 50000U
+#define PS_APP_FEATURE_RTC_CAL_MIN_INTERVAL_US (300ULL * 1000000ULL)
+#define PS_APP_FEATURE_RTC_JITTER_US     10000ULL
+#define PS_APP_FEATURE_RTC_UNCERT_MAX_S  2592000U
+#define PS_APP_FEATURE_RTC_BJ_OFFSET_SEC 28800LL
 
 #define PS_APP_GBA_KEY_SELECT_BIT (1U << 2U)
 #define PS_APP_GBA_KEY_RIGHT_BIT  (1U << 4U)
@@ -52,10 +68,18 @@ typedef struct {
 
 typedef struct {
     u32 magic;
-    u32 timestamp;
+    u16 version;
+    u16 flags;
+    u32 saved_unix;
     u32 savedtime_lo;
-    u32 savedtime_hi;
-} PsAppRtcPersistData;
+    u16 savedtime_hi;
+    u16 reserved0;
+    s32 ppm_cal_ppb;
+    u32 ppm_sigma_ppb;
+    u32 last_cal_unix;
+    u32 base_uncert_s;
+    u32 crc32;
+} PsAppRtcPersistDataV2;
 
 static PsGbaCheatCodeWords s_ps_app_feature_cheat_entries[PS_APP_FEATURE_CHEAT_MAX_ENTRIES];
 static u32 s_ps_app_feature_cheat_count = 0U;
@@ -111,6 +135,246 @@ static s8 PsAppRuntimeFeature_S16ToS8(s16 value) {
         shifted = -128;
     }
     return (s8)shifted;
+}
+
+static u64 PsAppRuntimeFeature_NowMetUs(void) {
+    /* 使用 FreeRTOS tick 作为 MET 的统一时基，避免平台计数频率宏不一致导致
+     * UTC 估计“慢走”（现场已观测到约 4x 误差）。
+     * 这里做一个轻量 64-bit 扩展，跨 TickType_t 回绕后仍保持单调。 */
+    static TickType_t s_last_ticks = 0U;
+    static u64 s_tick_wrap_base = 0ULL;
+    TickType_t now_ticks;
+    u64 ticks_ext;
+
+    taskENTER_CRITICAL();
+    now_ticks = xTaskGetTickCount();
+    if (now_ticks < s_last_ticks) {
+        s_tick_wrap_base += (1ULL << (sizeof(TickType_t) * 8U));
+    }
+    s_last_ticks = now_ticks;
+    ticks_ext = s_tick_wrap_base + (u64)now_ticks;
+    taskEXIT_CRITICAL();
+
+    return ticks_ext * (u64)portTICK_PERIOD_MS * 1000ULL;
+}
+
+static s32 PsAppRuntimeFeature_ClampPpmPpb(s32 ppm_ppb) {
+    if (ppm_ppb > (s32)PS_APP_FEATURE_RTC_PPM_ABS_MAX_PPB) {
+        return (s32)PS_APP_FEATURE_RTC_PPM_ABS_MAX_PPB;
+    }
+    if (ppm_ppb < -(s32)PS_APP_FEATURE_RTC_PPM_ABS_MAX_PPB) {
+        return -(s32)PS_APP_FEATURE_RTC_PPM_ABS_MAX_PPB;
+    }
+    return ppm_ppb;
+}
+
+static u32 PsAppRuntimeFeature_ClampSigmaPpb(u32 sigma_ppb) {
+    if (sigma_ppb < PS_APP_FEATURE_RTC_SIGMA_MIN_PPB) {
+        return PS_APP_FEATURE_RTC_SIGMA_MIN_PPB;
+    }
+    if (sigma_ppb > PS_APP_FEATURE_RTC_SIGMA_MAX_PPB) {
+        return PS_APP_FEATURE_RTC_SIGMA_MAX_PPB;
+    }
+    return sigma_ppb;
+}
+
+static u32 PsAppRuntimeFeature_ClampUncertS(u32 uncert_s) {
+    if (uncert_s > PS_APP_FEATURE_RTC_UNCERT_MAX_S) {
+        return PS_APP_FEATURE_RTC_UNCERT_MAX_S;
+    }
+    return uncert_s;
+}
+
+static u64 PsAppRuntimeFeature_SecondsToUs(u32 seconds) {
+    return (u64)seconds * 1000000ULL;
+}
+
+static u32 PsAppRuntimeFeature_UsToUnixSeconds(u64 utc_us) {
+    u64 unix_sec = utc_us / 1000000ULL;
+    if (unix_sec > 0xFFFFFFFFULL) {
+        return 0xFFFFFFFFU;
+    }
+    return (u32)unix_sec;
+}
+
+static void PsAppRuntimeFeature_UnixToDateTime(s64 unix_sec,
+                                               s64 tz_offset_sec,
+                                               s32 *year_out,
+                                               u8 *month_out,
+                                               u8 *day_out,
+                                               u8 *hour_out,
+                                               u8 *min_out,
+                                               u8 *sec_out) {
+    s64 shifted_sec;
+    s64 days;
+    s64 rem;
+    s64 z;
+    s64 era;
+    u32 doe;
+    u32 yoe;
+    s64 y;
+    u32 doy;
+    u32 mp;
+    u32 day;
+    s32 month;
+    u8 hour;
+    u8 minute;
+    u8 second;
+
+    if ((year_out == NULL) || (month_out == NULL) || (day_out == NULL) ||
+        (hour_out == NULL) || (min_out == NULL) || (sec_out == NULL)) {
+        return;
+    }
+
+    shifted_sec = unix_sec + tz_offset_sec;
+    days = shifted_sec / 86400LL;
+    rem = shifted_sec % 86400LL;
+    if (rem < 0LL) {
+        rem += 86400LL;
+        days -= 1LL;
+    }
+
+    z = days + 719468LL;
+    era = (z >= 0LL) ? (z / 146097LL) : ((z - 146096LL) / 146097LL);
+    doe = (u32)(z - (era * 146097LL));
+    yoe = (doe - (doe / 1460U) + (doe / 36524U) - (doe / 146096U)) / 365U;
+    y = (s64)yoe + (era * 400LL);
+    doy = doe - (365U * yoe + (yoe / 4U) - (yoe / 100U));
+    mp = (5U * doy + 2U) / 153U;
+    day = doy - (153U * mp + 2U) / 5U + 1U;
+    month = (s32)mp + (((s32)mp < 10) ? 3 : -9);
+    if (month <= 2) {
+        y += 1LL;
+    }
+
+    hour = (u8)(rem / 3600LL);
+    minute = (u8)((rem % 3600LL) / 60LL);
+    second = (u8)(rem % 60LL);
+
+    *year_out = (s32)y;
+    *month_out = (u8)month;
+    *day_out = (u8)day;
+    *hour_out = hour;
+    *min_out = minute;
+    *sec_out = second;
+}
+
+static void PsAppRuntimeFeature_PrintRtcUnixDual(const char *tag, u32 unix_sec) {
+    s32 utc_year;
+    s32 bj_year;
+    u8 utc_month;
+    u8 utc_day;
+    u8 utc_hour;
+    u8 utc_min;
+    u8 utc_sec;
+    u8 bj_month;
+    u8 bj_day;
+    u8 bj_hour;
+    u8 bj_min;
+    u8 bj_sec;
+
+    PsAppRuntimeFeature_UnixToDateTime((s64)unix_sec,
+                                       0LL,
+                                       &utc_year,
+                                       &utc_month,
+                                       &utc_day,
+                                       &utc_hour,
+                                       &utc_min,
+                                       &utc_sec);
+    PsAppRuntimeFeature_UnixToDateTime((s64)unix_sec,
+                                       PS_APP_FEATURE_RTC_BJ_OFFSET_SEC,
+                                       &bj_year,
+                                       &bj_month,
+                                       &bj_day,
+                                       &bj_hour,
+                                       &bj_min,
+                                       &bj_sec);
+
+    xil_printf("[RTC] %s unix=%u UTC=%04d-%02u-%02u %02u:%02u:%02u BJ=%04d-%02u-%02u %02u:%02u:%02u\r\n",
+               tag != NULL ? tag : "time",
+               (unsigned int)unix_sec,
+               (int)utc_year,
+               (unsigned int)utc_month,
+               (unsigned int)utc_day,
+               (unsigned int)utc_hour,
+               (unsigned int)utc_min,
+               (unsigned int)utc_sec,
+               (int)bj_year,
+               (unsigned int)bj_month,
+               (unsigned int)bj_day,
+               (unsigned int)bj_hour,
+               (unsigned int)bj_min,
+               (unsigned int)bj_sec);
+}
+
+static s64 PsAppRuntimeFeature_ElapsedPpbToUs(u64 elapsed_us, s32 ppb) {
+    s64 sec_term;
+    s64 frac_term;
+
+    sec_term = ((s64)(elapsed_us / 1000000ULL) * (s64)ppb) / 1000LL;
+    frac_term = (((s64)(elapsed_us % 1000000ULL)) * (s64)ppb) / 1000000000LL;
+    return sec_term + frac_term;
+}
+
+static u64 PsAppRuntimeFeature_ElapsedSigmaToUs(u64 elapsed_us, u32 sigma_ppb) {
+    u64 sec_term;
+    u64 frac_term;
+
+    sec_term = ((elapsed_us / 1000000ULL) * (u64)sigma_ppb) / 1000ULL;
+    frac_term = ((elapsed_us % 1000000ULL) * (u64)sigma_ppb) / 1000000000ULL;
+    return sec_term + frac_term;
+}
+
+static u64 PsAppRuntimeFeature_RtcEstimateUtcUs(const PsAppRtcPersistState *rtc, u64 now_met_us) {
+    u64 elapsed_us;
+    u64 utc_us;
+    s64 drift_us;
+
+    if ((rtc == NULL) || (rtc->model_ready == 0U)) {
+        return 0ULL;
+    }
+
+    elapsed_us = now_met_us - rtc->anchor_met_us;
+    utc_us = rtc->anchor_utc_us + elapsed_us;
+    drift_us = PsAppRuntimeFeature_ElapsedPpbToUs(elapsed_us, rtc->ppm_cal_ppb);
+    if (drift_us >= 0) {
+        utc_us += (u64)drift_us;
+    } else {
+        u64 drift_abs = (u64)(-drift_us);
+        if (utc_us > drift_abs) {
+            utc_us -= drift_abs;
+        } else {
+            utc_us = 0ULL;
+        }
+    }
+    return utc_us;
+}
+
+static u64 PsAppRuntimeFeature_RtcEstimateUncertaintyUs(const PsAppRtcPersistState *rtc, u64 now_met_us) {
+    u64 elapsed_us;
+    u64 uncert_us;
+
+    if ((rtc == NULL) || (rtc->model_ready == 0U) || (rtc->uncert_infinite != 0U)) {
+        return 0xFFFFFFFFFFFFFFFFULL;
+    }
+
+    elapsed_us = now_met_us - rtc->anchor_met_us;
+    uncert_us = rtc->base_uncert_us;
+    uncert_us += PsAppRuntimeFeature_ElapsedSigmaToUs(elapsed_us, rtc->ppm_sigma_ppb);
+    uncert_us += PS_APP_FEATURE_RTC_JITTER_US;
+    return uncert_us;
+}
+
+static void PsAppRuntimeFeature_RtcModelInit(PsAppRuntimeContext *ctx, u64 anchor_met_us, u64 anchor_utc_us) {
+    if ((ctx == NULL) || (ctx->rtc == NULL)) {
+        return;
+    }
+
+    ctx->rtc->model_ready = 1U;
+    ctx->rtc->anchor_met_us = anchor_met_us;
+    ctx->rtc->anchor_utc_us = anchor_utc_us;
+    ctx->rtc->last_current_unix = PsAppRuntimeFeature_UsToUnixSeconds(anchor_utc_us);
+    ctx->rtc->last_uncert_us = 0U;
 }
 
 static void PsAppRuntimeFeature_WriteSensorInputRaw(PsAppRuntimeContext *ctx) {
@@ -796,79 +1060,497 @@ static void PsAppRuntimeFeature_ReplayCheats(PsAppRuntimeContext *ctx) {
     }
 }
 
+static const char *PsAppRuntimeFeature_SkipSpaces(const char *cursor) {
+    while ((cursor != NULL) &&
+           ((*cursor == ' ') || (*cursor == '\t') || (*cursor == '\r') || (*cursor == '\n'))) {
+        cursor++;
+    }
+    return cursor;
+}
+
+static u8 PsAppRuntimeFeature_ParseNextU64(const char **cursor_io, u64 *value_out) {
+    const char *cursor;
+    char *end_ptr;
+    unsigned long long value;
+
+    if ((cursor_io == NULL) || (*cursor_io == NULL) || (value_out == NULL)) {
+        return 0U;
+    }
+
+    cursor = PsAppRuntimeFeature_SkipSpaces(*cursor_io);
+    if ((cursor == NULL) || (*cursor == '\0') || (*cursor == '#')) {
+        return 0U;
+    }
+
+    value = strtoull(cursor, &end_ptr, 0);
+    if (end_ptr == cursor) {
+        return 0U;
+    }
+
+    *value_out = (u64)value;
+    *cursor_io = end_ptr;
+    return 1U;
+}
+
+static XStatus PsAppRuntimeFeature_ReadSeedFile(u32 *seed_unix_out,
+                                                u32 *seed_uncert_s_out,
+                                                u8 *seed_valid_out) {
+    PsFatFsStorageReadResult read_result;
+    char seed_text[96];
+    const char *cursor;
+    u64 parsed_seed;
+    u64 parsed_uncert;
+    u32 seed_uncert_s;
+
+    if (seed_unix_out != NULL) {
+        *seed_unix_out = 0U;
+    }
+    if (seed_uncert_s_out != NULL) {
+        *seed_uncert_s_out = PS_APP_FEATURE_RTC_DEFAULT_SEED_UNCERT_S;
+    }
+    if (seed_valid_out != NULL) {
+        *seed_valid_out = 0U;
+    }
+    if ((seed_unix_out == NULL) || (seed_uncert_s_out == NULL) || (seed_valid_out == NULL)) {
+        return XST_INVALID_PARAM;
+    }
+
+    memset(&read_result, 0, sizeof(read_result));
+    memset(seed_text, 0, sizeof(seed_text));
+    if (PsFatFsStorage_ReadFileToMemory(PS_APP_FEATURE_RTC_SEED_PATH,
+                                        (UINTPTR)seed_text,
+                                        (u32)(sizeof(seed_text) - 1U),
+                                        &read_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+    seed_text[(read_result.bytes_loaded < (sizeof(seed_text) - 1U))
+                  ? read_result.bytes_loaded
+                  : (sizeof(seed_text) - 1U)] = '\0';
+
+    cursor = seed_text;
+    if (PsAppRuntimeFeature_ParseNextU64(&cursor, &parsed_seed) == 0U) {
+        return XST_FAILURE;
+    }
+    if (parsed_seed > 0xFFFFFFFFULL) {
+        parsed_seed = 0xFFFFFFFFULL;
+    }
+
+    seed_uncert_s = PS_APP_FEATURE_RTC_DEFAULT_SEED_UNCERT_S;
+    cursor = PsAppRuntimeFeature_SkipSpaces(cursor);
+    if ((cursor != NULL) && (*cursor != '\0') && (*cursor != '#')) {
+        if (PsAppRuntimeFeature_ParseNextU64(&cursor, &parsed_uncert) != 0U) {
+            if (parsed_uncert > 0xFFFFFFFFULL) {
+                parsed_uncert = 0xFFFFFFFFULL;
+            }
+            seed_uncert_s = PsAppRuntimeFeature_ClampUncertS((u32)parsed_uncert);
+        }
+    }
+
+    *seed_unix_out = (u32)parsed_seed;
+    *seed_uncert_s_out = seed_uncert_s;
+    *seed_valid_out = 1U;
+    return XST_SUCCESS;
+}
+
 static XStatus PsAppRuntimeFeature_PersistRtcOut(PsAppRuntimeContext *ctx) {
-    PsAppRtcPersistData rtc_file;
+    PsAppRtcPersistDataV2 rtc_file;
     PsGbaRtcOut rtc_out;
     PsFatFsStorageWriteResult write_result;
     char rtc_path[PS_APP_ROM_PATH_MAX_CHARS];
+    u32 crc_bytes;
+    u32 flags;
+    u32 base_uncert_s;
 
     if ((ctx == NULL) || (ctx->rom == NULL) || (ctx->feature == NULL) ||
-        (ctx->rom->loaded == 0U)) {
+        (ctx->rtc == NULL) || (ctx->rom->loaded == 0U)) {
         return XST_FAILURE;
     }
 
-    /* 将 core 侧 RTC 输出压平为固定 16B 记录：
-     * magic + timestamp + savedtime(低32/高10) + save_loaded 标志。 */
     PsGbaRegs_ReadRtcOut(ctx->regs, &rtc_out);
-    rtc_file.magic = PS_APP_FEATURE_RTC_MAGIC;
-    rtc_file.timestamp = rtc_out.timestamp;
-    rtc_file.savedtime_lo = (u32)(rtc_out.savedtime & 0xFFFFFFFFULL);
-    rtc_file.savedtime_hi = (u32)((rtc_out.savedtime >> 32) & 0x3FFULL);
+
+    memset(&rtc_file, 0, sizeof(rtc_file));
+    flags = 0U;
     if (rtc_out.save_loaded != 0U) {
-        rtc_file.savedtime_hi |= (1UL << 31);
+        flags |= PS_APP_FEATURE_RTC2_FLAG_HAS_HISTORY;
+    }
+    if (ctx->rtc->has_last_cal != 0U) {
+        flags |= PS_APP_FEATURE_RTC2_FLAG_HAS_CAL;
     }
 
+    if (ctx->rtc->uncert_infinite != 0U) {
+        base_uncert_s = 0xFFFFFFFFU;
+    } else {
+        base_uncert_s = (u32)((ctx->rtc->base_uncert_us + 500000ULL) / 1000000ULL);
+        base_uncert_s = PsAppRuntimeFeature_ClampUncertS(base_uncert_s);
+    }
+
+    rtc_file.magic = PS_APP_FEATURE_RTC2_MAGIC;
+    rtc_file.version = (u16)PS_APP_FEATURE_RTC2_VERSION;
+    rtc_file.flags = (u16)flags;
+    rtc_file.saved_unix = rtc_out.timestamp;
+    rtc_file.savedtime_lo = (u32)(rtc_out.savedtime & 0xFFFFFFFFULL);
+    rtc_file.savedtime_hi = (u16)((rtc_out.savedtime >> 32) & 0x3FFULL);
+    rtc_file.ppm_cal_ppb = PsAppRuntimeFeature_ClampPpmPpb(ctx->rtc->ppm_cal_ppb);
+    rtc_file.ppm_sigma_ppb = PsAppRuntimeFeature_ClampSigmaPpb(ctx->rtc->ppm_sigma_ppb);
+    rtc_file.last_cal_unix = PsAppRuntimeFeature_UsToUnixSeconds(ctx->rtc->last_cal_utc_us);
+    rtc_file.base_uncert_s = base_uncert_s;
+    crc_bytes = (u32)(sizeof(rtc_file) - sizeof(rtc_file.crc32));
+    rtc_file.crc32 = PsAppRuntimeFeature_Crc32((const u8 *)&rtc_file, crc_bytes);
+
     PsAppRuntimeFeature_BuildRtcPath(ctx, rtc_path, sizeof(rtc_path));
+    if (rtc_path[0] == '\0') {
+        return XST_FAILURE;
+    }
+
     memset(&write_result, 0, sizeof(write_result));
-    return PsFatFsStorage_WriteMemoryToFile(rtc_path,
-                                            (UINTPTR)&rtc_file,
-                                            (u32)sizeof(rtc_file),
-                                            &write_result);
+    if (PsFatFsStorage_WriteMemoryToFile(rtc_path,
+                                         (UINTPTR)&rtc_file,
+                                         (u32)sizeof(rtc_file),
+                                         &write_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    ctx->rtc->last_saved_unix = rtc_out.timestamp;
+    ctx->rtc->last_saved_time = rtc_out.savedtime;
+    return XST_SUCCESS;
 }
 
-static void PsAppRuntimeFeature_LoadRtcIn(PsAppRuntimeContext *ctx) {
-    PsAppRtcPersistData rtc_file;
-    PsFatFsStorageReadResult read_result;
-    char rtc_path[PS_APP_ROM_PATH_MAX_CHARS];
-    u64 savedtime;
-    u8 save_loaded;
+static XStatus PsAppRuntimeFeature_PersistRtcGlobal(PsAppRuntimeContext *ctx) {
+    PsAppRtcPersistDataV2 rtc_file;
+    PsFatFsStorageWriteResult write_result;
+    u32 crc_bytes;
+    u32 flags;
+    u32 base_uncert_s;
 
-    if ((ctx == NULL) || (ctx->config == NULL)) {
+    if ((ctx == NULL) || (ctx->rtc == NULL) || (ctx->config == NULL)) {
+        return XST_FAILURE;
+    }
+    if (ctx->rtc->model_ready == 0U) {
+        return XST_FAILURE;
+    }
+
+    if (PsFatFsStorage_EnsureDirectory(PS_APP_RTC_SD_DIR) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    memset(&rtc_file, 0, sizeof(rtc_file));
+    flags = 0U;
+    if (ctx->rtc->has_last_cal != 0U) {
+        flags |= PS_APP_FEATURE_RTC2_FLAG_HAS_CAL;
+    }
+
+    if (ctx->rtc->uncert_infinite != 0U) {
+        base_uncert_s = 0xFFFFFFFFU;
+    } else {
+        base_uncert_s = (u32)((ctx->rtc->base_uncert_us + 500000ULL) / 1000000ULL);
+        base_uncert_s = PsAppRuntimeFeature_ClampUncertS(base_uncert_s);
+    }
+
+    rtc_file.magic = PS_APP_FEATURE_RTC2_MAGIC;
+    rtc_file.version = (u16)PS_APP_FEATURE_RTC2_VERSION;
+    rtc_file.flags = (u16)flags;
+    rtc_file.saved_unix = ctx->config->rtc_timestamp;
+    rtc_file.savedtime_lo = 0U;
+    rtc_file.savedtime_hi = 0U;
+    rtc_file.ppm_cal_ppb = PsAppRuntimeFeature_ClampPpmPpb(ctx->rtc->ppm_cal_ppb);
+    rtc_file.ppm_sigma_ppb = PsAppRuntimeFeature_ClampSigmaPpb(ctx->rtc->ppm_sigma_ppb);
+    rtc_file.last_cal_unix = PsAppRuntimeFeature_UsToUnixSeconds(ctx->rtc->last_cal_utc_us);
+    rtc_file.base_uncert_s = base_uncert_s;
+    crc_bytes = (u32)(sizeof(rtc_file) - sizeof(rtc_file.crc32));
+    rtc_file.crc32 = PsAppRuntimeFeature_Crc32((const u8 *)&rtc_file, crc_bytes);
+
+    memset(&write_result, 0, sizeof(write_result));
+    if (PsFatFsStorage_WriteMemoryToFile(PS_APP_FEATURE_RTC_GLOBAL_PATH,
+                                         (UINTPTR)&rtc_file,
+                                         (u32)sizeof(rtc_file),
+                                         &write_result) != XST_SUCCESS) {
+        return XST_FAILURE;
+    }
+
+    return XST_SUCCESS;
+}
+
+static void PsAppRuntimeFeature_LoadRtcBootstrap(PsAppRuntimeContext *ctx) {
+    PsAppRtcPersistDataV2 rtc_file;
+    PsFatFsStorageReadResult read_result;
+    u32 now_ms;
+    u64 now_met_us;
+    u32 crc_bytes;
+    u32 expect_crc;
+    u32 seed_unix;
+    u32 seed_uncert_s;
+    u8 seed_valid;
+    u32 global_unix;
+    u32 current_unix;
+    u8 global_valid;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL) || (ctx->config == NULL) || (ctx->feature == NULL)) {
         return;
     }
 
+    now_ms = PsAppRuntimeFeature_NowMs();
+    now_met_us = PsAppRuntimeFeature_NowMetUs();
+    seed_unix = 0U;
+    seed_uncert_s = PS_APP_FEATURE_RTC_DEFAULT_SEED_UNCERT_S;
+    seed_valid = 0U;
+    global_unix = 0U;
+    current_unix = 0U;
+    global_valid = 0U;
+
+    ctx->rtc->model_ready = 0U;
+    ctx->rtc->uncert_infinite = 1U;
+    ctx->rtc->has_last_cal = 0U;
+    ctx->rtc->ppm_cal_ppb = 0;
+    ctx->rtc->ppm_sigma_ppb = PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB;
+    ctx->rtc->base_uncert_us = 0ULL;
+    ctx->rtc->last_cal_met_us = 0ULL;
+    ctx->rtc->last_cal_utc_us = 0ULL;
+    ctx->rtc->last_saved_unix = 0U;
+    ctx->rtc->last_saved_time = 0ULL;
+    ctx->rtc->last_uncert_us = 0U;
+    snprintf(ctx->rtc->path, sizeof(ctx->rtc->path), "%s", PS_APP_FEATURE_RTC_GLOBAL_PATH);
+
+    memset(&read_result, 0, sizeof(read_result));
+    memset(&rtc_file, 0, sizeof(rtc_file));
+    if ((PsFatFsStorage_ReadFileToMemory(PS_APP_FEATURE_RTC_GLOBAL_PATH,
+                                         (UINTPTR)&rtc_file,
+                                         (u32)sizeof(rtc_file),
+                                         &read_result) == XST_SUCCESS) &&
+        (read_result.bytes_loaded == (u32)sizeof(rtc_file))) {
+        crc_bytes = (u32)(sizeof(rtc_file) - sizeof(rtc_file.crc32));
+        expect_crc = PsAppRuntimeFeature_Crc32((const u8 *)&rtc_file, crc_bytes);
+        if ((rtc_file.magic == PS_APP_FEATURE_RTC2_MAGIC) &&
+            ((u32)rtc_file.version == PS_APP_FEATURE_RTC2_VERSION) &&
+            (rtc_file.crc32 == expect_crc)) {
+            global_valid = 1U;
+            global_unix = rtc_file.saved_unix;
+            ctx->rtc->ppm_cal_ppb = PsAppRuntimeFeature_ClampPpmPpb(rtc_file.ppm_cal_ppb);
+            ctx->rtc->ppm_sigma_ppb = PsAppRuntimeFeature_ClampSigmaPpb(
+                (rtc_file.ppm_sigma_ppb != 0U) ? rtc_file.ppm_sigma_ppb
+                                               : PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB);
+            ctx->rtc->last_saved_unix = global_unix;
+        } else {
+            xil_printf("[RTC] global rtc2 invalid: magic=0x%08x ver=%u crc=0x%08x/0x%08x\r\n",
+                       (unsigned int)rtc_file.magic,
+                       (unsigned int)rtc_file.version,
+                       (unsigned int)rtc_file.crc32,
+                       (unsigned int)expect_crc);
+        }
+    }
+
+    if (PsAppRuntimeFeature_ReadSeedFile(&seed_unix, &seed_uncert_s, &seed_valid) == XST_SUCCESS) {
+        xil_printf("[RTC] seed unix=%u uncert=%us\r\n",
+                   (unsigned int)seed_unix,
+                   (unsigned int)seed_uncert_s);
+        PsAppRuntimeFeature_PrintRtcUnixDual("seed", seed_unix);
+    } else {
+        seed_valid = 0U;
+    }
+
+    current_unix = global_unix;
+    if ((seed_valid != 0U) && (seed_unix > current_unix)) {
+        current_unix = seed_unix;
+    }
+
+    ctx->config->rtc_timestamp = current_unix;
+    ctx->config->rtc_timestamp_saved = global_unix;
+
+    if ((seed_valid != 0U) || (global_valid != 0U)) {
+        PsAppRuntimeFeature_RtcModelInit(ctx, now_met_us, PsAppRuntimeFeature_SecondsToUs(current_unix));
+        if (seed_valid != 0U) {
+            ctx->rtc->base_uncert_us = PsAppRuntimeFeature_SecondsToUs(
+                PsAppRuntimeFeature_ClampUncertS(seed_uncert_s));
+            ctx->rtc->uncert_infinite = 0U;
+            ctx->rtc->has_last_cal = 1U;
+            ctx->rtc->last_cal_met_us = now_met_us;
+            ctx->rtc->last_cal_utc_us = PsAppRuntimeFeature_SecondsToUs(seed_unix);
+        } else {
+            /* 仅有上次关机前记录时，无法观测掉电窗口误差，按未知处理。 */
+            ctx->rtc->uncert_infinite = 1U;
+            ctx->rtc->base_uncert_us = 0ULL;
+            ctx->rtc->has_last_cal = 0U;
+            ctx->rtc->last_cal_met_us = 0ULL;
+            ctx->rtc->last_cal_utc_us = 0ULL;
+        }
+        ctx->feature->rtc_last_tick_ts = now_ms;
+        ctx->feature->rtc_last_persist_ts = now_ms;
+        xil_printf("[RTC] boot global=%u seed=%u current=%u file=%u\r\n",
+                   (unsigned int)global_unix,
+                   (unsigned int)((seed_valid != 0U) ? seed_unix : 0U),
+                   (unsigned int)current_unix,
+                   (unsigned int)global_valid);
+        PsAppRuntimeFeature_PrintRtcUnixDual("current", current_unix);
+    } else {
+        xil_printf("[RTC] boot rtc source missing (no global/seed)\r\n");
+    }
+}
+
+static void PsAppRuntimeFeature_LoadRtcIn(PsAppRuntimeContext *ctx) {
+    PsAppRtcPersistDataV2 rtc_file;
+    PsFatFsStorageReadResult read_result;
+    char rtc_path[PS_APP_ROM_PATH_MAX_CHARS];
+    u32 now_ms;
+    u64 now_met_us;
+    u32 crc_bytes;
+    u32 expect_crc;
+    u32 seed_unix;
+    u32 seed_uncert_s;
+    u8 seed_valid;
+    u32 saved_unix;
+    u32 current_unix;
+    u32 prev_current_unix;
+    u64 savedtime;
+    u8 save_loaded;
+    u8 rtc_file_valid;
+    u8 rtc_has_cal;
+
+    if ((ctx == NULL) || (ctx->config == NULL) || (ctx->rtc == NULL)) {
+        return;
+    }
+
+    now_ms = PsAppRuntimeFeature_NowMs();
+    now_met_us = PsAppRuntimeFeature_NowMetUs();
+    seed_unix = 0U;
+    seed_uncert_s = PS_APP_FEATURE_RTC_DEFAULT_SEED_UNCERT_S;
+    seed_valid = 0U;
+    saved_unix = 0U;
+    current_unix = 0U;
+    prev_current_unix = ctx->config->rtc_timestamp;
+    savedtime = 0ULL;
+    save_loaded = 0U;
+    rtc_file_valid = 0U;
+    rtc_has_cal = 0U;
+
+    ctx->rtc->model_ready = 0U;
+    ctx->rtc->uncert_infinite = 1U;
+    ctx->rtc->has_last_cal = 0U;
+    ctx->rtc->ppm_cal_ppb = 0;
+    ctx->rtc->ppm_sigma_ppb = PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB;
+    ctx->rtc->base_uncert_us = 0ULL;
+    ctx->rtc->last_cal_met_us = 0ULL;
+    ctx->rtc->last_cal_utc_us = 0ULL;
+    ctx->rtc->last_saved_unix = 0U;
+    ctx->rtc->last_saved_time = 0ULL;
+    ctx->rtc->last_uncert_us = 0U;
+    ctx->rtc->path[0] = '\0';
+
     PsAppRuntimeFeature_BuildRtcPath(ctx, rtc_path, sizeof(rtc_path));
+    if (rtc_path[0] != '\0') {
+        snprintf(ctx->rtc->path, sizeof(ctx->rtc->path), "%s", rtc_path);
+    }
     memset(&read_result, 0, sizeof(read_result));
     memset(&rtc_file, 0, sizeof(rtc_file));
 
-    if (PsFatFsStorage_ReadFileToMemory(rtc_path,
-                                        (UINTPTR)&rtc_file,
-                                        (u32)sizeof(rtc_file),
-                                        &read_result) == XST_SUCCESS &&
-        (rtc_file.magic == PS_APP_FEATURE_RTC_MAGIC)) {
-        ctx->config->rtc_timestamp = rtc_file.timestamp;
-        savedtime = (((u64)(rtc_file.savedtime_hi & 0x3FFU)) << 32) |
-                    (u64)rtc_file.savedtime_lo;
-        save_loaded = (u8)((rtc_file.savedtime_hi >> 31) & 0x1U);
+    if ((rtc_path[0] != '\0') &&
+        (PsFatFsStorage_ReadFileToMemory(rtc_path,
+                                         (UINTPTR)&rtc_file,
+                                         (u32)sizeof(rtc_file),
+                                         &read_result) == XST_SUCCESS) &&
+        (read_result.bytes_loaded == (u32)sizeof(rtc_file))) {
+        crc_bytes = (u32)(sizeof(rtc_file) - sizeof(rtc_file.crc32));
+        expect_crc = PsAppRuntimeFeature_Crc32((const u8 *)&rtc_file, crc_bytes);
+        if ((rtc_file.magic == PS_APP_FEATURE_RTC2_MAGIC) &&
+            ((u32)rtc_file.version == PS_APP_FEATURE_RTC2_VERSION) &&
+            (rtc_file.crc32 == expect_crc)) {
+            rtc_file_valid = 1U;
+            saved_unix = rtc_file.saved_unix;
+            savedtime = (((u64)(rtc_file.savedtime_hi & 0x03FFU)) << 32) |
+                        (u64)rtc_file.savedtime_lo;
+            save_loaded = ((rtc_file.flags & PS_APP_FEATURE_RTC2_FLAG_HAS_HISTORY) != 0U) ? 1U : 0U;
+
+            ctx->rtc->ppm_cal_ppb = PsAppRuntimeFeature_ClampPpmPpb(rtc_file.ppm_cal_ppb);
+            ctx->rtc->ppm_sigma_ppb = PsAppRuntimeFeature_ClampSigmaPpb(
+                (rtc_file.ppm_sigma_ppb != 0U) ? rtc_file.ppm_sigma_ppb
+                                               : PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB);
+            if (rtc_file.base_uncert_s == 0xFFFFFFFFU) {
+                ctx->rtc->uncert_infinite = 1U;
+                ctx->rtc->base_uncert_us = 0ULL;
+            } else {
+                ctx->rtc->uncert_infinite = 0U;
+                ctx->rtc->base_uncert_us = PsAppRuntimeFeature_SecondsToUs(
+                    PsAppRuntimeFeature_ClampUncertS(rtc_file.base_uncert_s));
+            }
+            rtc_has_cal = ((rtc_file.flags & PS_APP_FEATURE_RTC2_FLAG_HAS_CAL) != 0U) ? 1U : 0U;
+            if ((rtc_has_cal != 0U) && (rtc_file.last_cal_unix != 0U)) {
+                ctx->rtc->last_cal_utc_us = PsAppRuntimeFeature_SecondsToUs(rtc_file.last_cal_unix);
+            }
+            ctx->rtc->last_saved_unix = saved_unix;
+            ctx->rtc->last_saved_time = savedtime;
+        } else {
+            xil_printf("[RTC] rtc2 invalid: magic=0x%08x ver=%u crc=0x%08x/0x%08x\r\n",
+                       (unsigned int)rtc_file.magic,
+                       (unsigned int)rtc_file.version,
+                       (unsigned int)rtc_file.crc32,
+                       (unsigned int)expect_crc);
+        }
     } else {
-        ctx->config->rtc_timestamp = 0U;
-        savedtime = 0ULL;
-        save_loaded = 0U;
+        xil_printf("[RTC] rtc2 missing/short (%s)\r\n", rtc_path[0] != '\0' ? rtc_path : "(no-path)");
     }
 
-    /* RTC 外部握手顺序必须固定：
-     * 1) 先写 shadow rtc_timestamp；
-     * 2) 再写 savedtime 输入寄存器；
-     * 3) 最后脉冲 RTC_NEW_TRIG 通知 core 采样。 */
+    if (PsAppRuntimeFeature_ReadSeedFile(&seed_unix, &seed_uncert_s, &seed_valid) == XST_SUCCESS) {
+        xil_printf("[RTC] seed unix=%u uncert=%us\r\n",
+                   (unsigned int)seed_unix,
+                   (unsigned int)seed_uncert_s);
+        PsAppRuntimeFeature_PrintRtcUnixDual("seed", seed_unix);
+    } else {
+        seed_valid = 0U;
+    }
+
+    current_unix = saved_unix;
+    if ((seed_valid != 0U) && (seed_unix > current_unix)) {
+        current_unix = seed_unix;
+    }
+    if (prev_current_unix > current_unix) {
+        current_unix = prev_current_unix;
+    }
+
+    ctx->config->rtc_timestamp = current_unix;
+    ctx->config->rtc_timestamp_saved = saved_unix;
+
+    PsAppRuntimeFeature_RtcModelInit(ctx, now_met_us, PsAppRuntimeFeature_SecondsToUs(current_unix));
+    if (seed_valid != 0U) {
+        ctx->rtc->base_uncert_us = PsAppRuntimeFeature_SecondsToUs(
+            PsAppRuntimeFeature_ClampUncertS(seed_uncert_s));
+        ctx->rtc->uncert_infinite = 0U;
+        ctx->rtc->has_last_cal = 1U;
+        ctx->rtc->last_cal_met_us = now_met_us;
+        ctx->rtc->last_cal_utc_us = PsAppRuntimeFeature_SecondsToUs(seed_unix);
+    } else {
+        /* 无可信 seed 时，墙钟误差在重启后不可观测，统一标记为未知。 */
+        ctx->rtc->uncert_infinite = 1U;
+        ctx->rtc->base_uncert_us = 0ULL;
+        ctx->rtc->has_last_cal = 0U;
+        ctx->rtc->last_cal_met_us = 0ULL;
+        ctx->rtc->last_cal_utc_us = 0ULL;
+    }
+
     PsAppRuntime_ApplyShadowConfig(ctx);
-    PsGbaRegs_WriteRtcSavedTimeIn(ctx->regs, savedtime, save_loaded);
+    PsGbaRegs_WriteRtcSavedTimeIn(ctx->regs, savedtime, 0U);
+    PsAppRuntimeFeature_DelayMs(1U);
+    if (save_loaded != 0U) {
+        PsGbaRegs_WriteRtcSavedTimeIn(ctx->regs, savedtime, 1U);
+        PsAppRuntimeFeature_DelayMs(1U);
+    }
     PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_RTC_NEW_TRIG);
+    PsAppRuntimeFeature_DelayMs(1U);
+    PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_RTC_NEW_TRIG);
+
+    ctx->feature->rtc_last_tick_ts = now_ms;
+    ctx->feature->rtc_last_persist_ts = now_ms;
+    xil_printf("[RTC] load saved=%u seed=%u current=%u history=%u file=%u\r\n",
+               (unsigned int)saved_unix,
+               (unsigned int)(seed_valid != 0U ? seed_unix : 0U),
+               (unsigned int)current_unix,
+               (unsigned int)save_loaded,
+               (unsigned int)rtc_file_valid);
+    PsAppRuntimeFeature_PrintRtcUnixDual("saved", saved_unix);
+    PsAppRuntimeFeature_PrintRtcUnixDual("current", current_unix);
 }
 
 void PsAppRuntimeFeature_InitDefaults(PsAppRuntimeContext *ctx) {
     u32 now_ms;
 
-    if ((ctx == NULL) || (ctx->feature == NULL)) {
+    if ((ctx == NULL) || (ctx->feature == NULL) || (ctx->rtc == NULL)) {
         return;
     }
 
@@ -889,6 +1571,10 @@ void PsAppRuntimeFeature_InitDefaults(PsAppRuntimeContext *ctx) {
     ctx->feature->rom_crc32 = 0U;
     ctx->feature->rom_id[0] = '\0';
     s_ps_app_feature_cheat_count = 0U;
+    memset(ctx->rtc, 0, sizeof(*ctx->rtc));
+    ctx->rtc->ppm_sigma_ppb = PS_APP_FEATURE_RTC_DEFAULT_SIGMA_PPB;
+    ctx->rtc->uncert_infinite = 1U;
+    PsAppRuntimeFeature_LoadRtcBootstrap(ctx);
     (void)PsAppRuntimeFeature_EnsureFeatureCtrl(ctx);
 }
 
@@ -911,6 +1597,7 @@ void PsAppRuntimeFeature_OnRomPreUnload(PsAppRuntimeContext *ctx) {
 
     /* save 冲刷之后再持久化 RTC，避免与 save/rom 链路争用锁时打乱关键顺序。 */
     (void)PsAppRuntimeFeature_PersistRtcOut(ctx);
+    (void)PsAppRuntimeFeature_PersistRtcGlobal(ctx);
 }
 
 void PsAppRuntimeFeature_OnRomLoaded(PsAppRuntimeContext *ctx) {
@@ -1122,24 +1809,41 @@ void PsAppRuntimeFeature_ServiceSlow(PsAppRuntimeContext *ctx) {
         ctx->feature->rumble_state = 0U;
     }
 
-    /* ROM 切换窗口内暂停 RTC 周期写：
-     * 切 ROM 本身就会触发高频 FatFs IO（save flush / rtc restore / rom read），
-     * 若此时继续每秒 tick + 周期 persist，容易放大锁竞争并诱发“切换卡死”。 */
-    if ((ctx->rom->loaded != 0U) && (ctx->rom->is_loading == 0U)) {
-        while ((now_ms - ctx->feature->rtc_last_tick_ts) >= 1000U) {
-            ctx->config->rtc_timestamp += 1U;
-            PsAppRuntime_ApplyShadowConfig(ctx);
-            PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_RTC_NEW_TRIG);
-            ctx->feature->rtc_last_tick_ts += 1000U;
-        }
+    if (ctx->rtc->model_ready != 0U) {
+        u64 now_met_us = PsAppRuntimeFeature_NowMetUs();
+        u64 utc_est_us = PsAppRuntimeFeature_RtcEstimateUtcUs(ctx->rtc, now_met_us);
+        u64 uncert_us = PsAppRuntimeFeature_RtcEstimateUncertaintyUs(ctx->rtc, now_met_us);
+        u32 current_unix = PsAppRuntimeFeature_UsToUnixSeconds(utc_est_us);
+        u8 core_accepting_rtc = (u8)((ctx->rom->loaded != 0U) && (ctx->rom->is_loading == 0U));
 
-        if ((now_ms - ctx->feature->rtc_last_persist_ts) >=
-            PS_APP_FEATURE_RTC_PERSIST_INTERVAL_MS) {
+        if (current_unix != ctx->config->rtc_timestamp) {
+            ctx->config->rtc_timestamp = current_unix;
+            PsAppRuntime_ApplyShadowConfig(ctx);
+            if (core_accepting_rtc != 0U) {
+                PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_RTC_NEW_TRIG);
+            }
+        }
+        ctx->rtc->last_current_unix = current_unix;
+        ctx->rtc->last_uncert_us = (uncert_us > 0xFFFFFFFFULL) ? 0xFFFFFFFFU : (u32)uncert_us;
+        ctx->feature->rtc_last_tick_ts = now_ms;
+    }
+
+    /* ROM 切换窗口内暂停 RTC 文件周期写：
+     * 切 ROM 本身就会触发高频 FatFs IO（save flush / rtc restore / rom read），
+     * 若此时继续周期 persist，容易放大锁竞争并诱发“切换卡死”。 */
+    if ((ctx->rom->is_loading == 0U) &&
+        ((now_ms - ctx->feature->rtc_last_persist_ts) >= PS_APP_FEATURE_RTC_PERSIST_INTERVAL_MS)) {
+        if (ctx->rom->loaded != 0U) {
             if (PsAppRuntimeFeature_PersistRtcOut(ctx) != XST_SUCCESS) {
                 xil_printf("[RTC] persist failed\r\n");
             }
-            ctx->feature->rtc_last_persist_ts = now_ms;
+        } else {
+            if ((ctx->rtc->model_ready != 0U) &&
+                (PsAppRuntimeFeature_PersistRtcGlobal(ctx) != XST_SUCCESS)) {
+                xil_printf("[RTC] global persist failed\r\n");
+            }
         }
+        ctx->feature->rtc_last_persist_ts = now_ms;
     }
 }
 
@@ -1234,11 +1938,187 @@ static void PsAppRuntimeFeature_AddCheatEntry(const PsGbaCheatCodeWords *entry) 
     s_ps_app_feature_cheat_count++;
 }
 
+static void PsAppRuntimeFeature_PrintRtcStatus(PsAppRuntimeContext *ctx) {
+    u64 now_met_us;
+    u64 utc_est_us;
+    u64 uncert_us;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL) || (ctx->config == NULL)) {
+        return;
+    }
+
+    now_met_us = PsAppRuntimeFeature_NowMetUs();
+    utc_est_us = PsAppRuntimeFeature_RtcEstimateUtcUs(ctx->rtc, now_met_us);
+    uncert_us = PsAppRuntimeFeature_RtcEstimateUncertaintyUs(ctx->rtc, now_met_us);
+    xil_printf("[RTC] status model=%u current=%u saved=%u est=%u ppm=%d sigma=%u cal=%u\r\n",
+               (unsigned int)ctx->rtc->model_ready,
+               (unsigned int)ctx->config->rtc_timestamp,
+               (unsigned int)ctx->config->rtc_timestamp_saved,
+               (unsigned int)PsAppRuntimeFeature_UsToUnixSeconds(utc_est_us),
+               (int)ctx->rtc->ppm_cal_ppb,
+               (unsigned int)ctx->rtc->ppm_sigma_ppb,
+               (unsigned int)ctx->rtc->has_last_cal);
+    PsAppRuntimeFeature_PrintRtcUnixDual("current", ctx->config->rtc_timestamp);
+    PsAppRuntimeFeature_PrintRtcUnixDual("saved", ctx->config->rtc_timestamp_saved);
+    PsAppRuntimeFeature_PrintRtcUnixDual("est", PsAppRuntimeFeature_UsToUnixSeconds(utc_est_us));
+    if ((ctx->rtc->uncert_infinite != 0U) || (uncert_us == 0xFFFFFFFFFFFFFFFFULL)) {
+        xil_printf("[RTC] uncertainty=INF last_cal_unix=%u path=%s\r\n",
+                   (unsigned int)PsAppRuntimeFeature_UsToUnixSeconds(ctx->rtc->last_cal_utc_us),
+                   ctx->rtc->path[0] != '\0' ? ctx->rtc->path : "(none)");
+    } else {
+        xil_printf("[RTC] uncertainty=+-%us (%u us) last_cal_unix=%u path=%s\r\n",
+                   (unsigned int)((uncert_us + 500000ULL) / 1000000ULL),
+                   (unsigned int)((uncert_us > 0xFFFFFFFFULL) ? 0xFFFFFFFFU : (u32)uncert_us),
+                   (unsigned int)PsAppRuntimeFeature_UsToUnixSeconds(ctx->rtc->last_cal_utc_us),
+                   ctx->rtc->path[0] != '\0' ? ctx->rtc->path : "(none)");
+    }
+    PsAppRuntimeFeature_PrintRtcUnixDual("last_cal",
+                                         PsAppRuntimeFeature_UsToUnixSeconds(ctx->rtc->last_cal_utc_us));
+}
+
+static void PsAppRuntimeFeature_RtcApplySync(PsAppRuntimeContext *ctx, u32 sync_unix, u32 uncert_s) {
+    u64 now_met_us;
+    u64 sync_utc_us;
+    u64 delta_met_us;
+    s64 delta_utc_us;
+    s64 diff_us;
+    s32 raw_ppb;
+    s32 old_ppm;
+    s32 new_ppm;
+    u32 resid_ppb;
+    u32 sigma_target;
+    u32 new_sigma;
+    u32 now_ms;
+    u32 prev_current_unix;
+    s64 denom;
+
+    if ((ctx == NULL) || (ctx->rtc == NULL) || (ctx->config == NULL) ||
+        (ctx->feature == NULL) || (ctx->regs == NULL)) {
+        return;
+    }
+
+    uncert_s = PsAppRuntimeFeature_ClampUncertS(uncert_s);
+    prev_current_unix = ctx->config->rtc_timestamp;
+    now_met_us = PsAppRuntimeFeature_NowMetUs();
+    sync_utc_us = PsAppRuntimeFeature_SecondsToUs(sync_unix);
+
+    if ((ctx->rtc->has_last_cal != 0U) &&
+        (now_met_us > ctx->rtc->last_cal_met_us) &&
+        ((now_met_us - ctx->rtc->last_cal_met_us) >= PS_APP_FEATURE_RTC_CAL_MIN_INTERVAL_US)) {
+        delta_met_us = now_met_us - ctx->rtc->last_cal_met_us;
+        delta_utc_us = (s64)sync_utc_us - (s64)ctx->rtc->last_cal_utc_us;
+        diff_us = delta_utc_us - (s64)delta_met_us;
+        if (diff_us > 9000000000000LL) {
+            diff_us = 9000000000000LL;
+        } else if (diff_us < -9000000000000LL) {
+            diff_us = -9000000000000LL;
+        }
+        denom = (s64)(delta_met_us / 1000ULL);
+        if (denom <= 0LL) {
+            denom = 1LL;
+        }
+        raw_ppb = (s32)((diff_us * 1000000LL) / denom);
+        raw_ppb = PsAppRuntimeFeature_ClampPpmPpb(raw_ppb);
+
+        old_ppm = ctx->rtc->ppm_cal_ppb;
+        new_ppm = PsAppRuntimeFeature_ClampPpmPpb((old_ppm * 3 + raw_ppb) / 4);
+        ctx->rtc->ppm_cal_ppb = new_ppm;
+
+        resid_ppb = (u32)((raw_ppb >= old_ppm) ? (raw_ppb - old_ppm) : (old_ppm - raw_ppb));
+        sigma_target = resid_ppb * 2U;
+        if (sigma_target < PS_APP_FEATURE_RTC_SIGMA_MIN_PPB) {
+            sigma_target = PS_APP_FEATURE_RTC_SIGMA_MIN_PPB;
+        }
+        new_sigma = ((ctx->rtc->ppm_sigma_ppb * 3U) + sigma_target) / 4U;
+        ctx->rtc->ppm_sigma_ppb = PsAppRuntimeFeature_ClampSigmaPpb(new_sigma);
+
+        xil_printf("[RTC] sync learn raw_ppb=%d old_ppb=%d new_ppb=%d sigma=%u\r\n",
+                   (int)raw_ppb,
+                   (int)old_ppm,
+                   (int)ctx->rtc->ppm_cal_ppb,
+                   (unsigned int)ctx->rtc->ppm_sigma_ppb);
+    } else if ((ctx->rtc->has_last_cal != 0U) &&
+               (now_met_us > ctx->rtc->last_cal_met_us)) {
+        xil_printf("[RTC] sync learn skipped: delta=%us (<300s)\r\n",
+                   (unsigned int)((now_met_us - ctx->rtc->last_cal_met_us) / 1000000ULL));
+    }
+
+    PsAppRuntimeFeature_RtcModelInit(ctx, now_met_us, sync_utc_us);
+    ctx->rtc->base_uncert_us = PsAppRuntimeFeature_SecondsToUs(uncert_s);
+    ctx->rtc->uncert_infinite = 0U;
+    ctx->rtc->has_last_cal = 1U;
+    ctx->rtc->last_cal_met_us = now_met_us;
+    ctx->rtc->last_cal_utc_us = sync_utc_us;
+    ctx->rtc->last_uncert_us = (ctx->rtc->base_uncert_us > 0xFFFFFFFFULL)
+                                   ? 0xFFFFFFFFU
+                                   : (u32)ctx->rtc->base_uncert_us;
+
+    ctx->config->rtc_timestamp = sync_unix;
+    PsAppRuntime_ApplyShadowConfig(ctx);
+    PsGbaRegs_TriggerFeatureAction(ctx->regs, GBA_FEATURE_ACTION_RTC_NEW_TRIG);
+    if (PsAppRuntimeFeature_PersistRtcGlobal(ctx) != XST_SUCCESS) {
+        xil_printf("[RTC] global persist failed after sync\r\n");
+    }
+
+    now_ms = PsAppRuntimeFeature_NowMs();
+    ctx->feature->rtc_last_tick_ts = now_ms;
+    ctx->feature->rtc_last_persist_ts = now_ms;
+    xil_printf("[RTC] sync applied unix=%u uncert=%us%s\r\n",
+               (unsigned int)sync_unix,
+               (unsigned int)uncert_s,
+               ((sync_unix < prev_current_unix) ? " (backstep)" : ""));
+    PsAppRuntimeFeature_PrintRtcUnixDual("sync", sync_unix);
+}
+
 u8 PsAppRuntimeFeature_HandleConsole(PsAppRuntimeContext *ctx, const char *cmd) {
     char *arg1;
 
     if ((ctx == NULL) || (ctx->feature == NULL) || (cmd == NULL)) {
         return 0U;
+    }
+
+    if (strcmp(cmd, "rtc") == 0) {
+        char *sub = strtok(NULL, " \t");
+        u8 ok;
+        u32 sync_unix;
+        u32 uncert_s;
+
+        if ((sub == NULL) || (strcmp(sub, "status") == 0)) {
+            PsAppRuntimeFeature_PrintRtcStatus(ctx);
+            return 1U;
+        }
+
+        if (strcmp(sub, "sync") == 0) {
+            char *unix_text = strtok(NULL, " \t");
+            char *uncert_text = strtok(NULL, " \t");
+
+            sync_unix = PsAppRuntimeFeature_ParseU32(unix_text, &ok);
+            if (ok == 0U) {
+                xil_printf("[CMD] usage: rtc status | rtc sync <unix> [uncert_s] | rtc <unix>\r\n");
+                return 1U;
+            }
+            uncert_s = PS_APP_FEATURE_RTC_DEFAULT_SYNC_UNCERT_S;
+            if (uncert_text != NULL) {
+                uncert_s = PsAppRuntimeFeature_ParseU32(uncert_text, &ok);
+                if (ok == 0U) {
+                    xil_printf("[CMD] usage: rtc sync <unix> [uncert_s]\r\n");
+                    return 1U;
+                }
+            }
+            PsAppRuntimeFeature_RtcApplySync(ctx, sync_unix, uncert_s);
+            return 1U;
+        }
+
+        sync_unix = PsAppRuntimeFeature_ParseU32(sub, &ok);
+        if (ok != 0U) {
+            PsAppRuntimeFeature_RtcApplySync(ctx,
+                                             sync_unix,
+                                             PS_APP_FEATURE_RTC_DEFAULT_SYNC_UNCERT_S);
+            return 1U;
+        }
+
+        xil_printf("[CMD] usage: rtc status | rtc sync <unix> [uncert_s] | rtc <unix>\r\n");
+        return 1U;
     }
 
     if (strcmp(cmd, "rewind") == 0) {

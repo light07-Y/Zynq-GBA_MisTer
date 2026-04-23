@@ -180,6 +180,7 @@ void PsAppDiag_PrintConfigReadback(PsAppDiagContext *ctx, const char *tag) {
     u32 max_pak;
     u32 cycle;
     u32 rtc;
+    u32 rtc_saved;
     u32 sw_reset;
     u32 rom_status;
     u32 irq_en;
@@ -196,18 +197,20 @@ void PsAppDiag_PrintConfigReadback(PsAppDiagContext *ctx, const char *tag) {
     max_pak = PsGbaRegs_Read(ctx->regs, GBA_REG_MAX_PAK_ADDR);
     cycle = PsGbaRegs_Read(ctx->regs, GBA_REG_CYCLE_PRECALC);
     rtc = PsGbaRegs_Read(ctx->regs, GBA_REG_RTC_TIMESTAMP);
+    rtc_saved = PsGbaRegs_Read(ctx->regs, GBA_REG_RTC_TIMESTAMP_SAVED);
     sw_reset = PsGbaRegs_Read(ctx->regs, GBA_REG_SW_RESET);
     rom_status = PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS);
     irq_en = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_EN);
     display_frame = PsGbaRegs_Read(ctx->regs, GBA_REG_DISPLAY_FRAME);
 
-    xil_printf("[CFG] %s ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x reset=%u rombusy=%u irq_en=0x%x disp=%u\r\n",
+    xil_printf("[CFG] %s ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x rtc_saved=0x%08x reset=%u rombusy=%u irq_en=0x%x disp=%u\r\n",
                label,
                (unsigned int)ctrl,
                (unsigned int)(keys & 0x3FFU),
                (unsigned int)max_pak,
                (unsigned int)(cycle & 0xFFFFU),
                (unsigned int)rtc,
+               (unsigned int)rtc_saved,
                (unsigned int)(sw_reset & 0x1U),
                (unsigned int)(rom_status & 0x1U),
                (unsigned int)(irq_en & 0x3U),
@@ -545,6 +548,7 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     u32 max_pak;
     u32 cycle;
     u32 rtc;
+    u32 rtc_saved;
     u32 status0;
     u32 status1;
     u32 sw_reset;
@@ -569,6 +573,7 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     max_pak = PsGbaRegs_Read(ctx->regs, GBA_REG_MAX_PAK_ADDR);
     cycle = PsGbaRegs_Read(ctx->regs, GBA_REG_CYCLE_PRECALC);
     rtc = PsGbaRegs_Read(ctx->regs, GBA_REG_RTC_TIMESTAMP);
+    rtc_saved = PsGbaRegs_Read(ctx->regs, GBA_REG_RTC_TIMESTAMP_SAVED);
     status0 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS0);
     status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
     sw_reset = PsGbaRegs_Read(ctx->regs, GBA_REG_SW_RESET);
@@ -584,22 +589,24 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
     gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
 
-    xil_printf("[PROBE] shadow ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x irq_en=0x%x rom_loaded=%u rom_busy=%u path=%s\r\n",
+    xil_printf("[PROBE] shadow ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x rtc_saved=0x%08x irq_en=0x%x rom_loaded=%u rom_busy=%u path=%s\r\n",
                (unsigned int)ctx->config->ctrl,
                (unsigned int)(ctx->config->keys & 0x3FFU),
                (unsigned int)ctx->config->max_pak_addr,
                (unsigned int)ctx->config->cycle_precalc,
                (unsigned int)ctx->config->rtc_timestamp,
+               (unsigned int)ctx->config->rtc_timestamp_saved,
                (unsigned int)(ctx->config->irq_enable & 0x3U),
                (unsigned int)ctx->rom->loaded,
                (unsigned int)ctx->rom->is_loading,
                ctx->rom->path[0] != '\0' ? ctx->rom->path : "(none)");
-    xil_printf("[PROBE] raw ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x reset=%u rom=0x%08x irq_en=0x%x irq_sts=0x%x\r\n",
+    xil_printf("[PROBE] raw ctrl=0x%08x keys=0x%03x maxpak=0x%08x cycle=%u rtc=0x%08x rtc_saved=0x%08x reset=%u rom=0x%08x irq_en=0x%x irq_sts=0x%x\r\n",
                (unsigned int)ctrl,
                (unsigned int)(keys & 0x3FFU),
                (unsigned int)max_pak,
                (unsigned int)(cycle & 0xFFFFU),
                (unsigned int)rtc,
+               (unsigned int)rtc_saved,
                (unsigned int)(sw_reset & 0x1U),
                (unsigned int)rom_status,
                (unsigned int)(irq_en & 0x3U),

@@ -19,7 +19,8 @@ void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
                             u32 keys,
                             u32 max_pak_addr,
                             u32 cycle_precalc,
-                            u32 rtc_timestamp) {
+                            u32 rtc_timestamp,
+                            u32 rtc_timestamp_saved) {
     if (ctx == 0) {
         return;
     }
@@ -29,6 +30,7 @@ void PsGbaRegs_CommitConfig(PsGbaRegs *ctx,
     Xil_Out32(ctx->base_addr + GBA_REG_MAX_PAK_ADDR, max_pak_addr & 0x1FFFFFFU);
     Xil_Out32(ctx->base_addr + GBA_REG_CYCLE_PRECALC, cycle_precalc & 0xFFFFU);
     Xil_Out32(ctx->base_addr + GBA_REG_RTC_TIMESTAMP, rtc_timestamp);
+    Xil_Out32(ctx->base_addr + GBA_REG_RTC_TIMESTAMP_SAVED, rtc_timestamp_saved);
 
     Xil_Out32(ctx->base_addr + GBA_REG_COMMIT, 1U);
 }
@@ -48,6 +50,7 @@ void PsGbaRegs_ApplyBootDefaults(PsGbaRegs *ctx) {
                            0U,
                            0U,
                            100U,
+                           0U,
                            0U);
 
     Xil_Out32(ctx->base_addr + GBA_REG_SW_RESET, 0U);
