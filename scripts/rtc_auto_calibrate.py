@@ -1,55 +1,47 @@
 #!/usr/bin/env python3
-"""
-Auto RTC calibrator for Zynq-GBA serial console.
-
-It periodically sends:
-  rtc sync <unix> <uncert_s>
-  rtc status
-
-Unix time is taken from host UTC clock (time.time()).
-"""
+"""交互式 RTC 自动校准工具。"""
 
 from __future__ import annotations
 
-import argparse
 import datetime as dt
 import re
-import sys
 import time
-from typing import Any, List
+from typing import Any
 
 
+BAUD_RATE = 115200
+READ_TIMEOUT_S = 1.2
+STARTUP_WAIT_S = 1.0
+UNCERT_S = 1
 BJ_TZ = dt.timezone(dt.timedelta(hours=8), name="UTC+08")
-
-
-def utc_now_text() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-
-
-def bj_now_text() -> str:
-    return dt.datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S %z")
-
-
-def unix_to_utc_text(unix_s: int) -> str:
-    try:
-        return dt.datetime.fromtimestamp(unix_s, tz=dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
-    except (OverflowError, OSError, ValueError):
-        return "invalid"
 
 
 def unix_to_bj_text(unix_s: int) -> str:
     try:
         return dt.datetime.fromtimestamp(unix_s, tz=dt.timezone.utc).astimezone(BJ_TZ).strftime(
-            "%Y-%m-%d %H:%M:%S %z"
+            "%Y-%m-%d %H:%M:%S"
         )
     except (OverflowError, OSError, ValueError):
-        return "invalid"
+        return "无效时间"
 
 
-def read_serial_lines(ser: Any, timeout_s: float) -> List[str]:
-    """Read available lines up to timeout."""
-    lines: List[str] = []
-    end_time = time.monotonic() + max(timeout_s, 0.0)
+def host_bj_text() -> str:
+    return dt.datetime.now(BJ_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def wait_any_key() -> None:
+    print("\n按任意键退出程序...")
+    try:
+        import msvcrt
+
+        msvcrt.getch()
+    except ImportError:
+        input()
+
+
+def read_serial_lines(ser: Any, timeout_s: float) -> list[str]:
+    lines: list[str] = []
+    end_time = time.monotonic() + timeout_s
     while time.monotonic() < end_time:
         raw = ser.readline()
         if raw:
@@ -57,217 +49,102 @@ def read_serial_lines(ser: Any, timeout_s: float) -> List[str]:
             if text:
                 lines.append(text)
         else:
-            # Avoid busy-loop on short timeout.
             time.sleep(0.02)
     return lines
 
 
-def send_cmd(ser: Any, cmd: str, read_timeout_s: float) -> List[str]:
+def send_cmd(ser: Any, cmd: str, read_timeout_s: float = READ_TIMEOUT_S) -> list[str]:
     ser.write((cmd + "\r\n").encode("utf-8"))
     ser.flush()
     return read_serial_lines(ser, read_timeout_s)
 
 
-def print_lines(tag: str, lines: List[str]) -> None:
-    for line in lines:
-        print(f"{tag} {line}")
-
-
-def print_status_time_decode(lines: List[str]) -> None:
-    pattern = re.compile(r"\b(current|est|last_cal_unix)=([0-9]+)\b")
-    fields = {}
-
-    for line in lines:
-        for key, value_text in pattern.findall(line):
-            try:
-                fields[key] = int(value_text)
-            except ValueError:
-                continue
-
-    if not fields:
-        return
-
-    print("  [BJ] decoded unix fields:")
-    for key in ("current", "est", "last_cal_unix"):
-        if key in fields:
-            unix_s = fields[key]
-            print(
-                f"    {key}={unix_s} | UTC={unix_to_utc_text(unix_s)} | "
-                f"BJ={unix_to_bj_text(unix_s)}"
-            )
-
-
-def one_sync(ser: Any, uncert_s: int, read_timeout_s: float, with_status: bool) -> None:
-    unix_now = int(time.time())
-    cmd = f"rtc sync {unix_now} {uncert_s}"
-    print(
-        f"[UTC {utc_now_text()} | BJ {bj_now_text()}] -> {cmd} "
-        f"(BJ target {unix_to_bj_text(unix_now)})"
-    )
-    out = send_cmd(ser, cmd, read_timeout_s)
-    print_lines("  ", out)
-
-    if with_status:
-        print(f"[UTC {utc_now_text()} | BJ {bj_now_text()}] -> rtc status")
-        status_out = send_cmd(ser, "rtc status", read_timeout_s)
-        print_lines("  ", status_out)
-        print_status_time_decode(status_out)
-
-
-def list_available_ports() -> None:
+def choose_serial_port() -> str | None:
     try:
         from serial.tools import list_ports
     except ImportError:
-        print(
-            "Missing dependency: pyserial\n"
-            "Install with: pip install pyserial",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
+        print("错误：未安装 pyserial，请先执行：pip install pyserial")
+        return None
 
     ports = list(list_ports.comports())
     if not ports:
-        print("No serial ports found.")
-        return
-    print("Available serial ports:")
-    for p in ports:
-        desc = p.description or ""
-        hwid = p.hwid or ""
-        print(f"  {p.device}  {desc}  {hwid}")
+        print("未发现可用串口。")
+        return None
+
+    print("可用串口：")
+    for index, port in enumerate(ports, start=1):
+        description = port.description or "无描述"
+        print(f"  {index}. {port.device}  {description}")
+
+    while True:
+        choice = input("\n请输入要使用的串口编号：").strip()
+        try:
+            index = int(choice)
+        except ValueError:
+            print("输入无效，请输入列表中的数字。")
+            continue
+
+        if 1 <= index <= len(ports):
+            return ports[index - 1].device
+
+        print("编号超出范围，请重新输入。")
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Automatically calibrate target RTC through serial console."
-    )
-    parser.add_argument("--port", help="Serial port, e.g. COM5 or /dev/ttyUSB0")
-    parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
-    parser.add_argument(
-        "--interval",
-        type=float,
-        default=600.0,
-        help="Calibration interval seconds (default: 600)",
-    )
-    parser.add_argument(
-        "--uncert",
-        type=int,
-        default=1,
-        help="uncert_s for 'rtc sync <unix> <uncert_s>' (default: 1)",
-    )
-    parser.add_argument(
-        "--read-timeout",
-        type=float,
-        default=1.2,
-        help="Seconds to collect command output after each send (default: 1.2)",
-    )
-    parser.add_argument(
-        "--startup-wait",
-        type=float,
-        default=1.0,
-        help="Wait seconds after opening serial before first command (default: 1.0)",
-    )
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run one calibration only, then exit",
-    )
-    parser.add_argument(
-        "--no-status",
-        action="store_true",
-        help="Do not send 'rtc status' after each sync",
-    )
-    parser.add_argument(
-        "--list-ports",
-        action="store_true",
-        help="List local serial ports and exit",
-    )
-    return parser.parse_args()
+def board_bj_text_from_status(lines: list[str]) -> str | None:
+    pattern = re.compile(r"\b(?:current|est)=([0-9]+)\b")
+    for line in lines:
+        match = pattern.search(line)
+        if match:
+            return unix_to_bj_text(int(match.group(1)))
+    return None
 
 
-def main() -> int:
-    args = parse_args()
-
-    if args.list_ports:
-        list_available_ports()
-        return 0
-
-    if not args.port:
-        print("Error: --port is required unless --list-ports is used.", file=sys.stderr)
-        return 2
-
-    if args.interval <= 0:
-        print("Error: --interval must be > 0.", file=sys.stderr)
-        return 2
-    if args.uncert < 0:
-        print("Error: --uncert must be >= 0.", file=sys.stderr)
-        return 2
-    if args.interval < 300:
-        print(
-            "Warning: interval < 300s. Firmware drift learning is configured to update"
-            " only when sync interval >= 300s.",
-            file=sys.stderr,
-        )
-
-    print(
-        f"Opening {args.port} @ {args.baud} baud, interval={args.interval}s, "
-        f"uncert={args.uncert}s"
-    )
-
+def calibrate(port: str) -> int:
     try:
         import serial
     except ImportError:
-        print(
-            "Missing dependency: pyserial\n"
-            "Install with: pip install pyserial",
-            file=sys.stderr,
-        )
+        print("错误：未安装 pyserial，请先执行：pip install pyserial")
         return 2
 
+    print(f"\n正在打开串口 {port}，波特率 {BAUD_RATE}...")
     try:
-        with serial.Serial(
-            port=args.port,
-            baudrate=args.baud,
-            timeout=0.12,
-            write_timeout=1.0,
-        ) as ser:
-            # Clean stale bytes so logs are from this run.
+        with serial.Serial(port=port, baudrate=BAUD_RATE, timeout=0.12, write_timeout=1.0) as ser:
             ser.reset_input_buffer()
             ser.reset_output_buffer()
+            time.sleep(STARTUP_WAIT_S)
 
-            if args.startup_wait > 0:
-                time.sleep(args.startup_wait)
-
-            # Nudge prompt once, then drain.
             ser.write(b"\r\n")
             ser.flush()
             _ = read_serial_lines(ser, 0.5)
 
-            next_tick = time.monotonic()
-            while True:
-                one_sync(
-                    ser=ser,
-                    uncert_s=args.uncert,
-                    read_timeout_s=args.read_timeout,
-                    with_status=not args.no_status,
-                )
-                if args.once:
-                    break
+            unix_now = int(time.time())
+            print("正在校准开发板 RTC...")
+            _ = send_cmd(ser, f"rtc sync {unix_now} {UNCERT_S}")
+            status_lines = send_cmd(ser, "rtc status")
 
-                next_tick += args.interval
-                sleep_s = next_tick - time.monotonic()
-                if sleep_s > 0:
-                    time.sleep(sleep_s)
-                else:
-                    # If delayed, avoid drift by resyncing schedule from now.
-                    next_tick = time.monotonic()
-    except KeyboardInterrupt:
-        print("\nStopped by user.")
-        return 0
+            board_bj = board_bj_text_from_status(status_lines)
+            print("\n校准完成。")
+            print(f"上位机北京时间：{host_bj_text()}")
+            if board_bj is not None:
+                print(f"开发板本机北京时间：{board_bj}")
+            else:
+                print("开发板本机北京时间：未能从 rtc status 返回中解析")
     except serial.SerialException as exc:
-        print(f"Serial error: {exc}", file=sys.stderr)
+        print(f"串口错误：{exc}")
         return 1
 
     return 0
+
+
+def main() -> int:
+    port = choose_serial_port()
+    if port is None:
+        wait_any_key()
+        return 1
+
+    result = calibrate(port)
+    wait_any_key()
+    return result
 
 
 if __name__ == "__main__":

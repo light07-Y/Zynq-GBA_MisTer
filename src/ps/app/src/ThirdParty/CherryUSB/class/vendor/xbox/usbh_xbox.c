@@ -12,6 +12,24 @@ USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t g_xbox_buf[128];
 
 static struct usbh_xbox g_xbox_class[CONFIG_USBHOST_MAX_XBOX_CLASS];
 static uint32_t g_devinuse = 0;
+static const uint16_t xbox_8bitdo_relaxed_id_table[][2];
+static const uint16_t xbox_switch_hid_id_table[][2];
+
+static uint8_t usbh_xbox_match_vid_pid(const uint16_t id_table[][2], uint16_t vid, uint16_t pid)
+{
+    uint32_t i;
+
+    if (id_table == NULL) {
+        return 0U;
+    }
+
+    for (i = 0U; (id_table[i][0] != 0U) || (id_table[i][1] != 0U); ++i) {
+        if ((id_table[i][0] == vid) && (id_table[i][1] == pid)) {
+            return 1U;
+        }
+    }
+    return 0U;
+}
 
 static struct usbh_xbox *usbh_xbox_class_alloc(void)
 {
@@ -43,6 +61,11 @@ int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
     struct usb_endpoint_descriptor *ep_desc;
     const struct usb_interface_descriptor *intf_desc;
     uint8_t int_in_found = 0U;
+    const char *bind_mode;
+    uint8_t ep_in_addr;
+    uint8_t ep_out_addr;
+    uint8_t ep_in_interval;
+    uint8_t ep_out_interval;
 
     struct usbh_xbox *xbox_class = usbh_xbox_class_alloc();
     if (xbox_class == NULL) {
@@ -71,7 +94,13 @@ int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
     }
 
     if (int_in_found == 0U) {
-        USB_LOG_ERR("XBOX class requires at least one interrupt IN endpoint\r\n");
+        USB_LOG_ERR("XBOX class requires interrupt IN endpoint VID:0x%04x PID:0x%04x intf:%u cls:%02x/%02x/%02x\r\n",
+                    hport->device_desc.idVendor,
+                    hport->device_desc.idProduct,
+                    intf,
+                    intf_desc->bInterfaceClass,
+                    intf_desc->bInterfaceSubClass,
+                    intf_desc->bInterfaceProtocol);
         usbh_xbox_class_free(xbox_class);
         hport->config.intf[intf].priv = NULL;
         return -USB_ERR_INVAL;
@@ -79,17 +108,45 @@ int usbh_xbox_connect(struct usbh_hubport *hport, uint8_t intf)
 
     snprintf(hport->config.intf[intf].devname, CONFIG_USBHOST_DEV_NAMELEN, DEV_FORMAT, xbox_class->minor);
 
-    if ((intf_desc->bInterfaceClass != USB_DEVICE_CLASS_VEND_SPECIFIC) ||
-        (intf_desc->bInterfaceSubClass != 0x5d) ||
-        (intf_desc->bInterfaceProtocol != 0x01)) {
-        USB_LOG_WRN("XBOX relaxed bind VID:0x%04x PID:0x%04x intf:%u cls:%02x/%02x/%02x\r\n",
-                    hport->device_desc.idVendor,
-                    hport->device_desc.idProduct,
-                    intf,
-                    intf_desc->bInterfaceClass,
-                    intf_desc->bInterfaceSubClass,
-                    intf_desc->bInterfaceProtocol);
+    ep_in_addr = (xbox_class->intin != NULL) ? xbox_class->intin->bEndpointAddress : 0U;
+    ep_out_addr = (xbox_class->intout != NULL) ? xbox_class->intout->bEndpointAddress : 0U;
+    ep_in_interval = (xbox_class->intin != NULL) ? xbox_class->intin->bInterval : 0U;
+    ep_out_interval = (xbox_class->intout != NULL) ? xbox_class->intout->bInterval : 0U;
+
+    if (usbh_xbox_match_vid_pid(xbox_8bitdo_relaxed_id_table,
+                                hport->device_desc.idVendor,
+                                hport->device_desc.idProduct) != 0U) {
+        bind_mode = "known 8BitDo";
+    } else if ((intf_desc->bInterfaceClass == USB_DEVICE_CLASS_HID) &&
+               (usbh_xbox_match_vid_pid(xbox_switch_hid_id_table,
+                                        hport->device_desc.idVendor,
+                                        hport->device_desc.idProduct) != 0U)) {
+        bind_mode = "switch HID fallback";
+    } else if ((intf_desc->bInterfaceClass == USB_DEVICE_CLASS_VEND_SPECIFIC) &&
+               (intf_desc->bInterfaceSubClass == 0x5dU) &&
+               (intf_desc->bInterfaceProtocol == 0x01U)) {
+        bind_mode = "standard XInput";
+    } else {
+        bind_mode = "vendor XInput fallback";
     }
+
+    USB_LOG_INFO("XBOX bind mode=%s VID:0x%04x PID:0x%04x intf:%u cls:%02x/%02x/%02x ep_in:0x%02x@%u ep_out:0x%02x@%u\r\n",
+                 bind_mode,
+                 hport->device_desc.idVendor,
+                 hport->device_desc.idProduct,
+                 intf,
+                 intf_desc->bInterfaceClass,
+                 intf_desc->bInterfaceSubClass,
+                 intf_desc->bInterfaceProtocol,
+                 ep_in_addr,
+                 ep_in_interval,
+                 ep_out_addr,
+                 ep_out_interval);
+    (void)bind_mode;
+    (void)ep_in_addr;
+    (void)ep_out_addr;
+    (void)ep_in_interval;
+    (void)ep_out_interval;
 
     USB_LOG_INFO("Register XBOX Class:%s\r\n", hport->config.intf[intf].devname);
 
@@ -275,6 +332,12 @@ static const uint16_t xbox_8bitdo_relaxed_id_table[][2] = {
     { 0x0000, 0x0000 }  // end of list
 };
 
+/* G30S TE 在 Switch 模式常见枚举为 057E:2009 (HID). */
+static const uint16_t xbox_switch_hid_id_table[][2] = {
+    { 0x057e, 0x2009 }, // Nintendo Switch Pro compatible profile
+    { 0x0000, 0x0000 }  // end of list
+};
+
 CLASS_INFO_DEFINE const struct usbh_class_info xbox_custom_class_info = {
     .match_flags = USB_CLASS_MATCH_VID_PID | USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_SUBCLASS | USB_CLASS_MATCH_INTF_PROTOCOL,
     .bInterfaceClass = USB_DEVICE_CLASS_VEND_SPECIFIC,
@@ -303,6 +366,39 @@ CLASS_INFO_DEFINE const struct usbh_class_info xbox_generic_class_info = {
     .bInterfaceSubClass = 0x5d,
     .bInterfaceProtocol = 0x01,
     .id_table = NULL,
+    .class_driver = &xbox_class_driver
+};
+#endif
+
+#if defined(CONFIG_USBHOST_XBOX_VENDOR_FALLBACK_MATCH) && (CONFIG_USBHOST_XBOX_VENDOR_FALLBACK_MATCH == 1)
+/*
+ * 紧急兼容兜底：
+ * 某些接收器在 XInput 模式下不会稳定上报 FF/5D/01，而是 vendor-specific + interface 0。
+ * 这里允许 xbox class 先接管，再由中断端点检查和上层解析做二次过滤。
+ */
+CLASS_INFO_DEFINE const struct usbh_class_info xbox_vendor_fallback_class_info = {
+    .match_flags = USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_NUM,
+    .bInterfaceClass = USB_DEVICE_CLASS_VEND_SPECIFIC,
+    .bInterfaceSubClass = 0x00,
+    .bInterfaceProtocol = 0x00,
+    .bInterfaceNumber = 0x00,
+    .id_table = NULL,
+    .class_driver = &xbox_class_driver
+};
+#endif
+
+#if defined(CONFIG_USBHOST_XBOX_SWITCH_HID_MATCH) && (CONFIG_USBHOST_XBOX_SWITCH_HID_MATCH == 1)
+/*
+ * 紧急兼容：部分接收器在无线模式下会枚举成 Switch Pro HID (057E:2009)。
+ * 先接入现有输入链路，后续由解析器区分具体报告格式。
+ */
+CLASS_INFO_DEFINE const struct usbh_class_info xbox_switch_hid_class_info = {
+    .match_flags = USB_CLASS_MATCH_VID_PID | USB_CLASS_MATCH_INTF_CLASS | USB_CLASS_MATCH_INTF_NUM,
+    .bInterfaceClass = USB_DEVICE_CLASS_HID,
+    .bInterfaceSubClass = 0x00,
+    .bInterfaceProtocol = 0x00,
+    .bInterfaceNumber = 0x00,
+    .id_table = xbox_switch_hid_id_table,
     .class_driver = &xbox_class_driver
 };
 #endif

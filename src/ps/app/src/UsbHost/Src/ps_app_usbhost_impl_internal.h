@@ -34,6 +34,7 @@ extern "C" {
 
 #define PS_APP_USBHOST_BUS_ID            0U
 #define PS_APP_USBHOST_INTIN_BUFFER_SIZE 64U
+#define PS_APP_USBHOST_INTOUT_BUFFER_SIZE 64U
 #define PS_APP_USBHOST_ULPI_TIMEOUT_ITER 500000U
 #define PS_APP_USBHOST_PORT_RESET_TIMEOUT_MS 100U
 #define PS_APP_USBHOST_ENUM_MAX_RETRY 5U
@@ -57,6 +58,12 @@ extern "C" {
  * 这里给“逻辑断连”留一个确认窗口，避免刚连上就被误判为 detached。
  */
 #define PS_APP_USBHOST_DETACH_DEFER_TICKS 500U
+
+#define PS_APP_USBHOST_BIND_MODE_NONE             0U
+#define PS_APP_USBHOST_BIND_MODE_KNOWN_8BITDO     1U
+#define PS_APP_USBHOST_BIND_MODE_STANDARD_XINPUT  2U
+#define PS_APP_USBHOST_BIND_MODE_VENDOR_FALLBACK  3U
+#define PS_APP_USBHOST_BIND_MODE_SWITCH_HID       4U
 
 #define PS_APP_USBHOST_ULPI_ADDR_SHIFT 16U
 #define PS_APP_USBHOST_ULPI_DATRD_SHIFT 8U
@@ -151,6 +158,26 @@ typedef struct PsAppUsbHostImplContext {
     u32 detach_defer_ticks;
     /* 每次 attach 最多执行一次“首包兜底 sideband”，避免重复触发重枚举。 */
     u8 sideband_attempted_this_attach;
+    /* 粘性诊断信息：即使当前已断开，也保留最近一次可识别链路特征。 */
+    u16 sticky_last_vid;
+    u16 sticky_last_pid;
+    u8 sticky_last_intf;
+    u8 sticky_last_class;
+    u8 sticky_last_subclass;
+    u8 sticky_last_protocol;
+    u8 sticky_last_ep_in;
+    u8 sticky_last_ep_out;
+    u8 sticky_last_bind_mode;
+    u8 sticky_last_speed;
+    u8 sticky_last_event;
+    u8 sticky_last_event_hub;
+    u8 sticky_last_event_port;
+    u8 sticky_last_event_intf;
+    u8 sticky_last_event_phy_ccs;
+    u8 sticky_first_report_valid;
+    u8 sticky_first_report_len;
+    u8 sticky_first_report_dump_len;
+    u8 sticky_first_report[16];
 } PsAppUsbHostImplContext;
 
 PsAppUsbHostImplContext *PsAppUsbHost_ImplGetContext(void);
@@ -183,6 +210,8 @@ XStatus PsAppUsbHost_SubmitInterruptOut(PsAppUsbHostImplContext *impl_ctx,
                                         u32 timeout_ms);
 XStatus PsAppUsbHost_Send8BitDoStartupSequence(PsAppUsbHostImplContext *impl_ctx,
                                                struct usbh_xbox *xbox_class);
+XStatus PsAppUsbHost_SendSwitchHidStartupSequence(PsAppUsbHostImplContext *impl_ctx,
+                                                  struct usbh_xbox *xbox_class);
 void PsAppUsbHost_OnXboxRun(PsAppUsbHostImplContext *impl_ctx, struct usbh_xbox *xbox_class);
 void PsAppUsbHost_OnXboxStop(PsAppUsbHostImplContext *impl_ctx, struct usbh_xbox *xbox_class);
 

@@ -37,6 +37,16 @@
  * class=0xFF, subclass=0x5D, protocol=0x01
  */
 #define CONFIG_USBHOST_XBOX_GENERIC_MATCH    1
+/*
+ * 紧急兼容兜底：
+ * 允许 vendor-specific + interface 0 的未知设备先进入 xbox class，
+ * 再由端点检查与上层报告解析决定是否可用。
+ */
+#define CONFIG_USBHOST_XBOX_VENDOR_FALLBACK_MATCH 1
+/*
+ * 紧急兼容：支持 Switch Pro HID 形态 (VID/PID 057E:2009) 进入输入链路。
+ */
+#define CONFIG_USBHOST_XBOX_SWITCH_HID_MATCH 1
 
 #ifndef CONFIG_USBHOST_PSC_PRIO
 #define CONFIG_USBHOST_PSC_PRIO 2

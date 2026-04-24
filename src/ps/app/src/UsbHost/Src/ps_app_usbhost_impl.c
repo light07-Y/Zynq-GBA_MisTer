@@ -3,6 +3,7 @@
 #include "UsbHost/Src/ps_app_usbhost_internal.h"
 
 #include <stdint.h>
+#include <string.h>
 
 #include "xil_io.h"
 #include "xil_printf.h"
@@ -13,7 +14,7 @@
 
 static PsAppUsbHostImplContext *s_ps_app_usbhost_impl_context_ptr = NULL;
 static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 s_ps_app_usbhost_int_in_report_buffer[PS_APP_USBHOST_INTIN_BUFFER_SIZE];
-static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 s_ps_app_usbhost_int_out_report_buffer[PS_XINPUT_REPORT_SIZE_OUTPUT];
+static USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX u8 s_ps_app_usbhost_int_out_report_buffer[PS_APP_USBHOST_INTOUT_BUFFER_SIZE];
 /* 每次调整恢复状态机后递增该标签，便于现场日志确认是否跑到最新固件。 */
 #define PS_APP_USBH_RECOVERY_BUILD_TAG "2026-04-22-r6"
 /*
@@ -28,7 +29,7 @@ static PsAppUsbHostImplContext s_ps_app_usbhost_impl_context = {
     .int_in_report_buffer_ptr = s_ps_app_usbhost_int_in_report_buffer,
     .int_out_report_buffer_ptr = s_ps_app_usbhost_int_out_report_buffer,
     .int_in_report_buffer_size = PS_APP_USBHOST_INTIN_BUFFER_SIZE,
-    .int_out_report_buffer_size = PS_XINPUT_REPORT_SIZE_OUTPUT,
+    .int_out_report_buffer_size = PS_APP_USBHOST_INTOUT_BUFFER_SIZE,
     .last_portsc = 0U,
     .force_scan_pending = 0U,
     .recover_cooldown_ticks = 0U,
@@ -47,6 +48,43 @@ static PsAppUsbHostImplContext s_ps_app_usbhost_impl_context = {
     .detach_defer_ticks = 0U,
     .sideband_attempted_this_attach = 0U
 };
+
+static const char *PsAppUsbHost_BindModeName(u8 bind_mode)
+{
+    switch (bind_mode) {
+        case PS_APP_USBHOST_BIND_MODE_KNOWN_8BITDO:
+            return "known-8bitdo";
+        case PS_APP_USBHOST_BIND_MODE_STANDARD_XINPUT:
+            return "standard-xinput";
+        case PS_APP_USBHOST_BIND_MODE_VENDOR_FALLBACK:
+            return "vendor-fallback";
+        case PS_APP_USBHOST_BIND_MODE_SWITCH_HID:
+            return "switch-hid";
+        case PS_APP_USBHOST_BIND_MODE_NONE:
+        default:
+            return "none";
+    }
+}
+
+static const char *PsAppUsbHost_EventName(u8 event)
+{
+    switch (event) {
+        case USBH_EVENT_DEVICE_CONNECTED:
+            return "device-connected";
+        case USBH_EVENT_DEVICE_DISCONNECTED:
+            return "device-disconnected";
+        case USBH_EVENT_DEVICE_CONFIGURED:
+            return "device-configured";
+        case USBH_EVENT_INTERFACE_UNSUPPORTED:
+            return "interface-unsupported";
+        case USBH_EVENT_INTERFACE_START:
+            return "interface-start";
+        case USBH_EVENT_INTERFACE_STOP:
+            return "interface-stop";
+        default:
+            return "unknown";
+    }
+}
 
 PsAppUsbHostImplContext *PsAppUsbHost_ImplGetContext(void)
 {
@@ -142,7 +180,7 @@ XStatus PsAppUsbHost_InitImpl(PsAppUsbHostContext *ctx)
     impl_ctx->int_in_report_buffer_ptr = s_ps_app_usbhost_int_in_report_buffer;
     impl_ctx->int_out_report_buffer_ptr = s_ps_app_usbhost_int_out_report_buffer;
     impl_ctx->int_in_report_buffer_size = PS_APP_USBHOST_INTIN_BUFFER_SIZE;
-    impl_ctx->int_out_report_buffer_size = PS_XINPUT_REPORT_SIZE_OUTPUT;
+    impl_ctx->int_out_report_buffer_size = PS_APP_USBHOST_INTOUT_BUFFER_SIZE;
     impl_ctx->no_report_ticks = 0U;
     impl_ctx->startup_sideband_log_count = 0U;
     impl_ctx->retry_sideband_log_count = 0U;
@@ -155,6 +193,25 @@ XStatus PsAppUsbHost_InitImpl(PsAppUsbHostContext *ctx)
     impl_ctx->detach_defer_active = 0U;
     impl_ctx->detach_defer_ticks = 0U;
     impl_ctx->sideband_attempted_this_attach = 0U;
+    impl_ctx->sticky_last_vid = 0U;
+    impl_ctx->sticky_last_pid = 0U;
+    impl_ctx->sticky_last_intf = 0U;
+    impl_ctx->sticky_last_class = 0U;
+    impl_ctx->sticky_last_subclass = 0U;
+    impl_ctx->sticky_last_protocol = 0U;
+    impl_ctx->sticky_last_ep_in = 0U;
+    impl_ctx->sticky_last_ep_out = 0U;
+    impl_ctx->sticky_last_bind_mode = PS_APP_USBHOST_BIND_MODE_NONE;
+    impl_ctx->sticky_last_speed = 0U;
+    impl_ctx->sticky_last_event = 0U;
+    impl_ctx->sticky_last_event_hub = 0U;
+    impl_ctx->sticky_last_event_port = 0U;
+    impl_ctx->sticky_last_event_intf = 0U;
+    impl_ctx->sticky_last_event_phy_ccs = 0U;
+    impl_ctx->sticky_first_report_valid = 0U;
+    impl_ctx->sticky_first_report_len = 0U;
+    impl_ctx->sticky_first_report_dump_len = 0U;
+    memset(impl_ctx->sticky_first_report, 0, sizeof(impl_ctx->sticky_first_report));
 
     PsAppUsbHost_ForceSlcrUsb0Config();
     PsAppUsbHost_PulsePhyReset();
@@ -548,6 +605,39 @@ void PsAppUsbHost_PrintStatusImpl(const PsAppUsbHostContext *ctx)
                (unsigned int)((impl_ctx != NULL) ? impl_ctx->stale_detach_ticks : 0U),
                (unsigned int)((impl_ctx != NULL) ? impl_ctx->recover_attempts : 0U),
                (unsigned int)((impl_ctx != NULL) ? impl_ctx->recover_cooldown_ticks : 0U));
+    xil_printf("[USBH] sticky dev vid=0x%04x pid=0x%04x intf=%u cls=%02x/%02x/%02x ep_in=0x%02x ep_out=0x%02x speed=%u bind=%s\r\n",
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_vid : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_pid : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_intf : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_class : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_subclass : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_protocol : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_ep_in : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_ep_out : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_speed : 0U),
+               PsAppUsbHost_BindModeName((impl_ctx != NULL) ? impl_ctx->sticky_last_bind_mode : 0U));
+    xil_printf("[USBH] sticky event=%s hub=%u port=%u intf=%u phy_ccs=%u\r\n",
+               PsAppUsbHost_EventName((impl_ctx != NULL) ? impl_ctx->sticky_last_event : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_event_hub : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_event_port : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_event_intf : 0U),
+               (unsigned int)((impl_ctx != NULL) ? impl_ctx->sticky_last_event_phy_ccs : 0U));
+    if ((impl_ctx != NULL) && (impl_ctx->sticky_first_report_valid != 0U)) {
+        u32 i;
+        xil_printf("[USBH] sticky first_report len=%u raw=",
+                   (unsigned int)impl_ctx->sticky_first_report_len);
+        for (i = 0U; i < (u32)impl_ctx->sticky_first_report_dump_len; ++i) {
+            xil_printf("%s%02x",
+                       (i == 0U) ? "" : " ",
+                       (unsigned int)impl_ctx->sticky_first_report[i]);
+        }
+        if (impl_ctx->sticky_first_report_len > impl_ctx->sticky_first_report_dump_len) {
+            xil_printf(" ...");
+        }
+        xil_printf("\r\n");
+    } else {
+        xil_printf("[USBH] sticky first_report none\r\n");
+    }
 
     if (state->initialized != 0U) {
         PsAppUsbHost_PrintSlcrSummary();
@@ -768,7 +858,7 @@ XStatus PsAppUsbHost_SetRumbleImpl(PsAppUsbHostContext *ctx, u8 large_motor, u8 
     status = PsAppUsbHost_SubmitInterruptOut(impl_ctx,
                                              impl_ctx->active_xbox_ptr,
                                              impl_ctx->int_out_report_buffer_ptr,
-                                             impl_ctx->int_out_report_buffer_size,
+                                             PS_XINPUT_REPORT_SIZE_OUTPUT,
                                              100U);
     if (status != XST_SUCCESS) {
         return XST_FAILURE;

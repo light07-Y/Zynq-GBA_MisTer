@@ -6,6 +6,54 @@
 #include "UsbHost/Inc/ps_app_usbhost.h"
 #include "xil_printf.h"
 
+static void PsAppConsole_PrintXinputDiag(PsAppRuntimeContext *app) {
+    const PsAppUsbHostState *usb_state;
+    const PsAppInputState *input_state;
+
+    if (app == NULL) {
+        return;
+    }
+
+    usb_state = app->usb_host;
+    input_state = app->input;
+
+    xil_printf("[XDIAG] ===== BEGIN =====\r\n");
+    xil_printf("[XDIAG] build=%s %s\r\n", __DATE__, __TIME__);
+    if (usb_state != NULL) {
+        xil_printf("[XDIAG] usb quick present=%u active=%u vid=0x%04x pid=0x%04x intf=%u cls=%02x/%02x/%02x in=0x%02x out=0x%02x\r\n",
+                   (unsigned int)usb_state->device_present,
+                   (unsigned int)usb_state->xbox_interface_active,
+                   (unsigned int)usb_state->vendor_id,
+                   (unsigned int)usb_state->product_id,
+                   (unsigned int)usb_state->interface_number,
+                   (unsigned int)usb_state->interface_class,
+                   (unsigned int)usb_state->interface_subclass,
+                   (unsigned int)usb_state->interface_protocol,
+                   (unsigned int)usb_state->ep_in_addr,
+                   (unsigned int)usb_state->ep_out_addr);
+    }
+    if (input_state != NULL) {
+        xil_printf("[XDIAG] input quick active=%u valid=%u reports=%u parse_err=%u unsupported=%u last_len=%u\r\n",
+                   (unsigned int)input_state->active,
+                   (unsigned int)input_state->report_valid,
+                   (unsigned int)input_state->report_count,
+                   (unsigned int)input_state->parse_error_count,
+                   (unsigned int)input_state->unsupported_report_count,
+                   (unsigned int)input_state->last_report_len);
+    }
+
+    if (PsAppUsbHost_PrintStatusChecked(app->usb_host_ctx) != XST_SUCCESS) {
+        xil_printf("[XDIAG] usb status unavailable\r\n");
+    }
+    PsAppInput_PrintStatus(app->input_ctx);
+    if ((usb_state != NULL) && (usb_state->vendor_id == 0x057EU) && (usb_state->product_id == 0x2009U)) {
+        xil_printf("[XDIAG] tip: detected switch-hid profile(057E:2009); this firmware has fallback parser now\r\n");
+    } else {
+        xil_printf("[XDIAG] tip: G30S TE please switch to XInput(View+Menu), replug receiver, rerun xdiag\r\n");
+    }
+    xil_printf("[XDIAG] ===== END =====\r\n");
+}
+
 u8 PsAppConsole_HandleIoCommands(PsAppConsoleContext *ctx, const char *cmd) {
     PsAppRuntimeContext *app;
     char *arg1;
@@ -17,6 +65,11 @@ u8 PsAppConsole_HandleIoCommands(PsAppConsoleContext *ctx, const char *cmd) {
     }
 
     app = ctx->runtime;
+
+    if ((strcmp(cmd, "xdiag") == 0) || (strcmp(cmd, "xinputdiag") == 0)) {
+        PsAppConsole_PrintXinputDiag(app);
+        return 1U;
+    }
 
     if (strcmp(cmd, "input") == 0) {
         u8 report[PS_XINPUT_MAX_REPORT_BYTES];
@@ -67,6 +120,11 @@ u8 PsAppConsole_HandleIoCommands(PsAppConsoleContext *ctx, const char *cmd) {
             if (PsAppUsbHost_PrintStatusChecked(app->usb_host_ctx) != XST_SUCCESS) {
                 xil_printf("[CMD] usb status unavailable\r\n");
             }
+            return 1U;
+        }
+
+        if (strcmp(arg1, "diag") == 0) {
+            PsAppConsole_PrintXinputDiag(app);
             return 1U;
         }
 
@@ -135,7 +193,7 @@ u8 PsAppConsole_HandleIoCommands(PsAppConsoleContext *ctx, const char *cmd) {
             return 1U;
         }
 
-        xil_printf("[CMD] usage: usb status|kick|portreset|ulpi|vbus on|off|rumble <large 0-255> <small 0-255>\r\n");
+        xil_printf("[CMD] usage: usb status|diag|kick|portreset|ulpi|vbus on|off|rumble <large 0-255> <small 0-255>\r\n");
         return 1U;
     }
 

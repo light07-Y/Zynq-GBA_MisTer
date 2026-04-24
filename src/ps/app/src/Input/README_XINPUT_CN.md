@@ -2,9 +2,10 @@
 
 ## 1. 目标
 
-本目录提供一个面向 `8BitDo Ultimate 2 Wireless PC` 接收器的主机侧输入解析模块，重点是：
+本目录提供一个面向 `XInput/Xbox360` 风格接收器的主机侧输入解析模块（已覆盖 8BitDo、未知厂商 XInput 兜底，以及 `057E:2009` Switch HID 兜底），重点是：
 
-- 复用 Xbox360/XInput 风格 `interrupt in` 报告格式
+- 复用 Xbox360/XInput 风格 `interrupt in` 报告格式（兼容常见 20B/32B 变体）
+- 兼容 Switch HID 常见报告（`0x30/0x21/0x3F`）并转为统一按键状态
 - 将报告映射到 GBA 10 键位（`A/B/Select/Start/Right/Left/Up/Down/R/L`）
 - 保持与上层 `App`/`Runtime` 解耦，便于后续接入任意 USB Host 后端
 
@@ -60,3 +61,16 @@
 - `input detach`
 
 其中 `input inject` 可在 Host 后端尚未联通时做离线验证（将抓包得到的报告十六进制注入解析链路）。
+
+## 6. 现场兼容说明（G30S TE）
+
+- 若使用 `TRG G30S TE`，先确认接收器处于 `XInput` 模式。
+- 官方组合键为 `View + Menu`（模式切换后建议重插一次 2.4G 接收器）。
+- 当前输入层会在解析失败时限频打印：
+  - 报告长度
+  - VID/PID
+  - 报告前 16 字节 raw 数据
+- 现场回传建议：
+  - `usb status`
+  - `input status`
+  - 首包日志 `first input report ... raw=...`

@@ -120,7 +120,9 @@ static void PsAppConsole_PrintHelp(void) {
     xil_printf("  input status\r\n");
     xil_printf("  input inject <hex>   (xinput report hex, allow separators : - _ space)\r\n");
     xil_printf("  input detach\r\n");
+    xil_printf("  xdiag                (one-shot XInput diagnostics)\r\n");
     xil_printf("  usb status\r\n");
+    xil_printf("  usb diag\r\n");
     xil_printf("  usb kick\r\n");
     xil_printf("  usb portreset\r\n");
     xil_printf("  usb ulpi\r\n");

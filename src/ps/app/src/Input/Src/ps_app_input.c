@@ -63,15 +63,33 @@
      PS_XINPUT_BUTTON_MASK_LB | PS_XINPUT_BUTTON_MASK_RB | \
      PS_XINPUT_BUTTON_MASK_A | PS_XINPUT_BUTTON_MASK_B | \
      PS_APP_INPUT_SRC_MASK_LT | PS_APP_INPUT_SRC_MASK_RT)
+#define PS_APP_INPUT_USB_CLASS_HID 0x03U
 
-static u32 PsAppInput_MapXinputToGbaKeys(const PsXinputPadState *pad) {
+static u8 PsAppInput_ShouldSwapAbByPosition(const PsAppInputState *state) {
+    if ((state != NULL) &&
+        (state->vendor_id == 0x057EU) &&
+        (state->product_id == 0x2009U) &&
+        (state->interface_class == PS_APP_INPUT_USB_CLASS_HID)) {
+        return 0U;
+    }
+
+#if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
+    return 1U;
+#else
+    return 0U;
+#endif
+}
+
+static u32 PsAppInput_MapXinputToGbaKeys(const PsAppInputState *state, const PsXinputPadState *pad) {
     u32 keys;
+    u8 swap_ab;
 
     if (pad == NULL) {
         return 0U;
     }
 
     keys = 0U;
+    swap_ab = PsAppInput_ShouldSwapAbByPosition(state);
 
     if ((pad->buttons & PS_XINPUT_BUTTON_MASK_RIGHT) != 0U) {
         keys |= PS_APP_GBA_KEY_RIGHT;
@@ -92,21 +110,21 @@ static u32 PsAppInput_MapXinputToGbaKeys(const PsXinputPadState *pad) {
         keys |= PS_APP_GBA_KEY_START;
     }
 
-#if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
-    if ((pad->buttons & PS_XINPUT_BUTTON_MASK_B) != 0U) {
-        keys |= PS_APP_GBA_KEY_A;
+    if (swap_ab != 0U) {
+        if ((pad->buttons & PS_XINPUT_BUTTON_MASK_B) != 0U) {
+            keys |= PS_APP_GBA_KEY_A;
+        }
+        if ((pad->buttons & PS_XINPUT_BUTTON_MASK_A) != 0U) {
+            keys |= PS_APP_GBA_KEY_B;
+        }
+    } else {
+        if ((pad->buttons & PS_XINPUT_BUTTON_MASK_A) != 0U) {
+            keys |= PS_APP_GBA_KEY_A;
+        }
+        if ((pad->buttons & PS_XINPUT_BUTTON_MASK_B) != 0U) {
+            keys |= PS_APP_GBA_KEY_B;
+        }
     }
-    if ((pad->buttons & PS_XINPUT_BUTTON_MASK_A) != 0U) {
-        keys |= PS_APP_GBA_KEY_B;
-    }
-#else
-    if ((pad->buttons & PS_XINPUT_BUTTON_MASK_A) != 0U) {
-        keys |= PS_APP_GBA_KEY_A;
-    }
-    if ((pad->buttons & PS_XINPUT_BUTTON_MASK_B) != 0U) {
-        keys |= PS_APP_GBA_KEY_B;
-    }
-#endif
 
     if (((pad->buttons & PS_XINPUT_BUTTON_MASK_LB) != 0U) ||
         (pad->lt >= PS_APP_INPUT_TRIGGER_THRESHOLD)) {
@@ -200,6 +218,85 @@ static u8 PsAppInput_IsExpectedMainReport(const PsAppInputState *state,
     return 1U;
 }
 
+static u8 PsAppInput_ShouldIgnoreReport(const PsAppInputState *state,
+                                        const u8 *report,
+                                        u32 report_len) {
+    if ((state == NULL) || (report == NULL) || (report_len == 0U)) {
+        return 0U;
+    }
+
+    /*
+     * G30S TE 的 057E:2009 Switch HID 形态会夹杂 0x3F 简化报告；
+     * 该报告布局不同，按完整报告解释会产生 R3/LT 等空闲假按键。
+     * 我们已经请求 0x30 full report mode，因此这里静默忽略 0x3F。
+     */
+    if ((state->vendor_id == 0x057EU) &&
+        (state->product_id == 0x2009U) &&
+        (state->interface_class == PS_APP_INPUT_USB_CLASS_HID) &&
+        (report[0] == 0x3FU)) {
+        return 1U;
+    }
+
+    return 0U;
+}
+
+static u8 PsAppInput_IsSupportedUsbProfile(const PsAppInputUsbDeviceInfo *info) {
+    if (info == NULL) {
+        return 0U;
+    }
+
+    if (PsXinput_IsInterfaceCompatible(info->interface_class,
+                                       info->interface_subclass,
+                                       info->interface_protocol) != 0U) {
+        return 1U;
+    }
+
+    if ((info->vendor_id == 0x057EU) &&
+        (info->product_id == 0x2009U) &&
+        (info->interface_class == PS_APP_INPUT_USB_CLASS_HID)) {
+        return 1U;
+    }
+
+    return 0U;
+}
+
+static void PsAppInput_LogParseDrop(const PsAppInputState *state,
+                                    const char *reason,
+                                    const u8 *report,
+                                    u32 report_len) {
+    u32 idx;
+    u32 dump_len;
+
+    if ((state == NULL) || (report == NULL) || (report_len == 0U)) {
+        return;
+    }
+
+    if (!((state->parse_error_count <= 6U) || ((state->parse_error_count % 64U) == 0U))) {
+        return;
+    }
+
+    dump_len = report_len;
+    if (dump_len > 16U) {
+        dump_len = 16U;
+    }
+
+    xil_printf("[INPUT] parse drop reason=%s err=%u len=%u vid=0x%04x pid=0x%04x raw=",
+               (reason != NULL) ? reason : "unknown",
+               (unsigned int)state->parse_error_count,
+               (unsigned int)report_len,
+               (unsigned int)state->vendor_id,
+               (unsigned int)state->product_id);
+    for (idx = 0U; idx < dump_len; ++idx) {
+        xil_printf("%s%02x",
+                   (idx == 0U) ? "" : " ",
+                   (unsigned int)report[idx]);
+    }
+    if (report_len > dump_len) {
+        xil_printf(" ...");
+    }
+    xil_printf("\r\n");
+}
+
 static void PsAppInput_ResetKeyConditioner(PsAppInputState *state) {
     if (state == NULL) {
         return;
@@ -238,8 +335,11 @@ static u32 PsAppInput_StickMappedKeysFromSource(u32 source_mask) {
     return stick_keys & PS_APP_GBA_KEY_MASK_ALL;
 }
 
-static u32 PsAppInput_MapNonStickSourceToGbaKeys(u32 source_mask) {
+static u32 PsAppInput_MapNonStickSourceToGbaKeys(const PsAppInputState *state, u32 source_mask) {
     u32 keys = 0U;
+    u8 swap_ab;
+
+    swap_ab = PsAppInput_ShouldSwapAbByPosition(state);
 
     if ((source_mask & PS_XINPUT_BUTTON_MASK_RIGHT) != 0U) {
         keys |= PS_APP_GBA_KEY_RIGHT;
@@ -259,21 +359,21 @@ static u32 PsAppInput_MapNonStickSourceToGbaKeys(u32 source_mask) {
     if ((source_mask & PS_XINPUT_BUTTON_MASK_START) != 0U) {
         keys |= PS_APP_GBA_KEY_START;
     }
-#if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
-    if ((source_mask & PS_XINPUT_BUTTON_MASK_B) != 0U) {
-        keys |= PS_APP_GBA_KEY_A;
+    if (swap_ab != 0U) {
+        if ((source_mask & PS_XINPUT_BUTTON_MASK_B) != 0U) {
+            keys |= PS_APP_GBA_KEY_A;
+        }
+        if ((source_mask & PS_XINPUT_BUTTON_MASK_A) != 0U) {
+            keys |= PS_APP_GBA_KEY_B;
+        }
+    } else {
+        if ((source_mask & PS_XINPUT_BUTTON_MASK_A) != 0U) {
+            keys |= PS_APP_GBA_KEY_A;
+        }
+        if ((source_mask & PS_XINPUT_BUTTON_MASK_B) != 0U) {
+            keys |= PS_APP_GBA_KEY_B;
+        }
     }
-    if ((source_mask & PS_XINPUT_BUTTON_MASK_A) != 0U) {
-        keys |= PS_APP_GBA_KEY_B;
-    }
-#else
-    if ((source_mask & PS_XINPUT_BUTTON_MASK_A) != 0U) {
-        keys |= PS_APP_GBA_KEY_A;
-    }
-    if ((source_mask & PS_XINPUT_BUTTON_MASK_B) != 0U) {
-        keys |= PS_APP_GBA_KEY_B;
-    }
-#endif
     if ((source_mask & (PS_XINPUT_BUTTON_MASK_LB | PS_APP_INPUT_SRC_MASK_LT)) != 0U) {
         keys |= PS_APP_GBA_KEY_L;
     }
@@ -306,7 +406,7 @@ static void PsAppInput_UpdatePulseAndDebounce(PsAppInputState *state,
     }
 
     nonstick_source_mask = source_mask & PS_APP_INPUT_NONSTICK_SOURCE_MASK;
-    nonstick_level_keys = PsAppInput_MapNonStickSourceToGbaKeys(nonstick_source_mask) &
+    nonstick_level_keys = PsAppInput_MapNonStickSourceToGbaKeys(state, nonstick_source_mask) &
                           PS_APP_GBA_KEY_MASK_ACTION;
     state->pending_mapped_keys = nonstick_source_mask;
 
@@ -361,7 +461,7 @@ static void PsAppInput_RefreshMappedKeys(PsAppInputState *state,
     }
 
     stick_keys = PsAppInput_StickMappedKeysFromSource(source_mask);
-    dpad_keys = PsAppInput_MapNonStickSourceToGbaKeys(source_mask & PS_APP_INPUT_DPAD_SOURCE_MASK) &
+    dpad_keys = PsAppInput_MapNonStickSourceToGbaKeys(state, source_mask & PS_APP_INPUT_DPAD_SOURCE_MASK) &
                 PS_APP_GBA_KEY_MASK_DPAD;
     nonstick_keys = state->debounced_nonstick_keys & PS_APP_GBA_KEY_MASK_ACTION;
     conditioned_keys = (stick_keys | dpad_keys | nonstick_keys);
@@ -409,18 +509,24 @@ static XStatus PsAppInput_UpdateFromReport(PsAppInputContext *ctx, const u8 *rep
         return XST_FAILURE;
     }
 
+    if (PsAppInput_ShouldIgnoreReport(state, report, report_len) != 0U) {
+        return XST_SUCCESS;
+    }
+
     if (PsAppInput_IsExpectedMainReport(state, report, report_len) == 0U) {
         state->parse_error_count++;
+        PsAppInput_LogParseDrop(state, "unexpected-main-report", report, report_len);
         return XST_FAILURE;
     }
 
     status = PsXinput_ParseInputReport(report, report_len, &parsed);
     if (status != XST_SUCCESS) {
         state->parse_error_count++;
+        PsAppInput_LogParseDrop(state, "xinput-parse-failed", report, report_len);
         return status;
     }
 
-    raw_mapped_keys = PsAppInput_MapXinputToGbaKeys(&parsed);
+    raw_mapped_keys = PsAppInput_MapXinputToGbaKeys(state, &parsed);
     state->active = 1U;
     state->protocol_is_xinput = 1U;
     state->report_valid = 1U;
@@ -527,9 +633,7 @@ XStatus PsAppInput_OnUsbXInputAttached(PsAppInputContext *ctx,
         return XST_FAILURE;
     }
 
-    if (PsXinput_IsInterfaceCompatible(info->interface_class,
-                                       info->interface_subclass,
-                                       info->interface_protocol) == 0U) {
+    if (PsAppInput_IsSupportedUsbProfile(info) == 0U) {
         state->unsupported_report_count++;
         return XST_INVALID_PARAM;
     }
@@ -567,6 +671,10 @@ XStatus PsAppInput_OnUsbXInputAttached(PsAppInputContext *ctx,
                (unsigned int)state->ep_out_addr);
     if (PsXinput_IsLikely8BitDo(state->vendor_id, state->product_id) != 0U) {
         xil_printf("[INPUT] detected likely 8BitDo xinput-compatible receiver\r\n");
+    } else if ((state->vendor_id == 0x057EU) &&
+               (state->product_id == 0x2009U) &&
+               (state->interface_class == PS_APP_INPUT_USB_CLASS_HID)) {
+        xil_printf("[INPUT] detected switch-hid compatible receiver (057E:2009)\r\n");
     }
 
     return XST_SUCCESS;
@@ -729,15 +837,15 @@ void PsAppInput_PrintStatus(const PsAppInputContext *ctx) {
                (int)state->ly,
                (int)state->rx,
                (int)state->ry);
-#if (PS_APP_INPUT_MAP_AB_BY_POSITION != 0U)
-    xil_printf("[INPUT] map=A<=B(right) B<=A(bottom) deadzone=%d trigger_th=%u\r\n",
-               (int)PS_APP_INPUT_LSTICK_DEADZONE,
-               (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
-#else
-    xil_printf("[INPUT] map=A<=A(bottom) B<=B(right) deadzone=%d trigger_th=%u\r\n",
-               (int)PS_APP_INPUT_LSTICK_DEADZONE,
-               (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
-#endif
+    if (PsAppInput_ShouldSwapAbByPosition(state) != 0U) {
+        xil_printf("[INPUT] map=A<=B(right) B<=A(bottom) deadzone=%d trigger_th=%u\r\n",
+                   (int)PS_APP_INPUT_LSTICK_DEADZONE,
+                   (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
+    } else {
+        xil_printf("[INPUT] map=A<=A(bottom) B<=B(right) deadzone=%d trigger_th=%u\r\n",
+                   (int)PS_APP_INPUT_LSTICK_DEADZONE,
+                   (unsigned int)PS_APP_INPUT_TRIGGER_THRESHOLD);
+    }
 
     if (state->last_report_len != 0U) {
         xil_printf("[INPUT] last_report(%u)=", (unsigned int)state->last_report_len);

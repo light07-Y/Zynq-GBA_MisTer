@@ -7,8 +7,47 @@
 #include "xil_printf.h"
 
 #include "usb_errno.h"
+#include "usb_osal.h"
 
 static void PsAppUsbHost_IntInResubmit(PsAppUsbHostImplContext *impl_ctx, struct usbh_xbox *xbox_class);
+
+static void PsAppUsbHost_LogFirstInputReport(PsAppUsbHostImplContext *impl_ctx, const u8 *report, u32 report_len)
+{
+    u32 dump_len;
+    u32 idx;
+
+    if ((report == NULL) || (report_len == 0U)) {
+        return;
+    }
+
+    dump_len = report_len;
+    if (dump_len > 16U) {
+        dump_len = 16U;
+    }
+
+    xil_printf("[USBH] first input report len=%u raw=", (unsigned int)report_len);
+    for (idx = 0U; idx < dump_len; ++idx) {
+        xil_printf("%s%02x",
+                   (idx == 0U) ? "" : " ",
+                   (unsigned int)report[idx]);
+    }
+    if (report_len > dump_len) {
+        xil_printf(" ...");
+    }
+    xil_printf("\r\n");
+
+    if (impl_ctx != NULL) {
+        impl_ctx->sticky_first_report_valid = 1U;
+        impl_ctx->sticky_first_report_len = (u8)((report_len > 255U) ? 255U : report_len);
+        impl_ctx->sticky_first_report_dump_len = (u8)dump_len;
+        for (idx = 0U; idx < dump_len; ++idx) {
+            impl_ctx->sticky_first_report[idx] = report[idx];
+        }
+        for (; idx < sizeof(impl_ctx->sticky_first_report); ++idx) {
+            impl_ctx->sticky_first_report[idx] = 0U;
+        }
+    }
+}
 
 XStatus PsAppUsbHost_SubmitInterruptOut(PsAppUsbHostImplContext *impl_ctx,
                                         struct usbh_xbox *xbox_class,
@@ -89,6 +128,102 @@ XStatus PsAppUsbHost_Send8BitDoStartupSequence(PsAppUsbHostImplContext *impl_ctx
     return XST_SUCCESS;
 }
 
+static XStatus PsAppUsbHost_SendSwitchUsbCommand(PsAppUsbHostImplContext *impl_ctx,
+                                                 struct usbh_xbox *xbox_class,
+                                                 u8 command)
+{
+    u8 packet[2];
+
+    packet[0] = 0x80U;
+    packet[1] = command;
+    return PsAppUsbHost_SubmitInterruptOut(impl_ctx, xbox_class, packet, sizeof(packet), 100U);
+}
+
+static XStatus PsAppUsbHost_SendSwitchSubcommand(PsAppUsbHostImplContext *impl_ctx,
+                                                 struct usbh_xbox *xbox_class,
+                                                 u8 packet_no,
+                                                 u8 subcommand,
+                                                 const u8 *data,
+                                                 u32 data_len)
+{
+    static const u8 neutral_rumble[8] = {
+        0x00U, 0x01U, 0x40U, 0x40U,
+        0x00U, 0x01U, 0x40U, 0x40U
+    };
+    u8 packet[32];
+    u32 idx;
+
+    if (data_len > 20U) {
+        return XST_INVALID_PARAM;
+    }
+
+    memset(packet, 0, sizeof(packet));
+    packet[0] = 0x01U;
+    packet[1] = packet_no & 0x0FU;
+    memcpy(&packet[2], neutral_rumble, sizeof(neutral_rumble));
+    packet[10] = subcommand;
+    for (idx = 0U; idx < data_len; ++idx) {
+        packet[11U + idx] = data[idx];
+    }
+
+    return PsAppUsbHost_SubmitInterruptOut(impl_ctx,
+                                           xbox_class,
+                                           packet,
+                                           11U + data_len,
+                                           100U);
+}
+
+XStatus PsAppUsbHost_SendSwitchHidStartupSequence(PsAppUsbHostImplContext *impl_ctx,
+                                                  struct usbh_xbox *xbox_class)
+{
+    static const u8 full_report_mode[1] = { 0x30U };
+    XStatus status;
+
+    if ((impl_ctx == NULL) || (xbox_class == NULL) || (xbox_class->intout == NULL)) {
+        return XST_INVALID_PARAM;
+    }
+
+    /*
+     * Switch Pro compatible USB devices do not always stream input immediately.
+     * The lightweight sequence follows the public hid-nintendo flow:
+     * USB handshake, keep USB link alive, then request standard full reports.
+     */
+    status = PsAppUsbHost_SendSwitchUsbCommand(impl_ctx, xbox_class, 0x02U);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+    usb_osal_msleep(10U);
+
+    status = PsAppUsbHost_SendSwitchUsbCommand(impl_ctx, xbox_class, 0x03U);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+    usb_osal_msleep(10U);
+
+    status = PsAppUsbHost_SendSwitchUsbCommand(impl_ctx, xbox_class, 0x02U);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+    usb_osal_msleep(10U);
+
+    status = PsAppUsbHost_SendSwitchUsbCommand(impl_ctx, xbox_class, 0x04U);
+    if (status != XST_SUCCESS) {
+        return status;
+    }
+    usb_osal_msleep(10U);
+
+    status = PsAppUsbHost_SendSwitchSubcommand(impl_ctx,
+                                               xbox_class,
+                                               0U,
+                                               0x03U,
+                                               full_report_mode,
+                                               sizeof(full_report_mode));
+    if (status == XST_SUCCESS) {
+        xil_printf("[USBH] switch-hid startup sequence sent\r\n");
+    }
+    return status;
+}
+
 static void PsAppUsbHost_IntInComplete(void *arg, int nbytes)
 {
     PsAppUsbHostImplContext *impl_ctx;
@@ -121,10 +256,9 @@ static void PsAppUsbHost_IntInComplete(void *arg, int nbytes)
              * 这里按“每次 attach 的首包”打印，而不是按全局累计 in_report_count==1，
              * 避免重连后虽然已恢复输入，但日志不再出现首包提示而造成误判。
              */
-            xil_printf("[USBH] first input report len=%d hdr=%02x %02x\r\n",
-                       nbytes,
-                       (unsigned int)impl_ctx->int_in_report_buffer_ptr[0],
-                       (unsigned int)impl_ctx->int_in_report_buffer_ptr[1]);
+            PsAppUsbHost_LogFirstInputReport(impl_ctx,
+                                             impl_ctx->int_in_report_buffer_ptr,
+                                             (u32)nbytes);
         }
         if ((impl_ctx->public_context_ptr != NULL) && (impl_ctx->public_context_ptr->input != NULL)) {
             if (PsAppInput_OnInterruptInReport(impl_ctx->public_context_ptr->input,
@@ -219,8 +353,30 @@ void PsAppUsbHost_OnXboxRun(PsAppUsbHostImplContext *impl_ctx, struct usbh_xbox 
     info.ep_in_interval_ms = (xbox_class->intin != NULL) ? xbox_class->intin->bInterval : 0U;
     info.ep_out_interval_ms = (xbox_class->intout != NULL) ? xbox_class->intout->bInterval : 0U;
 
+    if (PsXinput_IsLikely8BitDo(info.vendor_id, info.product_id) != 0U) {
+        impl_ctx->sticky_last_bind_mode = PS_APP_USBHOST_BIND_MODE_KNOWN_8BITDO;
+    } else if ((info.vendor_id == 0x057EU) &&
+               (info.product_id == 0x2009U) &&
+               (info.interface_class == USB_DEVICE_CLASS_HID)) {
+        impl_ctx->sticky_last_bind_mode = PS_APP_USBHOST_BIND_MODE_SWITCH_HID;
+    } else if ((info.interface_class == PS_XINPUT_INTERFACE_CLASS) &&
+               (info.interface_subclass == PS_XINPUT_INTERFACE_SUBCLASS) &&
+               (info.interface_protocol == PS_XINPUT_INTERFACE_PROTOCOL)) {
+        impl_ctx->sticky_last_bind_mode = PS_APP_USBHOST_BIND_MODE_STANDARD_XINPUT;
+    } else {
+        impl_ctx->sticky_last_bind_mode = PS_APP_USBHOST_BIND_MODE_VENDOR_FALLBACK;
+    }
+
     if ((impl_ctx->public_context_ptr != NULL) && (impl_ctx->public_context_ptr->input != NULL)) {
         (void)PsAppInput_OnUsbXInputAttached(impl_ctx->public_context_ptr->input, &info);
+    }
+
+    if ((info.vendor_id == 0x057EU) &&
+        (info.product_id == 0x2009U) &&
+        (info.interface_class == USB_DEVICE_CLASS_HID)) {
+        if (PsAppUsbHost_SendSwitchHidStartupSequence(impl_ctx, xbox_class) != XST_SUCCESS) {
+            xil_printf("[USBH] switch-hid startup sequence failed\r\n");
+        }
     }
 
     if (PsXinput_IsLikely8BitDo(info.vendor_id, info.product_id) != 0U) {

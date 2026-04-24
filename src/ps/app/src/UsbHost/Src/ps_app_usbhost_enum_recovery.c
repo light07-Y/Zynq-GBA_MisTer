@@ -192,6 +192,16 @@ void PsAppUsbHost_UpdateStateFromXbox(PsAppUsbHostImplContext *impl_ctx, struct 
     state->interface_protocol = intf_desc->bInterfaceProtocol;
     state->port_speed = xbox_class->hport->speed;
     state->xbox_interface_active = 1U;
+
+    impl_ctx->sticky_last_vid = state->vendor_id;
+    impl_ctx->sticky_last_pid = state->product_id;
+    impl_ctx->sticky_last_intf = state->interface_number;
+    impl_ctx->sticky_last_class = state->interface_class;
+    impl_ctx->sticky_last_subclass = state->interface_subclass;
+    impl_ctx->sticky_last_protocol = state->interface_protocol;
+    impl_ctx->sticky_last_ep_in = state->ep_in_addr;
+    impl_ctx->sticky_last_ep_out = state->ep_out_addr;
+    impl_ctx->sticky_last_speed = state->port_speed;
 }
 
 void PsAppUsbHost_OnEvent(u8 busid, u8 hub_index, u8 hub_port, u8 intf, u8 event)
@@ -208,6 +218,25 @@ void PsAppUsbHost_OnEvent(u8 busid, u8 hub_index, u8 hub_port, u8 intf, u8 event
 
     state->event_count++;
     hport = usbh_find_hubport(busid, hub_index, hub_port);
+
+    impl_ctx->sticky_last_event = event;
+    impl_ctx->sticky_last_event_hub = hub_index;
+    impl_ctx->sticky_last_event_port = hub_port;
+    impl_ctx->sticky_last_event_intf = intf;
+    impl_ctx->sticky_last_event_phy_ccs = impl_ctx->phy_connected;
+    if (hport != NULL) {
+        impl_ctx->sticky_last_vid = hport->device_desc.idVendor;
+        impl_ctx->sticky_last_pid = hport->device_desc.idProduct;
+        if ((intf != USB_INTERFACE_ANY) &&
+            (intf < hport->config.config_desc.bNumInterfaces)) {
+            const struct usb_interface_descriptor *sid =
+                &hport->config.intf[intf].altsetting[0].intf_desc;
+            impl_ctx->sticky_last_intf = intf;
+            impl_ctx->sticky_last_class = sid->bInterfaceClass;
+            impl_ctx->sticky_last_subclass = sid->bInterfaceSubClass;
+            impl_ctx->sticky_last_protocol = sid->bInterfaceProtocol;
+        }
+    }
 
     /*
      * 事件处理原则：
