@@ -12,9 +12,9 @@ enable_language(C ASM CXX)
 # Example : Adding VERBOSE=1 will pass -DVERBOSE=1 to the compiler.
 set(USER_COMPILE_DEFINITIONS
 "CONFIG_USB_DBG_LEVEL=-1"
-# 启用 FatFs 长文件名支持：
-# 菜单需要显示 games 目录下完整 ROM 名称，关闭 LFN 时会退化为 8.3（如 xxx~1）。
-"FILE_SYSTEM_USE_LFN=1"
+# 启用 FatFs UTF-8 长文件名支持：
+# 2 = LFN working buffer on stack，适合 RTOS 场景；配合 FF_LFN_UNICODE=2 支持中文 ROM 路径。
+"FILE_SYSTEM_USE_LFN=2"
 )
 
 # Undefine any previously specified compiler definitions, either built in or provided with a -D option

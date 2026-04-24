@@ -147,25 +147,50 @@ static u32 PsAppSave_Checksum(UINTPTR base_addr, u32 bytes) {
     return hash;
 }
 
-static void PsAppSave_CopyText(char *dst, size_t dst_size, const char *src) {
-    size_t src_len;
-
-    if ((dst == NULL) || (dst_size == 0U)) {
-        return;
-    }
+static size_t PsAppSave_Utf8SafePrefixLen(const char *src, size_t src_len, size_t max_len) {
+    size_t pos;
+    size_t limit;
 
     if (src == NULL) {
-        dst[0] = '\0';
-        return;
+        return 0U;
     }
 
-    src_len = strlen(src);
-    if (src_len >= dst_size) {
-        src_len = dst_size - 1U;
+    pos = 0U;
+    limit = (src_len < max_len) ? src_len : max_len;
+    while (pos < limit) {
+        size_t char_len;
+        size_t idx;
+        u8 valid;
+        unsigned char lead;
+
+        lead = (unsigned char)src[pos];
+        if ((lead & 0x80U) == 0U) {
+            char_len = 1U;
+        } else if ((lead & 0xE0U) == 0xC0U) {
+            char_len = 2U;
+        } else if ((lead & 0xF0U) == 0xE0U) {
+            char_len = 3U;
+        } else if ((lead & 0xF8U) == 0xF0U) {
+            char_len = 4U;
+        } else {
+            char_len = 1U;
+        }
+
+        if ((pos + char_len) > limit) {
+            break;
+        }
+
+        valid = 1U;
+        for (idx = 1U; idx < char_len; ++idx) {
+            if (((unsigned char)src[pos + idx] & 0xC0U) != 0x80U) {
+                valid = 0U;
+                break;
+            }
+        }
+        pos += (valid != 0U) ? char_len : 1U;
     }
 
-    memcpy(dst, src, src_len);
-    dst[src_len] = '\0';
+    return pos;
 }
 
 static void PsAppSave_CopyTextBounded(char *dst,
@@ -173,6 +198,7 @@ static void PsAppSave_CopyTextBounded(char *dst,
                                       const char *src,
                                       size_t src_max_len) {
     size_t src_len;
+    size_t copy_len;
 
     if ((dst == NULL) || (dst_size == 0U)) {
         return;
@@ -187,12 +213,13 @@ static void PsAppSave_CopyTextBounded(char *dst,
     while ((src_len < src_max_len) && (src[src_len] != '\0')) {
         src_len++;
     }
-    if (src_len >= dst_size) {
-        src_len = dst_size - 1U;
-    }
+    copy_len = PsAppSave_Utf8SafePrefixLen(src, src_len, dst_size - 1U);
+    memcpy(dst, src, copy_len);
+    dst[copy_len] = '\0';
+}
 
-    memcpy(dst, src, src_len);
-    dst[src_len] = '\0';
+static void PsAppSave_CopyText(char *dst, size_t dst_size, const char *src) {
+    PsAppSave_CopyTextBounded(dst, dst_size, src, (src != NULL) ? strlen(src) : 0U);
 }
 
 static void PsAppSave_SanitizeAsciiInPlace(char *text) {
@@ -231,12 +258,7 @@ static void PsAppSave_RomStem(const char *rom_path, char *stem_out, size_t stem_
     name_ptr = (name_ptr == NULL) ? rom_path : (name_ptr + 1);
     dot_ptr = strrchr(name_ptr, '.');
     copy_len = (dot_ptr != NULL) ? (size_t)(dot_ptr - name_ptr) : strlen(name_ptr);
-    if (copy_len >= stem_size) {
-        copy_len = stem_size - 1U;
-    }
-
-    memcpy(stem_out, name_ptr, copy_len);
-    stem_out[copy_len] = '\0';
+    PsAppSave_CopyTextBounded(stem_out, stem_size, name_ptr, copy_len);
 }
 
 static void PsAppSave_BuildPath(const char *rom_path,

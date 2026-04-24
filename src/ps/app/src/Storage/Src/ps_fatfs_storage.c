@@ -8,6 +8,8 @@
 #include "xil_cache.h"
 #include "xil_printf.h"
 
+#include "Common/Inc/ps_project_config.h"
+
 #define PS_FATFS_STORAGE_DRIVE_PATH       "0:/"
 #define PS_FATFS_STORAGE_READ_CHUNK_BYTES  (128U * 1024U)
 #define PS_FATFS_STORAGE_WRITE_CHUNK_BYTES (8U * 1024U)
@@ -233,6 +235,80 @@ XStatus PsFatFsStorage_ReadFileToMemory(const char *path,
                                              result_out,
                                              NULL,
                                              NULL);
+}
+
+XStatus PsFatFsStorage_ReadFilePrefix(const char *path,
+                                      UINTPTR dst_addr,
+                                      u32 max_bytes,
+                                      PsFatFsStorageReadResult *result_out) {
+    FIL file;
+    FRESULT fs_result;
+    FSIZE_t file_size;
+    UINT bytes_read;
+    u32 read_bytes;
+    XStatus status;
+
+    if (result_out != NULL) {
+        memset(result_out, 0, sizeof(*result_out));
+        result_out->dst_addr = dst_addr;
+    }
+
+    if ((path == NULL) || (*path == '\0') || (max_bytes == 0U)) {
+        return XST_INVALID_PARAM;
+    }
+
+    status = XST_FAILURE;
+    memset(&file, 0, sizeof(file));
+    if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        if (result_out != NULL) {
+            result_out->fs_result = FR_TIMEOUT;
+        }
+        return XST_FAILURE;
+    }
+
+    fs_result = PsFatFsStorage_Mount();
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    fs_result = f_open(&file, path, FA_READ);
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    if (fs_result != FR_OK) {
+        goto cleanup;
+    }
+
+    file_size = f_size(&file);
+    read_bytes = (file_size < (FSIZE_t)max_bytes) ? (u32)file_size : max_bytes;
+    if (read_bytes == 0U) {
+        (void)f_close(&file);
+        goto cleanup;
+    }
+
+    bytes_read = 0U;
+    fs_result = f_read(&file, (void *)dst_addr, read_bytes, &bytes_read);
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
+    (void)f_close(&file);
+    if ((fs_result != FR_OK) || (bytes_read != read_bytes)) {
+        goto cleanup;
+    }
+
+    Xil_DCacheFlushRange((INTPTR)dst_addr, bytes_read);
+    if (result_out != NULL) {
+        result_out->bytes_loaded = bytes_read;
+        result_out->fs_result = FR_OK;
+    }
+    status = XST_SUCCESS;
+
+cleanup:
+    PsFatFsStorage_Unlock();
+    return status;
 }
 
 XStatus PsFatFsStorage_WriteMemoryToFile(const char *path,
@@ -464,6 +540,13 @@ cleanup:
 XStatus PsFatFsStorage_ListDirectory(const char *path,
                                      PsFatFsStorageListEntryCallback callback,
                                      void *user_ctx) {
+    return PsFatFsStorage_ListDirectoryEx(path, callback, user_ctx, NULL);
+}
+
+XStatus PsFatFsStorage_ListDirectoryEx(const char *path,
+                                       PsFatFsStorageListEntryCallback callback,
+                                       void *user_ctx,
+                                       PsFatFsStorageListResult *result_out) {
     DIR dir;
     FILINFO info;
     FRESULT fs_result;
@@ -471,22 +554,32 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
     size_t base_len;
     u8 need_separator;
     u32 visited_count;
+    u32 skipped_long_count;
 
     if ((path == NULL) || (*path == '\0')) {
         return XST_INVALID_PARAM;
     }
 
+    if (result_out != NULL) {
+        memset(result_out, 0, sizeof(*result_out));
+        result_out->fs_result = FR_INVALID_PARAMETER;
+    }
+
     status = XST_FAILURE;
+    fs_result = FR_OK;
     visited_count = 0U;
+    skipped_long_count = 0U;
 
     if (s_ps_fatfs_list_cfg_logged == 0U) {
         s_ps_fatfs_list_cfg_logged = 1U;
         /* 启动后首次扫描打印一次 FatFs 关键配置，便于现场定位：
          * - lfn: 是否启用长文件名
          * - cp:  代码页
+         * - unicode: 2 表示路径 API 为 UTF-8，中文 ROM 名可原样传递
          * - FILINFO/DIR 大小：可快速判断编译配置是否一致 */
-        xil_printf("[FATFS] list cfg lfn=%d cp=%d filinfo=%u dir=%u\r\n",
+        xil_printf("[FATFS] list cfg lfn=%d unicode=%d cp=%d filinfo=%u dir=%u\r\n",
                    (int)FF_USE_LFN,
+                   (int)FF_LFN_UNICODE,
                    (int)FF_CODE_PAGE,
                    (unsigned int)sizeof(FILINFO),
                    (unsigned int)sizeof(DIR));
@@ -494,16 +587,25 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
 
     /* 目录遍历和读写共用同一把全局存储锁，确保 FatFs 单入口访问。 */
     if (PsFatFsStorage_Lock() != XST_SUCCESS) {
+        if (result_out != NULL) {
+            result_out->fs_result = FR_TIMEOUT;
+        }
         return XST_FAILURE;
     }
 
     fs_result = PsFatFsStorage_Mount();
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
     if (fs_result != FR_OK) {
         goto cleanup;
     }
 
     memset(&dir, 0, sizeof(dir));
     fs_result = f_opendir(&dir, path);
+    if (result_out != NULL) {
+        result_out->fs_result = fs_result;
+    }
     if (fs_result != FR_OK) {
         goto cleanup;
     }
@@ -514,13 +616,16 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
                           (path[base_len - 1U] != '\\') ? 1U : 0U);
 
     for (;;) {
-        char full_path[320];
+        char full_path[PS_APP_ROM_PATH_MAX_CHARS];
         size_t name_len;
         size_t full_len;
         u8 is_dir;
 
         memset(&info, 0, sizeof(info));
         fs_result = f_readdir(&dir, &info);
+        if (result_out != NULL) {
+            result_out->fs_result = fs_result;
+        }
         if (fs_result != FR_OK) {
             if (visited_count > 0U) {
                 /* 这里最常见的是 FR_INVALID_OBJECT：
@@ -536,6 +641,9 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
         }
 
         if (info.fname[0] == '\0') {
+            if (result_out != NULL) {
+                result_out->fs_result = FR_OK;
+            }
             status = XST_SUCCESS;
             break;
         }
@@ -548,8 +656,9 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
 
         name_len = strlen(info.fname);
         full_len = base_len + (size_t)need_separator + name_len;
-        /* 超过缓冲上限则跳过该项，避免路径拼接溢出。 */
+        /* 超过缓冲上限则跳过该项，避免把 UTF-8 路径截断后交给上层加载。 */
         if (full_len >= sizeof(full_path)) {
+            skipped_long_count++;
             continue;
         }
 
@@ -566,7 +675,7 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
         is_dir = (u8)(((info.fattrib & AM_DIR) != 0U) ? 1U : 0U);
         if (callback != NULL) {
             /* 回调返回 0 表示上层主动停止遍历（如达到上限）。 */
-            if (callback(info.fname, full_path, is_dir, user_ctx) == 0U) {
+            if (callback(info.fname, full_path, is_dir, (u32)info.fsize, user_ctx) == 0U) {
                 status = XST_SUCCESS;
                 break;
             }
@@ -574,8 +683,20 @@ XStatus PsFatFsStorage_ListDirectory(const char *path,
     }
 
     (void)f_closedir(&dir);
+    if (skipped_long_count > 0U) {
+        xil_printf("[FATFS] list skipped %u path(s) over %u bytes\r\n",
+                   (unsigned int)skipped_long_count,
+                   (unsigned int)PS_APP_ROM_PATH_MAX_CHARS);
+    }
 
 cleanup:
+    if (result_out != NULL) {
+        result_out->entries_visited = visited_count;
+        result_out->entries_skipped_long = skipped_long_count;
+        if ((status == XST_SUCCESS) && (result_out->fs_result != FR_OK)) {
+            result_out->fs_result = FR_OK;
+        }
+    }
     PsFatFsStorage_Unlock();
     return status;
 }

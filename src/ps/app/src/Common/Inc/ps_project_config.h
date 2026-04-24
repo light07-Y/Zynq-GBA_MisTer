@@ -37,7 +37,9 @@ extern "C" {
 #define PS_APP_GBA_ROM_REGION_MAX_BYTES (32U * 1024U * 1024U)
 #define PS_APP_GBA_SAVESTATE_REGION_BASE_ADDR 0x14000000U
 #define PS_APP_GBA_SAVESTATE_SLOT_BYTES (512U * 1024U)
-#define PS_APP_ROM_PATH_MAX_CHARS       128U
+/* FatFs is configured for UTF-8 long file names. A 255-character Chinese LFN
+ * can occupy up to 765 bytes before the directory prefix and terminator. */
+#define PS_APP_ROM_PATH_MAX_CHARS       896U
 #define PS_APP_DEFAULT_ROM_SD_PATH      "0:/games/bjg.gba"
 #define PS_APP_GAMES_SD_DIR             "0:/games"
 #define PS_APP_AUTOLOAD_DEFAULT_ROM     0U
@@ -81,7 +83,7 @@ extern "C" {
 #define PS_APP_INPUT_ENABLE_DEFAULT       1U
 #define PS_APP_UI_SERVICE_INTERVAL_MS     10U
 #define PS_APP_UI_MAX_GAMES               128U
-#define PS_APP_UI_GAME_NAME_MAX_CHARS     64U
+#define PS_APP_UI_GAME_NAME_MAX_CHARS     768U
 #define PS_APP_UI_LT_EXIT_THRESHOLD       250U
 #define PS_APP_UI_LT_EXIT_HOLD_MS         5000U
 /* 板载系统键退出：BTN4+BTN5 组合长按 2 秒触发一次退出。

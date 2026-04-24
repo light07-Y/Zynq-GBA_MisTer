@@ -9,6 +9,18 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/UserConfig.cmake)
 set(APP_NAME app)
 project(${APP_NAME})
 
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/../../../../scripts/fatfs/configure_utf8_lfn.py"
+            --check
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../../.."
+    RESULT_VARIABLE PS_APP_FATFS_UTF8_LFN_CHECK
+)
+if(NOT PS_APP_FATFS_UTF8_LFN_CHECK EQUAL 0)
+    message(FATAL_ERROR "FatFs BSP is not configured for UTF-8 LFN paths. Run: python scripts/fatfs/configure_utf8_lfn.py --apply")
+endif()
+
 find_package(common)
 enable_language(C ASM CXX)
 collect(PROJECT_LIB_DEPS xilstandalone;xiltimer;xilffs;freertos)

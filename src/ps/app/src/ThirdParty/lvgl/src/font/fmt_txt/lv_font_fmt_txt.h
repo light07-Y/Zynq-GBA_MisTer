@@ -169,8 +169,9 @@ typedef struct {
     /** Scale kern values in 12.4 format */
     uint16_t kern_scale;
 
-    /** Number of cmap tables */
-    uint16_t cmap_num       : 9;
+    /** Number of cmap tables.
+     * Full CJK bitmap fonts can exceed the original 9-bit storage limit. */
+    uint16_t cmap_num;
 
     /** Bit per pixel: 1, 2, 3, 4, 8 */
     uint16_t bpp            : 4;

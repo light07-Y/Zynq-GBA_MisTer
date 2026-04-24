@@ -1,5 +1,6 @@
 #include "App/Inc/ps_app_runtime.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,6 +39,27 @@
 #define PS_APP_FEATURE_CKPT_MAGIC        0x434B5054U
 #define PS_APP_FEATURE_RUMBLE_LARGE_ON   0xC0U
 #define PS_APP_FEATURE_RUMBLE_SMALL_ON   0x60U
+
+static u8 PsAppRuntimeFeature_FormatPath(char *out_path, u32 out_size, const char *fmt, ...) {
+    va_list args;
+    int wrote;
+
+    if ((out_path == NULL) || (out_size == 0U) || (fmt == NULL)) {
+        return 0U;
+    }
+
+    out_path[0] = '\0';
+    va_start(args, fmt);
+    wrote = vsnprintf(out_path, out_size, fmt, args);
+    va_end(args);
+
+    if ((wrote < 0) || ((u32)wrote >= out_size)) {
+        out_path[0] = '\0';
+        return 0U;
+    }
+
+    return 1U;
+}
 #define PS_APP_FEATURE_TRIGGER_THRESH    80U
 #define PS_APP_FEATURE_SENSOR_DEADZONE   4096
 #define PS_APP_FEATURE_SENSOR_ECHO_RETRY 6U
@@ -529,25 +551,28 @@ static void PsAppRuntimeFeature_BuildRomId(PsAppRuntimeContext *ctx) {
     crc32 = PsAppRuntimeFeature_Crc32(rom_ptr, ctx->rom->size_bytes);
     ctx->feature->rom_crc32 = crc32;
 
-    snprintf(ctx->feature->rom_id,
-             sizeof(ctx->feature->rom_id),
-             "%s_%08X",
-             (ctx->rom->game_code[0] != '\0') ? ctx->rom->game_code : "UNKN",
-             (unsigned int)crc32);
+    (void)PsAppRuntimeFeature_FormatPath(ctx->feature->rom_id,
+                                         sizeof(ctx->feature->rom_id),
+                                         "%s_%08X",
+                                         (ctx->rom->game_code[0] != '\0') ? ctx->rom->game_code : "UNKN",
+                                         (unsigned int)crc32);
 }
 
 static void PsAppRuntimeFeature_BuildSavestateDir(const PsAppRuntimeContext *ctx,
                                                   char *out_path,
                                                   u32 out_size) {
     if ((ctx == NULL) || (ctx->feature == NULL) || (out_path == NULL) || (out_size == 0U)) {
+        if ((out_path != NULL) && (out_size > 0U)) {
+            out_path[0] = '\0';
+        }
         return;
     }
 
-    snprintf(out_path,
-             out_size,
-             "%s/%s",
-             PS_APP_SAVESTATE_SD_DIR,
-             ctx->feature->rom_id);
+    (void)PsAppRuntimeFeature_FormatPath(out_path,
+                                         out_size,
+                                         "%s/%s",
+                                         PS_APP_SAVESTATE_SD_DIR,
+                                         ctx->feature->rom_id);
 }
 
 static void PsAppRuntimeFeature_BuildSavestatePath(const PsAppRuntimeContext *ctx,
@@ -564,6 +589,9 @@ static void PsAppRuntimeFeature_BuildSavestatePath(const PsAppRuntimeContext *ct
     }
     out_path[0] = '\0';
     PsAppRuntimeFeature_BuildSavestateDir(ctx, dir_path, sizeof(dir_path));
+    if (dir_path[0] == '\0') {
+        return;
+    }
     if (snprintf(suffix, sizeof(suffix), "/slot%u.ss", (unsigned int)slot) <= 0) {
         return;
     }
@@ -592,6 +620,9 @@ static void PsAppRuntimeFeature_BuildCheckpointPath(const PsAppRuntimeContext *c
     }
     out_path[0] = '\0';
     PsAppRuntimeFeature_BuildSavestateDir(ctx, dir_path, sizeof(dir_path));
+    if (dir_path[0] == '\0') {
+        return;
+    }
     if (snprintf(suffix, sizeof(suffix), "/ckpt%03u.ss", (unsigned int)index) <= 0) {
         return;
     }
@@ -619,6 +650,9 @@ static void PsAppRuntimeFeature_BuildCheckpointMetaPath(const PsAppRuntimeContex
     }
     out_path[0] = '\0';
     PsAppRuntimeFeature_BuildSavestateDir(ctx, dir_path, sizeof(dir_path));
+    if (dir_path[0] == '\0') {
+        return;
+    }
     dir_len = strlen(dir_path);
     suffix_len = strlen(suffix);
     if ((dir_len + suffix_len) >= (size_t)out_size) {
@@ -633,28 +667,34 @@ static void PsAppRuntimeFeature_BuildCheatPath(const PsAppRuntimeContext *ctx,
                                                char *out_path,
                                                u32 out_size) {
     if ((ctx == NULL) || (ctx->feature == NULL) || (out_path == NULL) || (out_size == 0U)) {
+        if ((out_path != NULL) && (out_size > 0U)) {
+            out_path[0] = '\0';
+        }
         return;
     }
 
-    snprintf(out_path,
-             out_size,
-             "%s/%s.gcht",
-             PS_APP_CHEAT_SD_DIR,
-             ctx->feature->rom_id);
+    (void)PsAppRuntimeFeature_FormatPath(out_path,
+                                         out_size,
+                                         "%s/%s.gcht",
+                                         PS_APP_CHEAT_SD_DIR,
+                                         ctx->feature->rom_id);
 }
 
 static void PsAppRuntimeFeature_BuildRtcPath(const PsAppRuntimeContext *ctx,
                                              char *out_path,
                                              u32 out_size) {
     if ((ctx == NULL) || (ctx->feature == NULL) || (out_path == NULL) || (out_size == 0U)) {
+        if ((out_path != NULL) && (out_size > 0U)) {
+            out_path[0] = '\0';
+        }
         return;
     }
 
-    snprintf(out_path,
-             out_size,
-             "%s/%s.rtc",
-             PS_APP_RTC_SD_DIR,
-             ctx->feature->rom_id);
+    (void)PsAppRuntimeFeature_FormatPath(out_path,
+                                         out_size,
+                                         "%s/%s.rtc",
+                                         PS_APP_RTC_SD_DIR,
+                                         ctx->feature->rom_id);
 }
 
 static XStatus PsAppRuntimeFeature_EnsureDirectories(const PsAppRuntimeContext *ctx) {
@@ -675,6 +715,9 @@ static XStatus PsAppRuntimeFeature_EnsureDirectories(const PsAppRuntimeContext *
     }
 
     PsAppRuntimeFeature_BuildSavestateDir(ctx, dir_path, sizeof(dir_path));
+    if (dir_path[0] == '\0') {
+        return XST_FAILURE;
+    }
     if (PsFatFsStorage_EnsureDirectory(dir_path) != XST_SUCCESS) {
         return XST_FAILURE;
     }
@@ -786,6 +829,9 @@ static XStatus PsAppRuntimeFeature_SaveCheckpointMeta(const PsAppRuntimeContext 
     meta.magic = PS_APP_FEATURE_CKPT_MAGIC;
     meta.head = ctx->feature->checkpoint_head;
     PsAppRuntimeFeature_BuildCheckpointMetaPath(ctx, meta_path, sizeof(meta_path));
+    if (meta_path[0] == '\0') {
+        return XST_FAILURE;
+    }
     memset(&write_result, 0, sizeof(write_result));
     return PsFatFsStorage_WriteMemoryToFile(meta_path,
                                             (UINTPTR)&meta,
@@ -803,6 +849,9 @@ static XStatus PsAppRuntimeFeature_LoadCheckpointMeta(PsAppRuntimeContext *ctx) 
     }
 
     PsAppRuntimeFeature_BuildCheckpointMetaPath(ctx, meta_path, sizeof(meta_path));
+    if (meta_path[0] == '\0') {
+        return XST_FAILURE;
+    }
     memset(&read_result, 0, sizeof(read_result));
     if (PsFatFsStorage_ReadFileToMemory(meta_path,
                                         (UINTPTR)&meta,
@@ -973,6 +1022,13 @@ static XStatus PsAppRuntimeFeature_LoadCheatsFromFile(PsAppRuntimeContext *ctx) 
     }
 
     PsAppRuntimeFeature_BuildCheatPath(ctx, cheat_path, sizeof(cheat_path));
+    if (cheat_path[0] == '\0') {
+        s_ps_app_feature_cheat_count = 0U;
+        if (ctx->feature != NULL) {
+            ctx->feature->cheat_entry_count = 0U;
+        }
+        return XST_FAILURE;
+    }
     memset(&read_result, 0, sizeof(read_result));
     if (PsFatFsStorage_ReadFileToMemory(cheat_path,
                                         (UINTPTR)s_ps_app_feature_cheat_text_buf,
