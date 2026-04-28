@@ -85,6 +85,10 @@ architecture arch of gba_cheats is
    
    type t_cheatmem is array(0 to CHEATCOUNT - 1) of std_logic_vector(127 downto 0);
    signal cheatmem : t_cheatmem := (others => (others => '1'));
+   -- cheatmem 体量不小，且是数组形式；不给风格约束时，综合器可能拆成分散资源。
+   -- 这里固定为 block，避免在 LUT 侧形成大块存储占用。
+   attribute ram_style : string;
+   attribute ram_style of cheatmem : signal is "block";
    
    signal cheatindex : integer range 0 to CHEATCOUNT - 1 := 0;
    signal cheatdata  : std_logic_vector(127 downto 0);
@@ -97,12 +101,15 @@ architecture arch of gba_cheats is
    
 begin 
 
+   -- cheat FIFO 与上面的 cheatmem 一样，按 block 策略统一到 BRAM，
+   -- 保持存储资源集中，减少 LUTRAM 竞争。
    iSyncFifo : entity MEM.SyncFifo
    generic map
    (
       SIZE             => CHEATCOUNT,
       DATAWIDTH        => 128,
-      NEARFULLDISTANCE => 0
+      NEARFULLDISTANCE => 0,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    ( 

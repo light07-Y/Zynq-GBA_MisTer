@@ -46,7 +46,9 @@ architecture arch of cache is
       READCACHE_WAITDONE,
       READCACHE_SECOND
    );
+   attribute fsm_encoding : string;
    signal state : tstate := IDLE;
+   attribute fsm_encoding of state : signal is "one_hot";
    
    signal up_low_select      : std_logic := '0';
    
@@ -73,11 +75,15 @@ architecture arch of cache is
    
 begin 
 
+   -- cache 数据体优先放 BRAM：
+   -- 该 RAM 同时承担读写，若落到 distributed RAM 会消耗大量 LUTRAM。
+   -- 显式指定 block，可把容量压力转移到 BRAM，给控制路径释放 LUT 余量。
    iRamMemory: entity mem.SyncRamDual
    generic map
    (
-      DATA_WIDTH => BITWIDTH*2,
-      ADDR_WIDTH => SIZEBITS
+      DATA_WIDTH       => BITWIDTH*2,
+      ADDR_WIDTH       => SIZEBITS,
+      MEMORY_PRIMITIVE => "block"
    )
    port map 
    (

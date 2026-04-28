@@ -67,7 +67,9 @@ architecture arch of gba_gpu_timing is
       VBLANK,
       VBLANKHBLANK
    );
+   attribute fsm_encoding : string;
    signal gpustate : tGPUState;
+   attribute fsm_encoding of gpustate : signal is "one_hot";
    
    signal linecounter : unsigned(7 downto 0)  := (others => '0');
    signal cycles      : unsigned(11 downto 0) := (others => '0');

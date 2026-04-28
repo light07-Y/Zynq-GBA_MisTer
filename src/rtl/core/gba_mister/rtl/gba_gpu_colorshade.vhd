@@ -142,15 +142,13 @@ architecture arch of gba_gpu_colorshade is
       READ_VALUE,
       WRITE_VALUE
    );
+   attribute fsm_encoding : string;
    signal state : tstate := IDLE;
+   attribute fsm_encoding of state : signal is "one_hot";
    
    signal linear_count   : integer range 0 to 31;
    signal mult_count     : integer range 0 to 8;
    signal rgb_count      : integer range 0 to 63;
-   
-   signal linear_address : integer range 0 to 127;
-   signal mult_address   : integer range 0 to 35;
-   signal rgb_address    : integer range 0 to 255;
    
    signal linear_value   : integer range 0 to 1023;
    signal mult_value     : integer range -1023 to 1023;
@@ -224,18 +222,15 @@ begin
                      linear_count   <= 0;
                      mult_count     <= 0;
                      rgb_count      <= 0;
-                     linear_address <= (to_integer(unsigned(shade_mode)) - 1) * 32;
-                     mult_address   <= (to_integer(unsigned(shade_mode)) - 1) * 9;
-                     rgb_address    <= (to_integer(unsigned(shade_mode)) - 1) * 64;
                   end if;
                end if;
          
             when READ_VALUE =>
-               state        <= WRITE_VALUE;
-               linear_value <= shade_lookup_linear_ram(linear_address);
-               mult_value   <= shade_mult_ram(mult_address);
-               rgb_value    <= shade_lookup_rgb_border_ram(rgb_address);
-               
+                state        <= WRITE_VALUE;
+                linear_value <= shade_lookup_linear_ram(((to_integer(unsigned(shade_mode_act)) - 1) * 32) + linear_count);
+                mult_value   <= shade_mult_ram(((to_integer(unsigned(shade_mode_act)) - 1) * 9) + mult_count);
+                rgb_value    <= shade_lookup_rgb_border_ram(((to_integer(unsigned(shade_mode_act)) - 1) * 64) + rgb_count);
+
             when WRITE_VALUE =>
                shade_lookup_linear(linear_count)  <= linear_value;
                shade_mult(mult_count)             <= mult_value;
@@ -244,13 +239,10 @@ begin
                   state <= READ_VALUE;
                   if (linear_count < 31) then
                      linear_count   <= linear_count + 1;
-                     linear_address <= linear_address + 1;
                   end if;
                   if (mult_count < 8) then
                      mult_count   <= mult_count + 1;
-                     mult_address <= mult_address + 1;
                   end if;
-                  rgb_address <= rgb_address + 1;
                   rgb_count   <= rgb_count + 1;
                else
                   state <= IDLE;

@@ -90,6 +90,7 @@ add_globbed_files [file join $repo_root src rtl common *.mem]
 add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.v]
 add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.sv]
 add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.vhd]
+add_globbed_files [file join $repo_root src rtl core gba_mister rtl *.mem]
 add_files -fileset constrs_1 -norecurse $constr_file
 
 foreach relpath [list \

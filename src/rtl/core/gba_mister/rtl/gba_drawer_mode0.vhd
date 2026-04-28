@@ -51,7 +51,11 @@ architecture arch of gba_drawer_mode0 is
       WAITREAD_COLOR,
       FETCHDONE
    );
+   attribute fsm_encoding : string;
+   attribute fsm_safe_state : string;
    signal vramfetch    : tVRAMState := IDLE;
+   attribute fsm_encoding of vramfetch : signal is "one_hot";
+   attribute fsm_safe_state of vramfetch : signal is "power_on_state";
    
    type tPALETTEState is
    (
@@ -60,6 +64,8 @@ architecture arch of gba_drawer_mode0 is
       WAITREAD
    );
    signal palettefetch : tPALETTEState := IDLE;
+   attribute fsm_encoding of palettefetch : signal is "one_hot";
+   attribute fsm_safe_state of palettefetch : signal is "power_on_state";
   
    signal VRAM_byteaddr        : unsigned(16 downto 0) := (others => '0'); 
    signal vram_readwait        : integer range 0 to 2;

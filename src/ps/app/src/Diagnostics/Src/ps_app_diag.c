@@ -680,7 +680,7 @@ void PsAppDiag_PrintTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
         dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
         dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
 
-        xil_printf("[TRACE] i=%u frame=%u miss=%u vsync=%u reset=%u rombusy=%u irq=0x%x err=0x%08x park=%u vdma_sr=0x%08x vdma_irq=%u vdma_err=%u dma_err=0x%03x\r\n",
+        xil_printf("[TRACE] i=%u frame=%u miss=%u vsync=%u reset=%u rombusy=%u irq=0x%x err=0x%08x park=%u vdma_sr=0x%08x vdma_irq=%u vdma_err=%u dma_err=0x%03x pc=0x%08x mem=0x%08x dma=0x%08x\r\n",
                    (unsigned int)idx,
                    (unsigned int)(status1 & 0x3U),
                    (unsigned int)((status1 >> 2) & 0x3FFFU),
@@ -704,6 +704,212 @@ void PsAppDiag_PrintTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
     }
 
     xil_printf("[TRACE] end\r\n");
+}
+
+void PsAppDiag_PrintLaunchTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
+    u32 idx;
+    u32 pc_nonzero_cnt = 0U;
+    u32 pc_change_cnt = 0U;
+    u32 dbg_nonzero_cnt = 0U;
+    u32 fbseq_change_cnt = 0U;
+    u32 prev_pc = 0U;
+    u32 prev_fbcap_seq = 0U;
+    u8  has_prev = 0U;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    if (samples == 0U) {
+        samples = PS_APP_LAUNCH_DIAG_SAMPLES;
+    }
+    if (interval_ms == 0U) {
+        interval_ms = PS_APP_LAUNCH_DIAG_INTERVAL_MS;
+    }
+
+    xil_printf("[LAUNCHDIAG] begin samples=%u interval_ms=%u\r\n",
+               (unsigned int)samples,
+               (unsigned int)interval_ms);
+
+    for (idx = 0U; idx < samples; ++idx) {
+        u32 ctrl;
+        u32 status0;
+        u32 status1;
+        u32 sw_reset;
+        u32 rom_status;
+        u32 err_latch;
+        u32 irq_sts;
+        u32 dbg_pc;
+        u32 dbg_mix;
+        u32 dbg_irq;
+        u32 dbg_dma;
+        u32 dbg_mem;
+        u32 mem_state;
+        u32 mem_eeprom_mode;
+        u32 mem_dma_eepromcount;
+        u32 fbcap_status;
+        u32 fbcap_seq;
+        u32 gpu_vcount;
+        u32 gpu_disp_low;
+
+        ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+        status0 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS0);
+        status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
+        sw_reset = PsGbaRegs_Read(ctx->regs, GBA_REG_SW_RESET) & 0x1U;
+        rom_status = PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS);
+        err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
+        irq_sts = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_STS);
+        dbg_pc = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+        dbg_mix = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_MIX);
+        dbg_irq = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ);
+        dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
+        dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+        mem_state = dbg_mem & 0xFFU;
+        mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
+        mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
+        fbcap_status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
+        fbcap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
+        gpu_vcount = (dbg_irq >> 17) & 0xFFU;
+        gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
+
+        xil_printf("[LAUNCHDIAG] i=%u ctrl=0x%08x reset=%u rom=0x%08x status0=0x%08x status1=0x%08x frame=%u miss=%u vsync=%u irq_sts=0x%x err=0x%08x\r\n",
+                   (unsigned int)idx,
+                   (unsigned int)ctrl,
+                   (unsigned int)sw_reset,
+                   (unsigned int)rom_status,
+                   (unsigned int)status0,
+                   (unsigned int)status1,
+                   (unsigned int)(status1 & 0x3U),
+                   (unsigned int)((status1 >> 2) & 0x3FFFU),
+                   (unsigned int)((status1 >> 16) & 0xFFFFU),
+                   (unsigned int)(irq_sts & 0x3U),
+                   (unsigned int)err_latch);
+        xil_printf("[LAUNCHDIAG] i=%u pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x vcount=%u disp_lo=0x%02x fbcap=0x%08x seq=%u\r\n",
+                   (unsigned int)idx,
+                   (unsigned int)dbg_pc,
+                   (unsigned int)dbg_mix,
+                   (unsigned int)dbg_irq,
+                   (unsigned int)dbg_dma,
+                   (unsigned int)dbg_mem,
+                   (unsigned int)gpu_vcount,
+                   (unsigned int)gpu_disp_low,
+                   (unsigned int)fbcap_status,
+                   (unsigned int)fbcap_seq);
+        xil_printf("[LAUNCHDIAG] i=%u memdec state=0x%02x eepromMode=%u dma_eepromcount=%u\r\n",
+                   (unsigned int)idx,
+                   (unsigned int)mem_state,
+                   (unsigned int)mem_eeprom_mode,
+                   (unsigned int)mem_dma_eepromcount);
+
+        if (dbg_pc != 0U) {
+            ++pc_nonzero_cnt;
+        }
+        if ((dbg_mix | dbg_irq | dbg_dma | dbg_mem) != 0U) {
+            ++dbg_nonzero_cnt;
+        }
+        if (has_prev != 0U) {
+            if (dbg_pc != prev_pc) {
+                ++pc_change_cnt;
+            }
+            if (fbcap_seq != prev_fbcap_seq) {
+                ++fbseq_change_cnt;
+            }
+        }
+        prev_pc = dbg_pc;
+        prev_fbcap_seq = fbcap_seq;
+        has_prev = 1U;
+
+        if ((idx + 1U) < samples) {
+            vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        }
+    }
+
+    xil_printf("[LAUNCHDIAG] summary pc_nonzero=%u pc_change=%u dbg_nonzero=%u fbseq_change=%u chain=0x%08x\r\n",
+               (unsigned int)pc_nonzero_cnt,
+               (unsigned int)pc_change_cnt,
+               (unsigned int)dbg_nonzero_cnt,
+               (unsigned int)fbseq_change_cnt,
+               (unsigned int)PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CHAIN_FLAGS));
+
+    PsAppDiag_PrintChainSnapshot(ctx, "launch");
+    PsAppDiag_PrintVdmaSnapshot(ctx, "launch");
+    xil_printf("[LAUNCHDIAG] end\r\n");
+}
+
+void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
+    u32 ctrl;
+    u32 status0;
+    u32 status1;
+    u32 sw_reset;
+    u32 rom_status;
+    u32 err_latch;
+    u32 irq_sts;
+    u32 dbg_pc;
+    u32 dbg_mix;
+    u32 dbg_irq;
+    u32 dbg_dma;
+    u32 dbg_mem;
+    u32 mem_state;
+    u32 mem_eeprom_mode;
+    u32 mem_dma_eepromcount;
+    u32 fbcap_status;
+    u32 fbcap_seq;
+    u32 gpu_vcount;
+    u32 gpu_disp_low;
+    const char *print_tag = (tag != NULL) ? tag : "sample";
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+    status0 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS0);
+    status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
+    sw_reset = PsGbaRegs_Read(ctx->regs, GBA_REG_SW_RESET) & 0x1U;
+    rom_status = PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS);
+    err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
+    irq_sts = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_STS);
+    dbg_pc = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+    dbg_mix = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_MIX);
+    dbg_irq = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ);
+    dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
+    dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+    mem_state = dbg_mem & 0xFFU;
+    mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
+    mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
+    fbcap_status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
+    fbcap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
+    gpu_vcount = (dbg_irq >> 17) & 0xFFU;
+    gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
+
+    xil_printf("[RUNTIME] %s ctrl=0x%08x reset=%u rom=0x%08x status0=0x%08x status1=0x%08x frame=%u miss=%u vsync=%u irq_sts=0x%x err=0x%08x\r\n",
+               print_tag,
+               (unsigned int)ctrl,
+               (unsigned int)sw_reset,
+               (unsigned int)rom_status,
+               (unsigned int)status0,
+               (unsigned int)status1,
+               (unsigned int)(status1 & 0x3U),
+               (unsigned int)((status1 >> 2) & 0x3FFFU),
+               (unsigned int)((status1 >> 16) & 0xFFFFU),
+               (unsigned int)(irq_sts & 0x3U),
+               (unsigned int)err_latch);
+    xil_printf("[RUNTIME] %s pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x vcount=%u disp_lo=0x%02x fbcap=0x%08x seq=%u\r\n",
+               print_tag,
+               (unsigned int)dbg_pc,
+               (unsigned int)dbg_mix,
+               (unsigned int)dbg_irq,
+               (unsigned int)dbg_dma,
+               (unsigned int)dbg_mem,
+               (unsigned int)gpu_vcount,
+               (unsigned int)gpu_disp_low,
+               (unsigned int)fbcap_status,
+               (unsigned int)fbcap_seq);
+    xil_printf("[RUNTIME] %s memdec state=0x%02x eepromMode=%u dma_eepromcount=%u\r\n",
+               print_tag,
+               (unsigned int)mem_state,
+               (unsigned int)mem_eeprom_mode,
+               (unsigned int)mem_dma_eepromcount);
 }
 
 void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
@@ -917,7 +1123,7 @@ void PsAppDiag_MaybePrintStallAudit(PsAppDiagContext *ctx,
     ctx->diag->stall_last_frame = frame_idx;
 
     if ((ctx->diag->auto_stall_audit_printed == 0U) &&
-        (dbg_mem == PS_APP_MEM_STATE_WAIT_SDRAM) &&
+        ((dbg_mem & 0xFFU) == PS_APP_MEM_STATE_WAIT_SDRAM) &&
         (ctx->diag->stall_same_sample_count >= PS_APP_AUTO_STALL_AUDIT_SAMPLES)) {
         xil_printf("[AUTO] stall audit begin samples=%u\r\n",
                    (unsigned int)ctx->diag->stall_same_sample_count);

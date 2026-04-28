@@ -1324,6 +1324,8 @@ static XStatus PsAppUi_RefreshGames(PsAppUiContext *ctx) {
     PsFatFsStorageListResult list_result;
     PsAppUiState *state;
     XStatus status;
+    TickType_t retry_ticks;
+    u8 scan_try;
     char status_text[PS_APP_UI_GAME_NAME_MAX_CHARS];
     u32 idx;
 
@@ -1340,11 +1342,39 @@ static XStatus PsAppUi_RefreshGames(PsAppUiContext *ctx) {
     PsAppUi_SetScanDiagnostics(0U, FR_OK);
     PsAppUi_SetEmptyListText("正在扫描 0:/games ...");
 
-    /* 扫描固定目录 0:/games，仅收集 .gba 文件。 */
-    status = PsFatFsStorage_ListDirectoryEx(PS_APP_GAMES_SD_DIR,
-                                            PsAppUi_ListDirectoryCallback,
-                                            &scan_ctx,
-                                            &list_result);
+    retry_ticks = pdMS_TO_TICKS(120U);
+    if (retry_ticks == 0U) {
+        retry_ticks = 1U;
+    }
+
+    /* 扫描固定目录 0:/games，仅收集 .gba 文件。
+     * 启动早期若出现“目录瞬态空视图”（visited=0 且 count=0），
+     * 进行短延时重扫，覆盖 SD 初始化抖动窗口。 */
+    status = XST_FAILURE;
+    for (scan_try = 0U; scan_try < 3U; ++scan_try) {
+        scan_ctx.count = 0U;
+        scan_ctx.overflow = 0U;
+        scan_ctx.skipped_long_path = 0U;
+        memset(&list_result, 0, sizeof(list_result));
+
+        status = PsFatFsStorage_ListDirectoryEx(PS_APP_GAMES_SD_DIR,
+                                                PsAppUi_ListDirectoryCallback,
+                                                &scan_ctx,
+                                                &list_result);
+
+        if ((status == XST_SUCCESS) &&
+            (scan_ctx.count == 0U) &&
+            (list_result.entries_visited == 0U) &&
+            (scan_try < 2U)) {
+            xil_printf("[UI] scan delayed-retry #%u path=%s\r\n",
+                       (unsigned int)(scan_try + 1U),
+                       PS_APP_GAMES_SD_DIR);
+            vTaskDelay(retry_ticks);
+            continue;
+        }
+
+        break;
+    }
 
     state->game_count = (u8)((scan_ctx.count > 255U) ? 255U : scan_ctx.count);
     for (idx = 0U; idx < scan_ctx.count; ++idx) {
@@ -1635,6 +1665,7 @@ static void PsAppUi_ProcessMenuInput(PsAppUiContext *ctx) {
     if (PsAppUi_ButtonPressedEdge(prev_buttons, cur_buttons, PS_XINPUT_BUTTON_MASK_X) != 0U) {
         state->refresh_requested = 1U;
         PsAppUi_SetStatus(ctx, "正在刷新...");
+        xil_printf("[UI] refresh requested by X/START\r\n");
     }
 
     if ((state->game_count > 0U) &&

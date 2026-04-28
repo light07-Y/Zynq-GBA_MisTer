@@ -3985,8 +3985,8 @@
       "hdmi_rgb_pack": {
         "vlnv": "xilinx.com:ip:axis_subset_converter:1.1",
         "ip_revision": "36",
-        "xci_name": "zynq_gba_system_hdmi_rgb_pack_27",
-        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_27\\zynq_gba_system_hdmi_rgb_pack_27.xci",
+        "xci_name": "zynq_gba_system_hdmi_rgb_pack_52",
+        "xci_path": "ip\\zynq_gba_system_hdmi_rgb_pack_52\\zynq_gba_system_hdmi_rgb_pack_52.xci",
         "inst_hier_path": "hdmi_rgb_pack",
         "has_run_ip_tcl": "true",
         "parameters": {
@@ -4180,13 +4180,13 @@
           "FIXED_IO"
         ]
       },
-      "ps_core_IIC_0": {
+      "ps_core_IIC_1": {
         "interface_ports": [
           "ps_core/IIC_0",
           "AUDIO_IIC"
         ]
       },
-      "ps_core_IIC_3": {
+      "ps_core_IIC_2": {
         "interface_ports": [
           "ps_core/IIC_1",
           "HDMI_DDC_IIC"

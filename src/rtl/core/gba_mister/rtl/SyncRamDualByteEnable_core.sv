@@ -22,6 +22,11 @@ module SyncRamDualByteEnable_core #(
   wire [BYTES-1:0] wea = we_a ? be_a : {BYTES{1'b0}};
   wire [BYTES-1:0] web = we_b ? be_b : {BYTES{1'b0}};
 
+  // 资源说明：
+  // 这里把 32-bit(4x8) + byte-enable 显式映射到 XPM TDP BRAM。
+  // 相比“4 个独立 8-bit RAM + 外部拼接”，这种打包方式能明显减少：
+  // 1) 分散 LUTRAM 数量；2) 字节拼接/拆分 mux 逻辑；3) 复制实例带来的控制扇出。
+  // 对本工程 GPU/OAM/Palette 这类高频小 RAM 场景，通常能换回大量 LUT 余量。
   // Industry practice for Vivado: use XPM memory macros for deterministic BRAM inference.
   xpm_memory_tdpram #(
     .ADDR_WIDTH_A            (ADDR_WIDTH),
@@ -36,6 +41,7 @@ module SyncRamDualByteEnable_core #(
     .MEMORY_INIT_PARAM       (""),
     .MEMORY_OPTIMIZATION     ("true"),
     .MEMORY_PRIMITIVE        ("block"),
+    .RAM_DECOMP              ("power"),
     .MEMORY_SIZE             (MEMORY_SIZE),
     .MESSAGE_CONTROL         (0),
     .READ_DATA_WIDTH_A       (DATA_WIDTH),

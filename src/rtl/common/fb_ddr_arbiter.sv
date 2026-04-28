@@ -108,6 +108,7 @@ module gba_frame_capture_bram (
     .MEMORY_INIT_PARAM       (""),
     .MEMORY_OPTIMIZATION     ("true"),
     .MEMORY_PRIMITIVE        ("block"),
+    .RAM_DECOMP              ("power"),
     .MEMORY_SIZE             (MEM_WORDS * 32),
     .MESSAGE_CONTROL         (0),
     .READ_DATA_WIDTH_A       (32),

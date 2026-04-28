@@ -270,7 +270,10 @@ static void PsAppRuntime_ApplyRomDetection(PsAppRuntimeContext *ctx,
         PsAppRuntime_Code3Eq(game_code, "BLF") || PsAppRuntime_Code3Eq(game_code, "BDB") ||
         PsAppRuntime_Code3Eq(game_code, "BG3") || PsAppRuntime_Code3Eq(game_code, "BDV") ||
         PsAppRuntime_Code3Eq(game_code, "A2Y") || PsAppRuntime_Code3Eq(game_code, "AI2") ||
-        PsAppRuntime_Code3Eq(game_code, "BT4") || quirk_remap;
+        PsAppRuntime_Code3Eq(game_code, "BT4") ||
+        quirk_remap;
+    /* ANWJ(电梯大战) 仅命中 EEPROM 签名，若强制 sram_dis=1 会关闭 0xE/0xF 区访问，
+     * 导致该游戏启动阶段的存储探测路径异常。这里保留默认行为，不再对 ANWJ 施加禁用。 */
     quirk_gpio =
         PsAppRuntime_Code3Eq(game_code, "BPE") || PsAppRuntime_Code3Eq(game_code, "AXV") ||
         PsAppRuntime_Code3Eq(game_code, "AXP") || PsAppRuntime_Code3Eq(game_code, "RZW") ||
@@ -284,7 +287,6 @@ static void PsAppRuntime_ApplyRomDetection(PsAppRuntimeContext *ctx,
         PsAppRuntime_Code3Eq(game_code, "U3I") ||
         PsAppRuntime_Code3Eq(game_code, "U32") ||
         PsAppRuntime_Code3Eq(game_code, "U33");
-
     ctx->rom->quirk_remap = quirk_remap;
     ctx->rom->quirk_sram_disable = quirk_sram_disable;
     ctx->rom->quirk_gpio = quirk_gpio;
@@ -312,7 +314,6 @@ static void PsAppRuntime_ApplyRomDetection(PsAppRuntimeContext *ctx,
     if (quirk_sram_disable != 0U) {
         ctx->config->ctrl &= ~GBA_CTRL_SRAM_FLASH_EN;
     }
-
     xil_printf("[ROMCFG] code=%s maker=%s sig flash1m=%u flash=%u sram=%u eeprom=%u\r\n",
                ctx->rom->game_code[0] != '\0' ? ctx->rom->game_code : "....",
                ctx->rom->maker_code[0] != '\0' ? ctx->rom->maker_code : "..",
@@ -497,6 +498,9 @@ XStatus PsAppRuntime_LoadRomFromSd(PsAppRuntimeContext *ctx, const char *request
                (unsigned int)ctx->rom->bios_load_ok,
                (unsigned int)ctx->rom->bios_bytes_loaded);
     PsAppDiag_PrintRomProbe(ctx->diag_ctx);
+    PsAppDiag_PrintLaunchTrace(ctx->diag_ctx,
+                               PS_APP_LAUNCH_DIAG_SAMPLES,
+                               PS_APP_LAUNCH_DIAG_INTERVAL_MS);
 
     return XST_SUCCESS;
 }

@@ -10,15 +10,16 @@ set(APP_NAME app)
 project(${APP_NAME})
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(PS_APP_FATFS_UTF8_LFN_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../scripts/fatfs/configure_utf8_lfn.py")
 execute_process(
     COMMAND ${Python3_EXECUTABLE}
-            "${CMAKE_CURRENT_SOURCE_DIR}/../../../../scripts/fatfs/configure_utf8_lfn.py"
-            --check
+            "${PS_APP_FATFS_UTF8_LFN_SCRIPT}"
+            --apply
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../../../.."
-    RESULT_VARIABLE PS_APP_FATFS_UTF8_LFN_CHECK
+    RESULT_VARIABLE PS_APP_FATFS_UTF8_LFN_APPLY
 )
-if(NOT PS_APP_FATFS_UTF8_LFN_CHECK EQUAL 0)
-    message(FATAL_ERROR "FatFs BSP is not configured for UTF-8 LFN paths. Run: python scripts/fatfs/configure_utf8_lfn.py --apply")
+if(NOT PS_APP_FATFS_UTF8_LFN_APPLY EQUAL 0)
+    message(FATAL_ERROR "Failed to configure FatFs BSP for UTF-8 LFN paths. Run: python scripts/fatfs/configure_utf8_lfn.py --apply")
 endif()
 
 find_package(common)

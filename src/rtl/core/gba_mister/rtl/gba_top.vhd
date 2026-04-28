@@ -362,7 +362,9 @@ architecture arch of gba_top is
       READPIXEL,
       WRITEPIXEL
    );
+   attribute fsm_encoding : string;
    signal state           : tstate := IDLE;
+   attribute fsm_encoding of state : signal is "one_hot";
                           
    signal pixel_out_x_int   : integer range 0 to 239 := 0;
    signal pixel_out_y_int   : integer range 0 to 159 := 0;
@@ -746,7 +748,6 @@ begin
       SramFlashEnable      => SramFlashEnable,
       Sram32KMirrorTest    => Sram32KMirrorTest,
       memory_remap         => memory_remap,
-      
       bitmapdrawmode       => bitmapdrawmode,
       
       VRAM_Lo_addr         => VRAM_Lo_addr,   
@@ -1128,6 +1129,7 @@ begin
 
    ------------- interrupt
    process (clk100)
+      variable irp_next : std_logic_vector(15 downto 0);
    begin
       if rising_edge(clk100) then
    
@@ -1138,28 +1140,41 @@ begin
             IRPFLags <= SAVESTATE_IRP;
    
          elsif (gbaon = '1') then
-         
+
+            irp_next := IRPFLags;
+
             if (IF_written = '1') then
-               IRPFLags <= IRPFLags and not REG_IRP_IF;
+               irp_next := irp_next and not REG_IRP_IF;
             end if;
       
-            if (IRP_VBlank = '1')   then IRPFLags( 0) <= '1'; end if;
-            if (IRP_HBlank = '1')   then IRPFLags( 1) <= '1'; end if;
-            if (IRP_LCDStat = '1')  then IRPFLags( 2) <= '1'; end if;
-            if (IRP_Timer(0) = '1') then IRPFLags( 3) <= '1'; end if;
-            if (IRP_Timer(1) = '1') then IRPFLags( 4) <= '1'; end if;
-            if (IRP_Timer(2) = '1') then IRPFLags( 5) <= '1'; end if;
-            if (IRP_Timer(3) = '1') then IRPFLags( 6) <= '1'; end if;
-            if (IRP_Serial = '1')   then IRPFLags( 7) <= '1'; end if;
-            if (IRP_DMA(0) = '1')   then IRPFLags( 8) <= '1'; end if;
-            if (IRP_DMA(1) = '1')   then IRPFLags( 9) <= '1'; end if;
-            if (IRP_DMA(2) = '1')   then IRPFLags(10) <= '1'; end if;
-            if (IRP_DMA(3) = '1')   then IRPFLags(11) <= '1'; end if;
-            if (IRP_Joypad = '1')   then IRPFLags(12) <= '1'; end if;
+            if (IRP_VBlank = '1')   then irp_next( 0) := '1'; end if;
+            if (IRP_HBlank = '1')   then irp_next( 1) := '1'; end if;
+            if (IRP_LCDStat = '1')  then irp_next( 2) := '1'; end if;
+            if (IRP_Timer(0) = '1') then irp_next( 3) := '1'; end if;
+            if (IRP_Timer(1) = '1') then irp_next( 4) := '1'; end if;
+            if (IRP_Timer(2) = '1') then irp_next( 5) := '1'; end if;
+            if (IRP_Timer(3) = '1') then irp_next( 6) := '1'; end if;
+            if (IRP_Serial = '1')   then irp_next( 7) := '1'; end if;
+            if (IRP_DMA(0) = '1')   then irp_next( 8) := '1'; end if;
+            if (IRP_DMA(1) = '1')   then irp_next( 9) := '1'; end if;
+            if (IRP_DMA(2) = '1')   then irp_next(10) := '1'; end if;
+            if (IRP_DMA(3) = '1')   then irp_next(11) := '1'; end if;
+            if (IRP_Joypad = '1')   then irp_next(12) := '1'; end if;
             --if (IRP_Gamepak = '1')  then IRPFLags(13) <= '1'; end if; -- not implemented
+
+            -- 兼容兜底：
+            -- IRP_VBlank 在集成时序下若偶发丢拍，会导致 BIOS IntrWait/HALT
+            -- 无法被唤醒（典型现象：PC 停在 0x000004A8，IF 低 16 位长期为 0）。
+            -- 这里直接用 GPU 的 vblank_trigger 脉冲补打一拍 IF.bit0。
+            -- 仍然受 DISPSTAT.VBlank IRQ enable(bit3) 约束，保持与硬件语义一致。
+            if (vblank_trigger = '1' and DISPSTAT_debug(3) = '1') then
+               irp_next(0) := '1';
+            end if;
+
+            IRPFLags <= irp_next;
             
             cpu_IRP <= '0';
-            if ((IRPFLags and REG_IRP_IE) /= x"0000" and REG_IME(0) = '1') then
+            if ((irp_next and REG_IRP_IE) /= x"0000" and REG_IME(0) = '1') then
                cpu_IRP <= '1';
             end if;
             

@@ -7,6 +7,7 @@
 #include "task.h"
 #include "xil_cache.h"
 #include "xil_printf.h"
+#include "diskio.h"
 
 #include "Common/Inc/ps_project_config.h"
 
@@ -555,6 +556,12 @@ XStatus PsFatFsStorage_ListDirectoryEx(const char *path,
     u8 need_separator;
     u32 visited_count;
     u32 skipped_long_count;
+    u8 scan_attempt;
+    u8 did_retry_after_empty;
+    u8 did_media_reinit_after_empty;
+    DSTATUS disk_status;
+    int if_sd;
+    int if_ram;
 
     if ((path == NULL) || (*path == '\0')) {
         return XST_INVALID_PARAM;
@@ -569,6 +576,19 @@ XStatus PsFatFsStorage_ListDirectoryEx(const char *path,
     fs_result = FR_OK;
     visited_count = 0U;
     skipped_long_count = 0U;
+    scan_attempt = 0U;
+    did_retry_after_empty = 0U;
+    did_media_reinit_after_empty = 0U;
+    disk_status = 0U;
+    if_sd = 0;
+    if_ram = 0;
+
+#ifdef FILE_SYSTEM_INTERFACE_SD
+    if_sd = 1;
+#endif
+#ifdef FILE_SYSTEM_INTERFACE_RAM
+    if_ram = 1;
+#endif
 
     if (s_ps_fatfs_list_cfg_logged == 0U) {
         s_ps_fatfs_list_cfg_logged = 1U;
@@ -576,11 +596,14 @@ XStatus PsFatFsStorage_ListDirectoryEx(const char *path,
          * - lfn: 是否启用长文件名
          * - cp:  代码页
          * - unicode: 2 表示路径 API 为 UTF-8，中文 ROM 名可原样传递
+         * - if_sd/if_ram: 当前启用的底层介质接口
          * - FILINFO/DIR 大小：可快速判断编译配置是否一致 */
-        xil_printf("[FATFS] list cfg lfn=%d unicode=%d cp=%d filinfo=%u dir=%u\r\n",
+        xil_printf("[FATFS] list cfg lfn=%d unicode=%d cp=%d if_sd=%d if_ram=%d filinfo=%u dir=%u\r\n",
                    (int)FF_USE_LFN,
                    (int)FF_LFN_UNICODE,
                    (int)FF_CODE_PAGE,
+                   if_sd,
+                   if_ram,
                    (unsigned int)sizeof(FILINFO),
                    (unsigned int)sizeof(DIR));
     }
@@ -593,103 +616,157 @@ XStatus PsFatFsStorage_ListDirectoryEx(const char *path,
         return XST_FAILURE;
     }
 
-    fs_result = PsFatFsStorage_Mount();
-    if (result_out != NULL) {
-        result_out->fs_result = fs_result;
-    }
-    if (fs_result != FR_OK) {
-        goto cleanup;
-    }
-
-    memset(&dir, 0, sizeof(dir));
-    fs_result = f_opendir(&dir, path);
-    if (result_out != NULL) {
-        result_out->fs_result = fs_result;
-    }
-    if (fs_result != FR_OK) {
-        goto cleanup;
-    }
-
     base_len = strlen(path);
     need_separator = (u8)((base_len > 0U) &&
                           (path[base_len - 1U] != '/') &&
                           (path[base_len - 1U] != '\\') ? 1U : 0U);
 
-    for (;;) {
-        char full_path[PS_APP_ROM_PATH_MAX_CHARS];
-        size_t name_len;
-        size_t full_len;
-        u8 is_dir;
+    for (scan_attempt = 0U; scan_attempt < 3U; ++scan_attempt) {
+        visited_count = 0U;
+        skipped_long_count = 0U;
 
-        memset(&info, 0, sizeof(info));
-        fs_result = f_readdir(&dir, &info);
+        fs_result = PsFatFsStorage_Mount();
         if (result_out != NULL) {
             result_out->fs_result = fs_result;
         }
         if (fs_result != FR_OK) {
-            if (visited_count > 0U) {
-                /* 这里最常见的是 FR_INVALID_OBJECT：
-                 * 说明目录对象在遍历过程中失效（例如底层状态变化）。
-                 * 日志保留“已读取条目数”，方便区分“全失败”还是“中途失败”。 */
-                xil_printf("[FATFS] list warn: %s (%u entries kept)\r\n",
-                           PsFatFsStorage_StrError(fs_result),
-                           (unsigned int)visited_count);
-            }
-            /* 返回失败让上层感知“扫描不完整”，由 UI 决定显示“部分可用”。 */
             status = XST_FAILURE;
             break;
         }
 
-        if (info.fname[0] == '\0') {
-            if (result_out != NULL) {
-                result_out->fs_result = FR_OK;
-            }
-            status = XST_SUCCESS;
+        memset(&dir, 0, sizeof(dir));
+        fs_result = f_opendir(&dir, path);
+        if (result_out != NULL) {
+            result_out->fs_result = fs_result;
+        }
+        if (fs_result != FR_OK) {
+            status = XST_FAILURE;
             break;
         }
 
-        /* 跳过伪目录项。 */
-        if ((strcmp(info.fname, ".") == 0) || (strcmp(info.fname, "..") == 0)) {
-            continue;
-        }
-        visited_count++;
+        for (;;) {
+            char full_path[PS_APP_ROM_PATH_MAX_CHARS];
+            size_t name_len;
+            size_t full_len;
+            u8 is_dir;
 
-        name_len = strlen(info.fname);
-        full_len = base_len + (size_t)need_separator + name_len;
-        /* 超过缓冲上限则跳过该项，避免把 UTF-8 路径截断后交给上层加载。 */
-        if (full_len >= sizeof(full_path)) {
-            skipped_long_count++;
-            continue;
-        }
+            memset(&info, 0, sizeof(info));
+            fs_result = f_readdir(&dir, &info);
+            if (result_out != NULL) {
+                result_out->fs_result = fs_result;
+            }
+            if (fs_result != FR_OK) {
+                if (visited_count > 0U) {
+                    /* 这里最常见的是 FR_INVALID_OBJECT：
+                     * 说明目录对象在遍历过程中失效（例如底层状态变化）。
+                     * 日志保留“已读取条目数”，方便区分“全失败”还是“中途失败”。 */
+                    xil_printf("[FATFS] list warn: %s (%u entries kept)\r\n",
+                               PsFatFsStorage_StrError(fs_result),
+                               (unsigned int)visited_count);
+                }
+                /* 返回失败让上层感知“扫描不完整”，由 UI 决定显示“部分可用”。 */
+                status = XST_FAILURE;
+                break;
+            }
 
-        memcpy(full_path, path, base_len);
-        if (need_separator != 0U) {
-            full_path[base_len] = '/';
-            memcpy(&full_path[base_len + 1U], info.fname, name_len);
-            full_path[base_len + 1U + name_len] = '\0';
-        } else {
-            memcpy(&full_path[base_len], info.fname, name_len);
-            full_path[base_len + name_len] = '\0';
-        }
-
-        is_dir = (u8)(((info.fattrib & AM_DIR) != 0U) ? 1U : 0U);
-        if (callback != NULL) {
-            /* 回调返回 0 表示上层主动停止遍历（如达到上限）。 */
-            if (callback(info.fname, full_path, is_dir, (u32)info.fsize, user_ctx) == 0U) {
+            if (info.fname[0] == '\0') {
+                if (result_out != NULL) {
+                    result_out->fs_result = FR_OK;
+                }
                 status = XST_SUCCESS;
                 break;
             }
+
+            /* 跳过伪目录项。 */
+            if ((strcmp(info.fname, ".") == 0) || (strcmp(info.fname, "..") == 0)) {
+                continue;
+            }
+            visited_count++;
+
+            name_len = strlen(info.fname);
+            full_len = base_len + (size_t)need_separator + name_len;
+            /* 超过缓冲上限则跳过该项，避免把 UTF-8 路径截断后交给上层加载。 */
+            if (full_len >= sizeof(full_path)) {
+                skipped_long_count++;
+                continue;
+            }
+
+            memcpy(full_path, path, base_len);
+            if (need_separator != 0U) {
+                full_path[base_len] = '/';
+                memcpy(&full_path[base_len + 1U], info.fname, name_len);
+                full_path[base_len + 1U + name_len] = '\0';
+            } else {
+                memcpy(&full_path[base_len], info.fname, name_len);
+                full_path[base_len + name_len] = '\0';
+            }
+
+            is_dir = (u8)(((info.fattrib & AM_DIR) != 0U) ? 1U : 0U);
+            if (callback != NULL) {
+                /* 回调返回 0 表示上层主动停止遍历（如达到上限）。 */
+                if (callback(info.fname, full_path, is_dir, (u32)info.fsize, user_ctx) == 0U) {
+                    status = XST_SUCCESS;
+                    break;
+                }
+            }
+        }
+
+        (void)f_closedir(&dir);
+        if (status != XST_SUCCESS) {
+            break;
+        }
+
+        if ((visited_count > 0U) || (scan_attempt > 1U)) {
+            break;
+        }
+
+        if (scan_attempt == 0U) {
+            did_retry_after_empty = 1U;
+            xil_printf("[FATFS] list retry-after-empty path=%s\r\n", path);
+        } else {
+            did_media_reinit_after_empty = 1U;
+            disk_status = disk_initialize(0);
+            xil_printf("[FATFS] list media-reinit path=%s ds=0x%02X\r\n",
+                       path,
+                       (unsigned int)disk_status);
+            if ((disk_status & STA_NOINIT) != 0U) {
+                status = XST_FAILURE;
+                if (result_out != NULL) {
+                    result_out->fs_result = FR_NOT_READY;
+                }
+                break;
+            }
+        }
+
+        (void)f_mount(NULL, PS_FATFS_STORAGE_DRIVE_PATH, 0);
+        fs_result = f_mount(&s_ps_fatfs_storage_fs, PS_FATFS_STORAGE_DRIVE_PATH, 1);
+        if (result_out != NULL) {
+            result_out->fs_result = fs_result;
+        }
+        if (fs_result != FR_OK) {
+            status = XST_FAILURE;
+            break;
         }
     }
 
-    (void)f_closedir(&dir);
+    if ((did_media_reinit_after_empty != 0U) && (status == XST_SUCCESS) && (visited_count > 0U)) {
+        xil_printf("[FATFS] list recovered after media-reinit path=%s entries=%u\r\n",
+                   path,
+                   (unsigned int)visited_count);
+    } else if ((did_retry_after_empty != 0U) && (status == XST_SUCCESS) && (visited_count > 0U)) {
+        xil_printf("[FATFS] list recovered after retry path=%s entries=%u\r\n",
+                   path,
+                   (unsigned int)visited_count);
+    }
+    if ((status == XST_SUCCESS) && (visited_count == 0U)) {
+        xil_printf("[FATFS] list empty path=%s\r\n", path);
+    }
     if (skipped_long_count > 0U) {
         xil_printf("[FATFS] list skipped %u path(s) over %u bytes\r\n",
                    (unsigned int)skipped_long_count,
                    (unsigned int)PS_APP_ROM_PATH_MAX_CHARS);
     }
 
-cleanup:
     if (result_out != NULL) {
         result_out->entries_visited = visited_count;
         result_out->entries_skipped_long = skipped_long_count;

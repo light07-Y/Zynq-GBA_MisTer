@@ -58,7 +58,7 @@ package pRegmap_gba is
       upper       : integer range 0 to proc_buswidth-1;
       lower       : integer range 0 to proc_buswidth-1;
       size        : integer range 0 to (2**proc_busadr)-1;
-      default     : integer;
+      default_val : integer;
       acccesstype : regaccess_type;
    end record;
    
@@ -96,7 +96,7 @@ end entity;
 
 architecture arch of eProcReg_gba is
 
-   signal Dout_buffer : std_logic_vector(Reg.upper downto Reg.lower) := std_logic_vector(to_unsigned(Reg.default,Reg.upper-Reg.lower+1));
+   signal Dout_buffer : std_logic_vector(Reg.upper downto Reg.lower) := std_logic_vector(to_unsigned(Reg.default_val,Reg.upper-Reg.lower+1));
     
    signal Adr : std_logic_vector(proc_bus.adr'left downto 0);
     
@@ -116,7 +116,7 @@ begin
             
             if (proc_bus.rst = '1') then
             
-               Dout_buffer <= std_logic_vector(to_unsigned(Reg.default,Reg.upper-Reg.lower+1));
+               Dout_buffer <= std_logic_vector(to_unsigned(Reg.default_val,Reg.upper-Reg.lower+1));
             
             else
          

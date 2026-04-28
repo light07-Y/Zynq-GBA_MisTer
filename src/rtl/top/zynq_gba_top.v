@@ -216,7 +216,7 @@ module zynq_gba_top #(
   wire        ddram_we;
 
   wire [27:1] ch1_addr, ch2_addr, ch4_addr;
-  wire [24:1] ch3_addr;
+  wire [25:1] ch3_addr;
   wire [63:0] ch1_dout, ch1_din, ch2_din, ch4_dout, ch4_din;
   wire [31:0] ch2_dout;
   wire [15:0] ch3_din, ch3_dout_unused;
@@ -448,11 +448,11 @@ module zynq_gba_top #(
   assign irq_error_pulse_axi = sys_err_pulse_toggle_axi_sync[2] ^ sys_err_pulse_toggle_axi_sync[1];
   assign sys_rom_loading_axi = sys_rom_loading_axi_sync;
   assign physical_keys_axi = physical_keys_axi_sync;
-  assign debug_cpu_pc_axi = G_ENABLE_DEBUG ? debug_cpu_pc_axi_sync : 32'd0;
-  assign debug_cpu_mixed_axi = G_ENABLE_DEBUG ? debug_cpu_mixed_axi_sync : 32'd0;
-  assign debug_irq_axi = G_ENABLE_DEBUG ? debug_irq_axi_sync : 32'd0;
-  assign debug_dma_axi = G_ENABLE_DEBUG ? debug_dma_axi_sync : 32'd0;
-  assign debug_mem_axi = G_ENABLE_DEBUG ? debug_mem_axi_sync : 32'd0;
+  assign debug_cpu_pc_axi = debug_cpu_pc_axi_sync;
+  assign debug_cpu_mixed_axi = debug_cpu_mixed_axi_sync;
+  assign debug_irq_axi = debug_irq_axi_sync;
+  assign debug_dma_axi = debug_dma_axi_sync;
+  assign debug_mem_axi = debug_mem_axi_sync;
   assign audio_out_l = core_audio_l;
   assign audio_out_r = core_audio_r;
   // Keep the PS-side frame IRQ aligned with the core's original largeimg frame
@@ -460,29 +460,29 @@ module zynq_gba_top #(
   // can arrive before FB_CAP_SEQ has advanced, so the PS blit path misses the
   // completed frame.
   assign core_fb_newframe = unused_core_fb_req && (unused_core_fb_addr[19:0] == 20'd0);
-  assign dbg_chain_flags_axi = G_ENABLE_DEBUG ? dbg_chain_flags_axi_sync : 32'd0;
-  assign dbg_chain_counts0_axi = G_ENABLE_DEBUG ? dbg_chain_counts0_axi_sync : 32'd0;
-  assign dbg_chain_counts1_axi = G_ENABLE_DEBUG ? dbg_chain_counts1_axi_sync : 32'd0;
-  assign dbg_ch1_first_addr_axi = G_ENABLE_DEBUG ? dbg_ch1_first_addr_axi_sync : 32'd0;
-  assign dbg_ch1_first_meta_axi = G_ENABLE_DEBUG ? dbg_ch1_first_meta_axi_sync : 32'd0;
-  assign dbg_ch1_last_addr_axi = G_ENABLE_DEBUG ? dbg_ch1_last_addr_axi_sync : 32'd0;
-  assign dbg_ch1_last_meta_axi = G_ENABLE_DEBUG ? dbg_ch1_last_meta_axi_sync : 32'd0;
-  assign dbg_ddr_first_addr_axi = G_ENABLE_DEBUG ? dbg_ddr_first_addr_axi_sync : 32'd0;
-  assign dbg_ddr_first_meta_axi = G_ENABLE_DEBUG ? dbg_ddr_first_meta_axi_sync : 32'd0;
-  assign dbg_ddr_last_addr_axi = G_ENABLE_DEBUG ? dbg_ddr_last_addr_axi_sync : 32'd0;
-  assign dbg_ddr_last_meta_axi = G_ENABLE_DEBUG ? dbg_ddr_last_meta_axi_sync : 32'd0;
-  assign dbg_axi_ar_first_addr_axi = G_ENABLE_DEBUG ? dbg_axi_ar_first_addr_axi_sync : 32'd0;
-  assign dbg_axi_ar_first_meta_axi = G_ENABLE_DEBUG ? dbg_axi_ar_first_meta_axi_sync : 32'd0;
-  assign dbg_axi_ar_last_addr_axi = G_ENABLE_DEBUG ? dbg_axi_ar_last_addr_axi_sync : 32'd0;
-  assign dbg_axi_ar_last_meta_axi = G_ENABLE_DEBUG ? dbg_axi_ar_last_meta_axi_sync : 32'd0;
-  assign dbg_axi_r_first_addr_axi = G_ENABLE_DEBUG ? dbg_axi_r_first_addr_axi_sync : 32'd0;
-  assign dbg_axi_r_first_meta_axi = G_ENABLE_DEBUG ? dbg_axi_r_first_meta_axi_sync : 32'd0;
-  assign dbg_axi_r_last_addr_axi = G_ENABLE_DEBUG ? dbg_axi_r_last_addr_axi_sync : 32'd0;
-  assign dbg_axi_r_last_meta_axi = G_ENABLE_DEBUG ? dbg_axi_r_last_meta_axi_sync : 32'd0;
-  assign dbg_done_first_addr_axi = G_ENABLE_DEBUG ? dbg_done_first_addr_axi_sync : 32'd0;
-  assign dbg_done_first_meta_axi = G_ENABLE_DEBUG ? dbg_done_first_meta_axi_sync : 32'd0;
-  assign dbg_done_last_addr_axi = G_ENABLE_DEBUG ? dbg_done_last_addr_axi_sync : 32'd0;
-  assign dbg_done_last_meta_axi = G_ENABLE_DEBUG ? dbg_done_last_meta_axi_sync : 32'd0;
+  assign dbg_chain_flags_axi = dbg_chain_flags_axi_sync;
+  assign dbg_chain_counts0_axi = dbg_chain_counts0_axi_sync;
+  assign dbg_chain_counts1_axi = dbg_chain_counts1_axi_sync;
+  assign dbg_ch1_first_addr_axi = dbg_ch1_first_addr_axi_sync;
+  assign dbg_ch1_first_meta_axi = dbg_ch1_first_meta_axi_sync;
+  assign dbg_ch1_last_addr_axi = dbg_ch1_last_addr_axi_sync;
+  assign dbg_ch1_last_meta_axi = dbg_ch1_last_meta_axi_sync;
+  assign dbg_ddr_first_addr_axi = dbg_ddr_first_addr_axi_sync;
+  assign dbg_ddr_first_meta_axi = dbg_ddr_first_meta_axi_sync;
+  assign dbg_ddr_last_addr_axi = dbg_ddr_last_addr_axi_sync;
+  assign dbg_ddr_last_meta_axi = dbg_ddr_last_meta_axi_sync;
+  assign dbg_axi_ar_first_addr_axi = dbg_axi_ar_first_addr_axi_sync;
+  assign dbg_axi_ar_first_meta_axi = dbg_axi_ar_first_meta_axi_sync;
+  assign dbg_axi_ar_last_addr_axi = dbg_axi_ar_last_addr_axi_sync;
+  assign dbg_axi_ar_last_meta_axi = dbg_axi_ar_last_meta_axi_sync;
+  assign dbg_axi_r_first_addr_axi = dbg_axi_r_first_addr_axi_sync;
+  assign dbg_axi_r_first_meta_axi = dbg_axi_r_first_meta_axi_sync;
+  assign dbg_axi_r_last_addr_axi = dbg_axi_r_last_addr_axi_sync;
+  assign dbg_axi_r_last_meta_axi = dbg_axi_r_last_meta_axi_sync;
+  assign dbg_done_first_addr_axi = dbg_done_first_addr_axi_sync;
+  assign dbg_done_first_meta_axi = dbg_done_first_meta_axi_sync;
+  assign dbg_done_last_addr_axi = dbg_done_last_addr_axi_sync;
+  assign dbg_done_last_meta_axi = dbg_done_last_meta_axi_sync;
   assign save_status_axi = save_status_axi_sync;
   assign w_core_rewind_active = w_core_feature_ctrl[0] & w_core_feature_ctrl[5];
   assign feature_savestate_busy_axi = feature_savestate_busy_axi_sync;
@@ -1198,7 +1198,7 @@ module zynq_gba_top #(
     .tilt                  (w_core_cfg_ctrl[11]),
     .rewind_on             (w_core_feature_ctrl[0]),
     .rewind_active         (w_core_rewind_active),
-    .savestate_number      (w_core_savestate_slot),
+    .savestate_number      ({29'd0, w_core_savestate_slot}),
     .RTC_timestampNew      (w_core_pulse_rtc_new),
     .RTC_timestampIn       (w_core_cfg_rtc_timestamp),
     .RTC_timestampSaved    (w_core_cfg_rtc_timestamp_saved),
@@ -1321,7 +1321,7 @@ module zynq_gba_top #(
   assign ch2_req  = bus_out_ena;
   assign ch2_rnw  = bus_out_rnw;
 
-  assign ch3_addr = 24'd0;
+  assign ch3_addr = 25'd0;
   assign ch3_din  = 16'd0;
   assign ch3_req  = 1'b0;
   assign ch3_rnw  = 1'b1;

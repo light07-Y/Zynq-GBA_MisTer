@@ -245,6 +245,8 @@ architecture arch of gba_gpu_drawer is
    signal PALETTE_OAM_Drawer_data      : std_logic_vector(31 downto 0);
    signal PALETTE_OAM_Drawer_data_hd0  : std_logic_vector(31 downto 0);
    signal PALETTE_OAM_Drawer_data_hd1  : std_logic_vector(31 downto 0);
+   signal PALETTE_BG_addr_bram         : integer range 0 to 127;
+   signal PALETTE_OAM_addr_bram        : integer range 0 to 127;
    
    signal PALETTE_BG_Drawer_addr   : integer range 0 to 127;
    signal PALETTE_BG_Drawer_addr0  : integer range 0 to 127;
@@ -518,7 +520,11 @@ architecture arch of gba_gpu_drawer is
       DRAWING,
       MERGING
    );
+   attribute fsm_encoding : string;
+   attribute fsm_safe_state : string;
    signal drawstate : tdrawstate := IDLE;
+   attribute fsm_encoding of drawstate : signal is "one_hot";
+   attribute fsm_safe_state of drawstate : signal is "power_on_state";
    
    -- affine + mosaik
    signal ref2_x : signed(27 downto 0) := (others => '0'); 
@@ -779,231 +785,247 @@ begin
       be_b       => "0000"
    );
                
-   goamram : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 256
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => OAMRAM_PROC_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => ram_dout_single1,
-         we_a       => OAMRAM_PROC_we(i),
-         re_a       => '1',
-                  
-         addr_b     => OAMRAM_Drawer_addr,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= OAMRAM_PROC_datain(((i+1) * 8) - 1 downto (i * 8));
-      OAMRAM_PROC_dataout(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single1;
-      OAMRAM_Drawer_data(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
-   end generate;  
-   goamram_hd0 : for i in 0 to 3 generate
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 256
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => OAMRAM_PROC_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => open,
-         we_a       => OAMRAM_PROC_we(i),
-         re_a       => '1',
-                  
-         addr_b     => OAMRAM_Drawer_addr_hd0,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= OAMRAM_PROC_datain(((i+1) * 8) - 1 downto (i * 8));
-      OAMRAM_Drawer_data_hd0(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
-   end generate; 
-   goamram_hd1 : for i in 0 to 3 generate
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 256
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => OAMRAM_PROC_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => open,
-         we_a       => OAMRAM_PROC_we(i),
-         re_a       => '1',
-                  
-         addr_b     => OAMRAM_Drawer_addr_hd1,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= OAMRAM_PROC_datain(((i+1) * 8) - 1 downto (i * 8));
-      OAMRAM_Drawer_data_hd1(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
-   end generate;     
-    
-   gpaletteram_bg : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 128
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => PALETTE_BG_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => ram_dout_single1,
-         we_a       => PALETTE_BG_we(i),
-         re_a       => '1',
-                  
-         addr_b     => PALETTE_BG_Drawer_addr,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= PALETTE_BG_datain(((i+1) * 8) - 1 downto (i * 8));
-      PALETTE_BG_dataout(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single1;
-      PALETTE_BG_Drawer_data(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2;
-   end generate;  
-   
-   gpaletteram_oam : for i in 0 to 3 generate
-      signal ram_dout_single1 : std_logic_vector(7 downto 0);
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 128
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => PALETTE_OAM_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => ram_dout_single1,
-         we_a       => PALETTE_OAM_we(i),
-         re_a       => '1',
-                  
-         addr_b     => PALETTE_OAM_Drawer_addr,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= PALETTE_OAM_datain(((i+1) * 8) - 1 downto (i * 8));
-      PALETTE_OAM_dataout(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single1;
-      PALETTE_OAM_Drawer_data(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2; 
-   end generate; 
-   gpaletteram_oam_hd0 : for i in 0 to 3 generate
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 128
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => PALETTE_OAM_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => open,
-         we_a       => PALETTE_OAM_we(i),
-         re_a       => '1',
-                  
-         addr_b     => PALETTE_OAM_Drawer_addr_hd0,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= PALETTE_OAM_datain(((i+1) * 8) - 1 downto (i * 8));
-      PALETTE_OAM_Drawer_data_hd0(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2; 
-   end generate; 
-   gpaletteram_oam_hd1 : for i in 0 to 3 generate
-      signal ram_dout_single2 : std_logic_vector(7 downto 0);
-      signal ram_din_single  : std_logic_vector(7 downto 0);
-   begin
-      
-      ibyteram: entity MEM.SyncRamDualNotPow2
-      generic map
-      (
-         DATA_WIDTH => 8,
-         DATA_COUNT => 128
-      )
-      port map
-      (
-         clk        => clk100,
-         
-         addr_a     => PALETTE_OAM_addr,
-         datain_a   => ram_din_single,
-         dataout_a  => open,
-         we_a       => PALETTE_OAM_we(i),
-         re_a       => '1',
-                  
-         addr_b     => PALETTE_OAM_Drawer_addr_hd1,
-         datain_b   => x"00",
-         dataout_b  => ram_dout_single2,
-         we_b       => '0',
-         re_b       => '1'
-      );
-      
-      ram_din_single <= PALETTE_OAM_datain(((i+1) * 8) - 1 downto (i * 8));
-      PALETTE_OAM_Drawer_data_hd1(((i+1) * 8) - 1 downto (i * 8)) <= ram_dout_single2; 
-   end generate; 
+   -- 说明：
+   -- PALETTE_* 原始端口声明是 0..128，而这里的 BRAM 端口宽度固定为 ADDR_WIDTH=7(0..127)。
+   -- 显式夹紧地址，避免越界导致综合器保守扩展地址逻辑；保持时序与资源都更可控。
+   PALETTE_BG_addr_bram  <= 127 when PALETTE_BG_addr  > 127 else PALETTE_BG_addr;
+   PALETTE_OAM_addr_bram <= 127 when PALETTE_OAM_addr > 127 else PALETTE_OAM_addr;
+
+   -- 资源优化背景（OAM）：
+   -- 旧实现是 4 份 8-bit RAM（按字节 lane generate），每份都有独立寻址/使能/拼接逻辑，
+   -- Vivado 容易推成大量分散 LUTRAM + 额外 mux，LUT/LUTRAM 压力很大。
+   -- 新实现改为单个 32-bit、带 byte-enable 的真双口 RAM（底层 XPM TDP BRAM）：
+   -- 1) byte-enable 语义不变（仍按字节写）；
+   -- 2) 读写端口语义不变（CPU 口 + Drawer 口）；
+   -- 3) 把分散 RAM 与拼接逻辑集中到 BRAM 宏中，显著回收 LUTRAM 与相关 LUT。
+   ioamram: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 8
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => OAMRAM_PROC_addr,
+      datain_a0  => OAMRAM_PROC_datain(7 downto 0),
+      datain_a1  => OAMRAM_PROC_datain(15 downto 8),
+      datain_a2  => OAMRAM_PROC_datain(23 downto 16),
+      datain_a3  => OAMRAM_PROC_datain(31 downto 24),
+      dataout_a  => OAMRAM_PROC_dataout,
+      we_a       => '1',
+      be_a       => OAMRAM_PROC_we,
+
+      addr_b     => OAMRAM_Drawer_addr,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => OAMRAM_Drawer_data,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   ioamram_hd0: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 8
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => OAMRAM_PROC_addr,
+      datain_a0  => OAMRAM_PROC_datain(7 downto 0),
+      datain_a1  => OAMRAM_PROC_datain(15 downto 8),
+      datain_a2  => OAMRAM_PROC_datain(23 downto 16),
+      datain_a3  => OAMRAM_PROC_datain(31 downto 24),
+      dataout_a  => open,
+      we_a       => '1',
+      be_a       => OAMRAM_PROC_we,
+
+      addr_b     => OAMRAM_Drawer_addr_hd0,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => OAMRAM_Drawer_data_hd0,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   ioamram_hd1: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 8
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => OAMRAM_PROC_addr,
+      datain_a0  => OAMRAM_PROC_datain(7 downto 0),
+      datain_a1  => OAMRAM_PROC_datain(15 downto 8),
+      datain_a2  => OAMRAM_PROC_datain(23 downto 16),
+      datain_a3  => OAMRAM_PROC_datain(31 downto 24),
+      dataout_a  => open,
+      we_a       => '1',
+      be_a       => OAMRAM_PROC_we,
+
+      addr_b     => OAMRAM_Drawer_addr_hd1,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => OAMRAM_Drawer_data_hd1,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   -- 资源优化背景（Palette BG/OAM）：
+   -- 同样把 "4x8-bit lane RAM" 打包成 "1x32-bit byte-enable RAM"。
+   -- Palette 读写频繁且多副本（normal/hd0/hd1），旧方案会复制很多小 RAM 实例，
+   -- 小深度 RAM 极易落到 distributed RAM，造成 LUT 侧拥塞。
+   -- 改为 BRAM 后，控制逻辑与拼接逻辑都减少，通常是本项目里最明显的 LUT 回收点之一。
+   ipaletteram_bg: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 7
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => PALETTE_BG_addr_bram,
+      datain_a0  => PALETTE_BG_datain(7 downto 0),
+      datain_a1  => PALETTE_BG_datain(15 downto 8),
+      datain_a2  => PALETTE_BG_datain(23 downto 16),
+      datain_a3  => PALETTE_BG_datain(31 downto 24),
+      dataout_a  => PALETTE_BG_dataout,
+      we_a       => '1',
+      be_a       => PALETTE_BG_we,
+
+      addr_b     => PALETTE_BG_Drawer_addr,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => PALETTE_BG_Drawer_data,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   ipaletteram_oam: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 7
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => PALETTE_OAM_addr_bram,
+      datain_a0  => PALETTE_OAM_datain(7 downto 0),
+      datain_a1  => PALETTE_OAM_datain(15 downto 8),
+      datain_a2  => PALETTE_OAM_datain(23 downto 16),
+      datain_a3  => PALETTE_OAM_datain(31 downto 24),
+      dataout_a  => PALETTE_OAM_dataout,
+      we_a       => '1',
+      be_a       => PALETTE_OAM_we,
+
+      addr_b     => PALETTE_OAM_Drawer_addr,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => PALETTE_OAM_Drawer_data,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   ipaletteram_oam_hd0: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 7
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => PALETTE_OAM_addr_bram,
+      datain_a0  => PALETTE_OAM_datain(7 downto 0),
+      datain_a1  => PALETTE_OAM_datain(15 downto 8),
+      datain_a2  => PALETTE_OAM_datain(23 downto 16),
+      datain_a3  => PALETTE_OAM_datain(31 downto 24),
+      dataout_a  => open,
+      we_a       => '1',
+      be_a       => PALETTE_OAM_we,
+
+      addr_b     => PALETTE_OAM_Drawer_addr_hd0,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => PALETTE_OAM_Drawer_data_hd0,
+      we_b       => '0',
+      be_b       => "0000"
+   );
+
+   ipaletteram_oam_hd1: entity MEM.SyncRamDualByteEnable
+   generic map
+   (
+      is_simu    => is_simu,
+      is_cyclone5=> '1',
+      BYTE_WIDTH => 8,
+      BYTES      => 4,
+      ADDR_WIDTH => 7
+   )
+   port map
+   (
+      clk        => clk100,
+
+      addr_a     => PALETTE_OAM_addr_bram,
+      datain_a0  => PALETTE_OAM_datain(7 downto 0),
+      datain_a1  => PALETTE_OAM_datain(15 downto 8),
+      datain_a2  => PALETTE_OAM_datain(23 downto 16),
+      datain_a3  => PALETTE_OAM_datain(31 downto 24),
+      dataout_a  => open,
+      we_a       => '1',
+      be_a       => PALETTE_OAM_we,
+
+      addr_b     => PALETTE_OAM_Drawer_addr_hd1,
+      datain_b0  => x"00",
+      datain_b1  => x"00",
+      datain_b2  => x"00",
+      datain_b3  => x"00",
+      dataout_b  => PALETTE_OAM_Drawer_data_hd1,
+      we_b       => '0',
+      be_b       => "0000"
+   );
    
    igba_drawer_mode0_0 : entity work.gba_drawer_mode0
    port map
@@ -1692,12 +1714,17 @@ begin
       end if;
    end process;
    
-   -- line buffers
+   -- line buffers 资源策略：
+   -- 这些 linebuffer 深度不大但实例数量多（BG/OBJ + HD 副本），如果走 auto/distributed，
+   -- 会累计成大量 LUTRAM，直接抬高 LUT 利用率并增加 place 阶段的 packing 压力。
+   -- 这里统一显式指定 MEMORY_PRIMITIVE => "block"，把容量优先放到 BRAM，
+   -- 以换回 LUT 资源给控制/组合逻辑使用，从而提升实现收敛性。
    ilinebuffer_bg0: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1718,8 +1745,9 @@ begin
    ilinebuffer_bg1: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1740,8 +1768,9 @@ begin
    ilinebuffer_bg2: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1762,8 +1791,9 @@ begin
    ilinebuffer_bg2_hd0: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1784,8 +1814,9 @@ begin
    ilinebuffer_bg2_hd1: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1806,8 +1837,9 @@ begin
    ilinebuffer_bg3: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1828,8 +1860,9 @@ begin
    ilinebuffer_bg3_hd0: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1850,8 +1883,9 @@ begin
    ilinebuffer_bg3_hd1: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1872,8 +1906,9 @@ begin
    ilinebuffer_obj_color: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1894,8 +1929,9 @@ begin
    ilinebuffer_obj_color_hd0: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1916,8 +1952,9 @@ begin
    ilinebuffer_obj_color_hd1: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 16,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 16,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1939,8 +1976,9 @@ begin
    ilinebuffer_obj_settings: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 3,
-      ADDR_WIDTH => 8
+      DATA_WIDTH       => 3,
+      ADDR_WIDTH       => 8,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1961,8 +1999,9 @@ begin
    ilinebuffer_obj_settings_hd0: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 3,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 3,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (
@@ -1983,8 +2022,9 @@ begin
    ilinebuffer_obj_settings_hd1: entity MEM.SyncRamDual
    generic map
    (
-      DATA_WIDTH => 3,
-      ADDR_WIDTH => 9
+      DATA_WIDTH       => 3,
+      ADDR_WIDTH       => 9,
+      MEMORY_PRIMITIVE => "block"
    )
    port map
    (

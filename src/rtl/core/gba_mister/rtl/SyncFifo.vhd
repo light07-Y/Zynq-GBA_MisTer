@@ -8,7 +8,11 @@ entity SyncFifo is
    (
       SIZE             : integer;
       DATAWIDTH        : integer;
-      NEARFULLDISTANCE : integer
+      NEARFULLDISTANCE : integer;
+      -- 统一 FIFO 存储体的资源落点策略。
+      -- 在本工程中，FIFO 数量较多且位宽/深度不一；若默认推断到 distributed，
+      -- 会持续吞噬 LUT/LUTRAM。提供该开关后，上层可按模块重要性定向压到 BRAM。
+      MEMORY_PRIMITIVE : string := "auto"
    );
    port 
    ( 
@@ -32,6 +36,9 @@ architecture arch of SyncFifo is
 
    type t_memory is array(0 to SIZE - 1) of std_logic_vector(DATAWIDTH - 1 downto 0);
    signal memory : t_memory;  
+   -- 直接给推断 RAM 标注风格，避免综合器在不同版本/不同上下文下资源映射漂移。
+   attribute ram_style : string;
+   attribute ram_style of memory : signal is MEMORY_PRIMITIVE;
 
    signal wrcnt   : unsigned(SIZEBITS - 1 downto 0) := (others => '0');
    signal rdcnt   : unsigned(SIZEBITS - 1 downto 0) := (others => '0');

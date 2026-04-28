@@ -357,6 +357,7 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
             (ctx->diag->delayed_chain_printed == 1U && ctx->diag->delayed_chain_tick >= 1500U)) {
             xil_printf("[AUTO] delayed chain snapshot @tick=%u\r\n",
                        (unsigned int)ctx->diag->delayed_chain_tick);
+            PsAppDiag_PrintRuntimeSample(ctx->diag_ctx, "delayed");
             PsAppDiag_PrintChainSnapshot(ctx->diag_ctx, "delayed");
             PsAppDiag_PrintConfigReadback(ctx->diag_ctx, "delayed");
             ctx->diag->delayed_chain_printed++;

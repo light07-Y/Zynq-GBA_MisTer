@@ -11,6 +11,8 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx);
 void PsAppDiag_PrintDiag(PsAppDiagContext *ctx);
 void PsAppDiag_PrintProbe(PsAppDiagContext *ctx);
 void PsAppDiag_PrintTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms);
+void PsAppDiag_PrintLaunchTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms);
+void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintConfigReadback(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintChainSnapshot(PsAppDiagContext *ctx, const char *tag);
 void PsAppDiag_PrintVdmaSnapshot(PsAppDiagContext *ctx, const char *tag);

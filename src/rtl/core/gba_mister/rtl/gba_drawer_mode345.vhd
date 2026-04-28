@@ -49,7 +49,11 @@ architecture arch of gba_drawer_mode345 is
       WAITREAD,
       FETCHDONE
    );
+   attribute fsm_encoding : string;
+   attribute fsm_safe_state : string;
    signal vramfetch    : tFetchState := IDLE;
+   attribute fsm_encoding of vramfetch : signal is "one_hot";
+   attribute fsm_safe_state of vramfetch : signal is "power_on_state";
    
    type tDrawState is
    (
@@ -57,6 +61,8 @@ architecture arch of gba_drawer_mode345 is
       WAITREAD
    );
    signal DrawState : tDrawState := NEXTPIXEL;
+   attribute fsm_encoding of DrawState : signal is "one_hot";
+   attribute fsm_safe_state of DrawState : signal is "power_on_state";
   
    signal x_cnt            : integer range 0 to 239;
    signal realX            : signed(27 downto 0);

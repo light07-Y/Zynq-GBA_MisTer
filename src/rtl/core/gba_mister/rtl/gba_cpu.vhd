@@ -208,7 +208,7 @@ architecture arch of gba_cpu is
    signal skip_pending_fetch : std_logic := '0';   
    signal fetch_ack          : std_logic := '0';   
    signal fetch_available    : std_logic := '0'; 
-   signal fetch_data         : std_logic_vector(31 downto 0) := (others => '0');  
+   signal fetch_data         : std_logic_vector(31 downto 0) := (others => '0');
    
    -- ############# Decode ##############
    
@@ -223,7 +223,9 @@ architecture arch of gba_cpu is
       DECODE_DETAILS,
       DECODE_DONE
    );
+   attribute fsm_encoding : string;
    signal state_decode : tState_decode;
+   attribute fsm_encoding of state_decode : signal is "one_hot";
    
    -- ############# Execute ##############
    
@@ -254,6 +256,7 @@ architecture arch of gba_cpu is
       CALC
    );
    signal state_execute : tState_execute;
+   attribute fsm_encoding of state_execute : signal is "one_hot";
    
    -- ############# Functions ##############
    
@@ -404,6 +407,7 @@ architecture arch of gba_cpu is
       ALULEAVEIRP
    );
    signal alu_stage : talu_stage := ALUSTART;
+   attribute fsm_encoding of alu_stage : signal is "one_hot";
    
    signal alu_op1           : unsigned(31 downto 0);
    signal alu_op2           : unsigned(31 downto 0);
@@ -423,6 +427,7 @@ architecture arch of gba_cpu is
       MULWRITEBACK_HIGH
    );
    signal mul_stage : tmul_stage := MULSTART;
+   attribute fsm_encoding of mul_stage : signal is "one_hot";
    
    signal mul_op1           : unsigned(31 downto 0);
    signal mul_op2           : unsigned(31 downto 0);
@@ -479,6 +484,7 @@ architecture arch of gba_cpu is
       WRITEBACKADDR
    );
    signal data_rw_stage : tbus_stage := FETCHADDR;
+   attribute fsm_encoding of data_rw_stage : signal is "one_hot";
    
    signal busaddress       : unsigned(31 downto 0);
    signal busaddmod        : unsigned(31 downto 0);
@@ -499,6 +505,7 @@ architecture arch of gba_cpu is
       BLOCKSWITCHMODE
    );
    signal block_rw_stage : tblock_stage := BLOCKFETCHADDR;
+   attribute fsm_encoding of block_rw_stage : signal is "one_hot";
    
    signal block_regindex   : integer range 0 to 15;
    signal endaddress       : unsigned(31 downto 0) := (others => '0');
@@ -516,6 +523,7 @@ architecture arch of gba_cpu is
       MSR_CPSR
    );
    signal MSR_Stage : tMRS_stage := MSR_START;
+   attribute fsm_encoding of MSR_Stage : signal is "one_hot";
    
    signal msr_value            : unsigned(31 downto 0); 
    signal msr_writebackvalue   : unsigned(31 downto 0); 
@@ -701,6 +709,7 @@ begin
             regs_5_17 <= unsigned(SAVESTATE_REGS_5_17);
             
             PC <= unsigned(SAVESTATE_PC);
+            bus_fetch_Adr <= SAVESTATE_PC;
 
             halt <= SAVESTATE_HALT;
             
@@ -2094,7 +2103,7 @@ begin
          prefetch_addcycles <= 0;
          prefetch_subcycles <= 0;
    
-         if (reset = '1') then -- reset
+        if (reset = '1') then -- reset
             Flag_Zero       <= SAVESTATE_Flag_Zero;      
             Flag_Carry      <= SAVESTATE_Flag_Carry;     
             Flag_Negative   <= SAVESTATE_Flag_Negative;  

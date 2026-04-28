@@ -164,7 +164,9 @@ architecture arch of gba_memorymux is
       FLASH_WRITEBLOCK,
       FLASH_BLOCKWAIT
    );
+   attribute fsm_encoding : string;
    signal state : tState := IDLE;
+   attribute fsm_encoding of state : signal is "one_hot";
    
    signal gb_on_1            : std_logic := '0';
    
@@ -218,6 +220,7 @@ architecture arch of gba_memorymux is
       EEPROM_WRITEDATA
    );
    signal eepromMode : tEEPROMSTATE := EEPROM_IDLE;
+   attribute fsm_encoding of eepromMode : signal is "sequential";
    signal eepromBuffer  : std_logic_vector(7 downto 0) := (others => '0');
    signal eepromBits    : unsigned(7 downto 0) := (others => '0');
    signal eepromByte    : unsigned(5 downto 0) := (others => '0');
@@ -244,6 +247,8 @@ architecture arch of gba_memorymux is
    );
    signal flashState      : tFLASHSTATE := FLASH_READ_ARRAY;
    signal flashReadState  : tFLASHSTATE := FLASH_READ_ARRAY;
+   attribute fsm_encoding of flashState : signal is "sequential";
+   attribute fsm_encoding of flashReadState : signal is "sequential";
    signal flashbank       : std_logic := '0';
    signal flashNotSRam    : std_logic := '0';
    signal flashSRamdecide : std_logic := '0';
@@ -262,7 +267,20 @@ architecture arch of gba_memorymux is
    
    signal SAVESTATE_EEPROM_BACK : std_logic_vector(31 downto 0);
    signal SAVESTATE_FLASH_BACK  : std_logic_vector(16 downto 0);
-   
+
+   -- EEPROM 命令阶段的 DMA3 计数（按位传输计数）：
+   --  0x09/0x11 -> Read command (6/14-bit addr)
+   --  0x49/0x51 -> Write command (6/14-bit addr)
+   -- 这里只做“严格匹配”，避免把普通 DMA（例如 count=0x50）的
+   -- 0x0D ROM 镜像访问误判为 EEPROM 事务。
+   function is_eeprom_cmd_count(cnt : unsigned(16 downto 0)) return boolean is
+   begin
+      return (cnt = to_unsigned(16#09#, cnt'length)) or
+             (cnt = to_unsigned(16#11#, cnt'length)) or
+             (cnt = to_unsigned(16#49#, cnt'length)) or
+             (cnt = to_unsigned(16#51#, cnt'length));
+   end function;
+
 begin 
 
    sdram_read_addr <= sdram_read_addr_int;
@@ -291,11 +309,15 @@ begin
       signal smallram_dout_single : std_logic_vector(7 downto 0);
       signal smallram_din_single  : std_logic_vector(7 downto 0);
    begin
+      -- smallram 是共享热点路径，访问频繁且深度固定。
+      -- 强制 block 的目的不是“追求 BRAM 占用高”，而是把存储容量从 LUT 侧搬走，
+      -- 降低 LUT/LUTRAM 拥塞，减少 place 阶段 packing 压力。
       ismallram: entity MEM.SyncRamDual
       generic map
       (
-         DATA_WIDTH => 8,
-         ADDR_WIDTH => 13
+         DATA_WIDTH       => 8,
+         ADDR_WIDTH       => 13,
+         MEMORY_PRIMITIVE => "block"
       )
       port map
       (
@@ -306,8 +328,8 @@ begin
          dataout_a  => smallram_dout_single,
          we_a       => '0',
          re_a       => '1',
-                  
-         addr_b     => smallram_addr_w,
+
+        addr_b     => smallram_addr_w,
          datain_b   => smallram_din_single,
          dataout_b  => open,
          we_b       => smallram_we(i),
@@ -367,8 +389,13 @@ begin
    SAVESTATE_FLASH_BACK(12 downto 9)  <= std_logic_vector(to_unsigned(tFLASHSTATE'POS(flashState), 4));
    SAVESTATE_FLASH_BACK(16 downto 13) <= std_logic_vector(to_unsigned(tFLASHSTATE'POS(flashReadState), 4));
    
-   debug_mem(7 downto 0)  <= std_logic_vector(to_unsigned(tState'POS(state), 8));
-   debug_mem(31 downto 8) <= (others => '0');
+   debug_mem(7 downto 0)    <= std_logic_vector(to_unsigned(tState'POS(state), 8));
+   debug_mem(10 downto 8)   <= std_logic_vector(to_unsigned(tEEPROMSTATE'POS(eepromMode), 3));
+   debug_mem(27 downto 11)  <= std_logic_vector(dma_eepromcount);
+   debug_mem(28)            <= '0';
+   debug_mem(29)            <= '1' when is_eeprom_cmd_count(dma_eepromcount) else '0';
+   debug_mem(30)            <= SramFlashEnable;
+   debug_mem(31)            <= '0';
    
    process (clk100)
       variable palette_we : std_logic_vector(3 downto 0);
@@ -580,7 +607,47 @@ begin
                               end if;
                            
                            when x"D" =>
-                              state            <= EEPROMREAD;  
+                              -- 兼容性修复：
+                              -- 仅在 EEPROM 命令窗口/进行中事务时把 0x0D 路由到 EEPROM。
+                              -- 否则按普通 GamePak ROM 读取，避免把某些游戏的 ROM 镜像访问误判为 EEPROM。
+                              if ((eepromMode /= EEPROM_IDLE) or
+                                  is_eeprom_cmd_count(dma_eepromcount)) then
+                                 state <= EEPROMREAD;
+                              else
+                                 if (unsigned(mem_bus_Adr(24 downto 2)) >= unsigned(MaxPakAddr)) then
+                                    state       <= READAFTERPAK;
+                                 elsif (sdram_addr_buf = mem_bus_Adr(24 downto 3) and mem_bus_Adr(0) = '0' and mem_bus_acc = ACCESS_16BIT) then
+                                    mem_bus_done <= '1';
+                                    if (mem_bus_Adr(2) = '0') then
+                                       if (mem_bus_Adr(1) = '0') then
+                                          mem_bus_din <= x"0000" & sdram_data_buf(15 downto 0);
+                                       else
+                                          mem_bus_din <= x"0000" & sdram_data_buf(31 downto 16);
+                                       end if;
+                                    else
+                                       if (mem_bus_Adr(1) = '0') then
+                                          mem_bus_din <= x"0000" & sdram_data_buf(47 downto 32);
+                                       else
+                                          mem_bus_din <= x"0000" & sdram_data_buf(63 downto 48);
+                                       end if;
+                                    end if;
+                                 elsif (sdram_addr_buf = mem_bus_Adr(24 downto 3) and mem_bus_Adr(1 downto 0) = "00" and mem_bus_acc = ACCESS_32BIT) then
+                                    mem_bus_done <= '1';
+                                    if (mem_bus_Adr(2) = '0') then
+                                       mem_bus_din <= sdram_data_buf(31 downto 0);
+                                    else
+                                       mem_bus_din <= sdram_data_buf(63 downto 32);
+                                    end if;
+                                 else
+                                    cache_read_enable <= '1';
+                                    if (memory_remap = '1') then
+                                       cache_read_addr   <= "00000" & mem_bus_Adr(19 downto 2);
+                                    else
+                                       cache_read_addr   <= mem_bus_Adr(24 downto 2);
+                                    end if;
+                                    state             <= WAIT_SDRAM;
+                                 end if;
+                              end if;
    
                            when x"E" | x"F" =>
                               if (SramFlashEnable = '1') then
@@ -643,7 +710,15 @@ begin
                                  end if;
                               end if;
                            
-                           when x"D" => state <= EEPROMWRITE;  
+                           when x"D" =>
+                              -- 仅在 EEPROM 命令窗口/进行中事务时接受 0x0D 写访问；
+                              -- 其它情况按 ROM 区写入忽略处理，直接完成本次总线周期。
+                              if ((eepromMode /= EEPROM_IDLE) or
+                                  is_eeprom_cmd_count(dma_eepromcount)) then
+                                 state <= EEPROMWRITE;
+                              else
+                                 mem_bus_done <= '1';
+                              end if;
                            when x"E" | x"F" => state <= FLASHSRAMWRITEDECIDE1; adr_save(1 downto 0) <= mem_bus_Adr(1 downto 0) or bus_lowbits;
                            when others => mem_bus_done <= '1'; --report "writing here not implemented!" severity failure;
                         end case;
@@ -778,6 +853,15 @@ begin
                end if;
                
             when WAIT_SDRAM =>
+               -- 关键修复：
+               -- 某些启动路径会在 gb_on 拉起后很早发起第一笔 ROM 读。
+               -- gamepak cache 此时可能仍在 CLEARCACHE，导致在 IDLE 态只拉高 1 拍的 read_enable 被吞掉，
+               -- 进而 memorymux 卡死在 WAIT_SDRAM（无 cache_read_done / sdram_read_done）。
+               -- 在 WAIT_SDRAM 期间保持 read_enable，有助于 cache 一旦回到 IDLE 就能接住该请求。
+               if (read_operation = '1') then
+                  cache_read_enable <= '1';
+               end if;
+
                if (sdram_read_done = '1') then
                   if (read_operation = '1') then
                      sdram_addr_buf <= adr_save(24 downto 3);

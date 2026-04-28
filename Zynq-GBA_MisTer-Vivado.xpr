@@ -7,7 +7,7 @@
 <Project Product="Vivado" Version="7" Minor="71" Path="F:/02_Projects/Zynq-GBA_MisTer-Vivado/Zynq-GBA_MisTer-Vivado.xpr">
   <DefaultLaunch Dir="$PRUNDIR"/>
   <Configuration>
-    <Option Name="Id" Val="e79d0ed3420344e4a5915fbe52dc9c63"/>
+    <Option Name="Id" Val="c216869938b34f43a7a139a51630f714"/>
     <Option Name="Part" Val="xc7z020clg400-1"/>
     <Option Name="CompiledLibDir" Val="$PCACHEDIR/compile_simlib"/>
     <Option Name="CompiledLibDirXSim" Val=""/>
@@ -164,6 +164,20 @@
           <Attr Name="UsedIn" Val="simulation"/>
         </FileInfo>
       </File>
+      <File Path="$PPRDIR/src/rtl/core/gba_mister/rtl/SyncRamDualNotPow2.vhd">
+        <FileInfo>
+          <Attr Name="Library" Val="mem"/>
+          <Attr Name="AutoDisabled" Val="1"/>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/src/rtl/core/gba_mister/rtl/gba_bios.mem">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
       <File Path="$PPRDIR/src/rtl/top/gba_config_mgr.v">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
@@ -228,13 +242,6 @@
         </FileInfo>
       </File>
       <File Path="$PPRDIR/src/rtl/core/gba_mister/rtl/SyncRamDualByteEnable.vhd">
-        <FileInfo>
-          <Attr Name="Library" Val="mem"/>
-          <Attr Name="UsedIn" Val="synthesis"/>
-          <Attr Name="UsedIn" Val="simulation"/>
-        </FileInfo>
-      </File>
-      <File Path="$PPRDIR/src/rtl/core/gba_mister/rtl/SyncRamDualNotPow2.vhd">
         <FileInfo>
           <Attr Name="Library" Val="mem"/>
           <Attr Name="UsedIn" Val="synthesis"/>
@@ -492,7 +499,7 @@
       <File Path="$PSRCDIR/sources_1/imports/hdl/zynq_gba_system_wrapper.v">
         <FileInfo>
           <Attr Name="ImportPath" Val="$PGENDIR/sources_1/bd/zynq_gba_system/hdl/zynq_gba_system_wrapper.v"/>
-          <Attr Name="ImportTime" Val="1776941946"/>
+          <Attr Name="ImportTime" Val="1777294748"/>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="implementation"/>
           <Attr Name="UsedIn" Val="simulation"/>

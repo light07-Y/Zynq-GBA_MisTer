@@ -117,7 +117,9 @@ architecture arch of gba_dma_module is
       READING,
       WRITING
    );
+   attribute fsm_encoding : string;
    signal state : tstate := IDLE;
+   attribute fsm_encoding of state : signal is "one_hot";
 
    -- savestate
    signal SAVESTATE_DMASOURCE     : std_logic_vector(27 downto 0);
