@@ -31,6 +31,7 @@ module axi_lite_ctrl_regs #(
   input  logic [31:0]          stat_debug_cpu_pc,
   input  logic [31:0]          stat_debug_cpu_mixed,
   input  logic [31:0]          stat_debug_irq,
+  input  logic [31:0]          stat_debug_irq_ext,
   input  logic [31:0]          stat_debug_dma,
   input  logic [31:0]          stat_debug_mem,
   input  logic [31:0]          stat_dbg_chain_flags,
@@ -177,6 +178,7 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS        = 12'h0F8;
   localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS_CLR    = 12'h0FC;
   localparam logic [ADDR_W-1:0] REG_RTC_TIMESTAMP_SAVED   = 12'h100;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_IRQ_EXT         = 12'h104;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
@@ -485,6 +487,7 @@ module axi_lite_ctrl_regs #(
           REG_DEBUG_CPU_PC:        rdata_next = stat_debug_cpu_pc;
           REG_DEBUG_CPU_MIX:       rdata_next = stat_debug_cpu_mixed;
           REG_DEBUG_IRQ:           rdata_next = stat_debug_irq;
+          REG_DEBUG_IRQ_EXT:       rdata_next = stat_debug_irq_ext;
           REG_DEBUG_DMA:           rdata_next = stat_debug_dma;
           REG_DEBUG_MEM:           rdata_next = stat_debug_mem;
           REG_DISPLAY_FRAME:       rdata_next = {30'd0, cfg_display_frame_idx};

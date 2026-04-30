@@ -175,6 +175,7 @@ module zynq_gba_top #(
   wire        w_core_pulse_cheat_clear;
   wire        w_core_pulse_rtc_new;
   wire        w_core_rewind_active;
+  wire        w_core_rom_ddr_safe;
 
   // 2. AXI 寄存器到系统控制器的接口
   wire [31:0] w_axi_cfg_ctrl;
@@ -268,6 +269,7 @@ module zynq_gba_top #(
   wire [31:0] debug_cpu_pc_axi;
   wire [31:0] debug_cpu_mixed_axi;
   wire [31:0] debug_irq_axi;
+  wire [31:0] debug_irq_ext_axi;
   wire [31:0] debug_dma_axi;
   wire [31:0] debug_mem_axi;
   wire [31:0] dbg_chain_flags_axi;
@@ -317,6 +319,7 @@ module zynq_gba_top #(
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_pc_axi_meta, debug_cpu_pc_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_mixed_axi_meta, debug_cpu_mixed_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_irq_axi_meta, debug_irq_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_irq_ext_axi_meta, debug_irq_ext_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_axi_meta, debug_dma_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_mem_axi_meta, debug_mem_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_flags_axi_meta, dbg_chain_flags_axi_sync;
@@ -434,6 +437,7 @@ module zynq_gba_top #(
   wire [31:0] unused_debug_cpu_pc;
   wire [31:0] unused_debug_cpu_mixed;
   wire [31:0] unused_debug_irq;
+  wire [31:0] unused_debug_irq_ext;
   wire [31:0] unused_debug_dma;
   wire [31:0] unused_debug_mem;
   wire [15:0] core_audio_l;
@@ -443,6 +447,7 @@ module zynq_gba_top #(
   wire [15:0] audio_out_r;
 
   assign w_core_cfg_sw_reset = w_core_cfg_sw_reset_sync;
+  assign w_core_rom_ddr_safe = w_core_cfg_ctrl[14];
   assign display_frame_idx_core = display_frame_idx_core_sync;
   assign irq_vsync_pulse_axi = fb_frame_pulse_toggle_axi_sync[2] ^ fb_frame_pulse_toggle_axi_sync[1];
   assign irq_error_pulse_axi = sys_err_pulse_toggle_axi_sync[2] ^ sys_err_pulse_toggle_axi_sync[1];
@@ -451,6 +456,7 @@ module zynq_gba_top #(
   assign debug_cpu_pc_axi = debug_cpu_pc_axi_sync;
   assign debug_cpu_mixed_axi = debug_cpu_mixed_axi_sync;
   assign debug_irq_axi = debug_irq_axi_sync;
+  assign debug_irq_ext_axi = debug_irq_ext_axi_sync;
   assign debug_dma_axi = debug_dma_axi_sync;
   assign debug_mem_axi = debug_mem_axi_sync;
   assign audio_out_l = core_audio_l;
@@ -742,6 +748,8 @@ module zynq_gba_top #(
       debug_cpu_mixed_axi_sync     <= 32'd0;
       debug_irq_axi_meta           <= 32'd0;
       debug_irq_axi_sync           <= 32'd0;
+      debug_irq_ext_axi_meta       <= 32'd0;
+      debug_irq_ext_axi_sync       <= 32'd0;
       debug_dma_axi_meta           <= 32'd0;
       debug_dma_axi_sync           <= 32'd0;
       debug_mem_axi_meta           <= 32'd0;
@@ -847,6 +855,8 @@ module zynq_gba_top #(
       debug_cpu_mixed_axi_sync     <= debug_cpu_mixed_axi_meta;
       debug_irq_axi_meta           <= unused_debug_irq;
       debug_irq_axi_sync           <= debug_irq_axi_meta;
+      debug_irq_ext_axi_meta       <= unused_debug_irq_ext;
+      debug_irq_ext_axi_sync       <= debug_irq_ext_axi_meta;
       debug_dma_axi_meta           <= unused_debug_dma;
       debug_dma_axi_sync           <= debug_dma_axi_meta;
       debug_mem_axi_meta           <= unused_debug_mem;
@@ -1011,6 +1021,7 @@ module zynq_gba_top #(
     .stat_debug_cpu_pc   (debug_cpu_pc_axi),
     .stat_debug_cpu_mixed(debug_cpu_mixed_axi),
     .stat_debug_irq      (debug_irq_axi),
+    .stat_debug_irq_ext  (debug_irq_ext_axi),
     .stat_debug_dma      (debug_dma_axi),
     .stat_debug_mem      (debug_mem_axi),
     .stat_dbg_chain_flags(dbg_chain_flags_axi),
@@ -1288,6 +1299,7 @@ module zynq_gba_top #(
     .debug_cpu_pc          (unused_debug_cpu_pc),
     .debug_cpu_mixed       (unused_debug_cpu_mixed),
     .debug_irq             (unused_debug_irq),
+    .debug_irq_ext         (unused_debug_irq_ext),
     .debug_dma             (unused_debug_dma),
     .debug_mem             (unused_debug_mem),
     .debug_internal         (core_debug_internal)
@@ -1343,6 +1355,7 @@ module zynq_gba_top #(
     .DDRAM_DIN        (ddram_din),
     .DDRAM_BE         (ddram_be),
     .DDRAM_WE         (ddram_we),
+    .CFG_ROM_DDR_SAFE (w_core_rom_ddr_safe),
     .ch1_addr(ch1_addr), .ch1_dout(ch1_dout), .ch1_din(ch1_din[15:0]), .ch1_req(ch1_req), .ch1_rnw(ch1_rnw), .ch1_ready(sdram_read_done),
     .ch2_addr(ch2_addr), .ch2_dout(ch2_dout),     .ch2_din(ch2_din[31:0]), .ch2_req(ch2_req), .ch2_rnw(ch2_rnw), .ch2_ready(bus_out_done),
     .ch3_addr(ch3_addr), .ch3_dout(ch3_dout_unused), .ch3_din(ch3_din), .ch3_req(ch3_req), .ch3_rnw(ch3_rnw), .ch3_ready(ch3_ready_unused),

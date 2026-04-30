@@ -172,6 +172,54 @@ static void PsAppConsole_RunFpsTest(PsAppConsoleContext *ctx, u32 duration_ms, u
                (unsigned int)app->video->blit_seq_gap_max);
 }
 
+#define CACHEPROF_BITMAP_WORDS 256U  /* 256*32 = 8192 bits */
+
+static void PsAppConsole_RunCacheProf(PsAppConsoleContext *ctx, u32 duration_ms) {
+    PsAppRuntimeContext *app;
+    u32 bitmap[CACHEPROF_BITMAP_WORDS];
+    u32 rom_samples   = 0U;
+    u32 other_samples = 0U;
+    u32 unique_sets   = 0U;
+    XTime tick_start;
+    XTime tick_end;
+    u64 elapsed_us;
+
+    if ((ctx == NULL) || (ctx->runtime == NULL)) return;
+    app = ctx->runtime;
+    if ((duration_ms == 0U) || (duration_ms > 30000U)) duration_ms = 5000U;
+
+    for (u32 i = 0U; i < CACHEPROF_BITMAP_WORDS; i++) bitmap[i] = 0U;
+
+    xil_printf("[CACHEPROF] sampling %ums (free-running read loop)\r\n",
+               (unsigned)duration_ms);
+
+    XTime_GetTime(&tick_start);
+    tick_end = tick_start;
+
+    do {
+        u32 pc = PsGbaRegs_Read(app->regs, GBA_REG_DEBUG_CPU_PC);
+        if ((pc >= 0x08000000U) && (pc < 0x0A000000U)) {
+            u32 set = ((pc >> 2U) >> 1U) & 0x1FFFU;
+            bitmap[set >> 5U] |= (1U << (set & 31U));
+            rom_samples++;
+        } else {
+            other_samples++;
+        }
+        XTime_GetTime(&tick_end);
+        elapsed_us = ((tick_end - tick_start) * 1000000ULL) / (u64)COUNTS_PER_SECOND;
+    } while (elapsed_us < (u64)duration_ms * 1000ULL);
+
+    for (u32 i = 0U; i < CACHEPROF_BITMAP_WORDS; i++) {
+        u32 w = bitmap[i];
+        while (w != 0U) { w &= (w - 1U); unique_sets++; }
+    }
+
+    xil_printf("[CACHEPROF] elapsed=%llu us rom_samples=%u other=%u sets=%u/8192 coverage=%.1f%%\r\n",
+               elapsed_us, (unsigned)rom_samples, (unsigned)other_samples,
+               (unsigned)unique_sets, ((float)unique_sets * 100.0f) / 8192.0f);
+}
+#undef CACHEPROF_BITMAP_WORDS
+
 void PsAppConsole_PrintDiagnosticHelp(void) {
     xil_printf("  status\r\n");
     xil_printf("  diag\r\n");
@@ -181,12 +229,17 @@ void PsAppConsole_PrintDiagnosticHelp(void) {
     xil_printf("  fbscan\r\n");
     xil_printf("  log input on|off\r\n");
     xil_printf("  log fbscan on|off\r\n");
+    xil_printf("  log ddr on|off [interval_ticks]\r\n");
     xil_printf("  log status\r\n");
+    xil_printf("  guard status|on|off|clear\r\n");
+    xil_printf("  ddrlog once\r\n");
     xil_printf("  pixcap summary [buf]\r\n");
     xil_printf("  pixcap row <y> [buf]\r\n");
     xil_printf("  pixcap cmp <x> <y> [buf] [frame]\r\n");
     xil_printf("  trace [samples] [interval_ms]\r\n");
+    xil_printf("  hangsnap [samples] [interval_ms]\r\n");
     xil_printf("  fps [seconds] [sample_ms]\r\n");
+    xil_printf("  cacheprof [duration_ms]\r\n");
 }
 
 u8 PsAppConsole_HandleDiagnosticCommands(PsAppConsoleContext *ctx, const char *cmd) {
@@ -235,15 +288,88 @@ u8 PsAppConsole_HandleDiagnosticCommands(PsAppConsoleContext *ctx, const char *c
         PsAppDiag_ScanFramebufferForAnomaly(diag, "cmd", 1U);
         return 1U;
     }
+    if (strcmp(cmd, "guard") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if ((arg1 == NULL) || (strcmp(arg1, "status") == 0)) {
+            xil_printf("[CMD] guard enable=%u active=%u cooldown=%u hold=%u recoveries=%u streak=%u last_bad_pc=0x%08x last_bad_mem=0x%08x last_bad_dma=0x%08x last_bad_status1=0x%08x\r\n",
+                       (unsigned int)(app->diag->pc_guard_enable != 0U),
+                       (unsigned int)(app->diag->pc_guard_recovery_active != 0U),
+                       (unsigned int)app->diag->pc_guard_cooldown_ticks,
+                       (unsigned int)app->diag->pc_guard_reset_hold_ticks,
+                       (unsigned int)app->diag->pc_guard_recovery_count,
+                       (unsigned int)app->diag->pc_guard_invalid_streak,
+                       (unsigned int)app->diag->pc_guard_last_bad_pc,
+                       (unsigned int)app->diag->pc_guard_last_bad_mem,
+                       (unsigned int)app->diag->pc_guard_last_bad_dma,
+                       (unsigned int)app->diag->pc_guard_last_bad_status1);
+            return 1U;
+        }
+
+        if ((strcmp(arg1, "on") == 0) || (strcmp(arg1, "off") == 0)) {
+            app->diag->pc_guard_enable = (u8)((strcmp(arg1, "on") == 0) ? 1U : 0U);
+            if (app->diag->pc_guard_enable == 0U) {
+                if (app->diag->pc_guard_recovery_active != 0U) {
+                    PsGbaRegs_SetSwReset(app->regs, 0U);
+                    app->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED);
+                    app->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
+                    PsAppRuntime_ApplyShadowConfig(app);
+                }
+                if ((app->diag->pc_guard_audio_restore_pending != 0U) &&
+                    (app->audio->mute != 0U)) {
+                    app->audio->mute = 0U;
+                    (void)PsAppRuntime_ApplyAudioOutputState(app);
+                }
+                app->diag->pc_guard_recovery_active = 0U;
+                app->diag->pc_guard_audio_restore_pending = 0U;
+                app->diag->pc_guard_invalid_streak = 0U;
+                app->diag->pc_guard_cooldown_ticks = 0U;
+                app->diag->pc_guard_reset_hold_ticks = 0U;
+            }
+            xil_printf("[CMD] guard=%s\r\n",
+                       (app->diag->pc_guard_enable != 0U) ? "on" : "off");
+            return 1U;
+        }
+
+        if (strcmp(arg1, "clear") == 0) {
+            if (app->diag->pc_guard_recovery_active != 0U) {
+                PsGbaRegs_SetSwReset(app->regs, 0U);
+                app->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED);
+                app->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
+                PsAppRuntime_ApplyShadowConfig(app);
+            }
+            if ((app->diag->pc_guard_audio_restore_pending != 0U) &&
+                (app->audio->mute != 0U)) {
+                app->audio->mute = 0U;
+                (void)PsAppRuntime_ApplyAudioOutputState(app);
+            }
+            app->diag->pc_guard_recovery_active = 0U;
+            app->diag->pc_guard_audio_restore_pending = 0U;
+            app->diag->pc_guard_invalid_streak = 0U;
+            app->diag->pc_guard_cooldown_ticks = 0U;
+            app->diag->pc_guard_reset_hold_ticks = 0U;
+            app->diag->pc_guard_last_bad_pc = 0U;
+            app->diag->pc_guard_last_bad_status1 = 0U;
+            app->diag->pc_guard_last_bad_mem = 0U;
+            app->diag->pc_guard_last_bad_dma = 0U;
+            app->diag->pc_guard_last_trigger_tick = 0U;
+            xil_printf("[CMD] guard counters cleared\r\n");
+            return 1U;
+        }
+
+        xil_printf("[CMD] usage: guard status|on|off|clear\r\n");
+        return 1U;
+    }
 
     if (strcmp(cmd, "log") == 0) {
         arg1 = strtok(NULL, " \t");
         arg2 = strtok(NULL, " \t");
 
         if ((arg1 == NULL) || (strcmp(arg1, "status") == 0)) {
-            xil_printf("[CMD] log input=%s fbscan=%s\r\n",
+            xil_printf("[CMD] log input=%s fbscan=%s ddr=%s interval_ticks=%u\r\n",
                        (app->diag->log_input_delta_enable != 0U) ? "on" : "off",
-                       (app->diag->log_fbscan_auto_enable != 0U) ? "on" : "off");
+                       (app->diag->log_fbscan_auto_enable != 0U) ? "on" : "off",
+                       (app->diag->log_ddr_enable != 0U) ? "on" : "off",
+                       (unsigned int)app->diag->ddrlog_interval_ticks);
             return 1U;
         }
 
@@ -272,7 +398,57 @@ u8 PsAppConsole_HandleDiagnosticCommands(PsAppConsoleContext *ctx, const char *c
             return 1U;
         }
 
-        xil_printf("[CMD] usage: log input on|off | log fbscan on|off | log status\r\n");
+        if (strcmp(arg1, "ddr") == 0) {
+            u32 interval_ticks;
+            arg3 = strtok(NULL, " \t");
+            if (PsAppConsole_ParseOnOff(arg2, &value) != 0) {
+                xil_printf("[CMD] usage: log ddr on|off [interval_ticks]\r\n");
+                return 1U;
+            }
+
+            interval_ticks = app->diag->ddrlog_interval_ticks;
+            if (arg3 != NULL) {
+                if ((PsAppConsole_ParseU32Value(arg3, &interval_ticks) != 0) ||
+                    (interval_ticks < PS_APP_DDRLOG_MIN_INTERVAL_TICKS) ||
+                    (interval_ticks > PS_APP_DDRLOG_MAX_INTERVAL_TICKS)) {
+                    xil_printf("[CMD] range: interval_ticks=%u..%u\r\n",
+                               (unsigned int)PS_APP_DDRLOG_MIN_INTERVAL_TICKS,
+                               (unsigned int)PS_APP_DDRLOG_MAX_INTERVAL_TICKS);
+                    return 1U;
+                }
+            }
+            if (interval_ticks < PS_APP_DDRLOG_MIN_INTERVAL_TICKS) {
+                interval_ticks = PS_APP_DDRLOG_DEFAULT_INTERVAL_TICKS;
+            }
+
+            app->diag->log_ddr_enable = (u8)(value & 0x1U);
+            app->diag->ddrlog_interval_ticks = interval_ticks;
+            app->diag->ddrlog_tick = 0U;
+            app->diag->ddrlog_last_status1 = 0U;
+            app->diag->ddrlog_last_pc = 0U;
+            app->diag->ddrlog_last_mem = 0U;
+            app->diag->ddrlog_last_dma = 0U;
+            app->diag->ddrlog_last_err = 0U;
+            app->diag->ddrlog_last_counts0 = 0U;
+            app->diag->ddrlog_last_counts1 = 0U;
+            app->diag->ddrlog_same_sample_count = 0U;
+            xil_printf("[CMD] log ddr=%s interval_ticks=%u\r\n",
+                       (app->diag->log_ddr_enable != 0U) ? "on" : "off",
+                       (unsigned int)app->diag->ddrlog_interval_ticks);
+            return 1U;
+        }
+
+        xil_printf("[CMD] usage: log input on|off | log fbscan on|off | log ddr on|off [interval_ticks] | log status\r\n");
+        return 1U;
+    }
+
+    if (strcmp(cmd, "ddrlog") == 0) {
+        arg1 = strtok(NULL, " \t");
+        if ((arg1 == NULL) || (strcmp(arg1, "once") == 0)) {
+            PsAppDiag_PrintDdrLogSnapshot(diag, "cmd");
+            return 1U;
+        }
+        xil_printf("[CMD] usage: ddrlog once\r\n");
         return 1U;
     }
 
@@ -369,6 +545,31 @@ u8 PsAppConsole_HandleDiagnosticCommands(PsAppConsoleContext *ctx, const char *c
         return 1U;
     }
 
+    if (strcmp(cmd, "hangsnap") == 0) {
+        u32 samples = 8U;
+        u32 interval_ms = 20U;
+
+        arg1 = strtok(NULL, " \t");
+        arg2 = strtok(NULL, " \t");
+        if ((arg1 != NULL) && (PsAppConsole_ParseU32Value(arg1, &samples) != 0)) {
+            xil_printf("[CMD] usage: hangsnap [samples] [interval_ms]\r\n");
+            return 1U;
+        }
+        if ((arg2 != NULL) && (PsAppConsole_ParseU32Value(arg2, &interval_ms) != 0)) {
+            xil_printf("[CMD] usage: hangsnap [samples] [interval_ms]\r\n");
+            return 1U;
+        }
+        if ((samples == 0U) || (samples > PS_APP_TRACE_MAX_SAMPLES) ||
+            (interval_ms > 5000U)) {
+            xil_printf("[CMD] range: samples=1..%u interval_ms=0..5000\r\n",
+                       (unsigned int)PS_APP_TRACE_MAX_SAMPLES);
+            return 1U;
+        }
+
+        PsAppDiag_PrintHangSnapshot(diag, samples, interval_ms);
+        return 1U;
+    }
+
     if (strcmp(cmd, "fps") == 0) {
         u32 seconds = 5U;
         u32 sample_ms = (u32)portTICK_PERIOD_MS;
@@ -394,6 +595,21 @@ u8 PsAppConsole_HandleDiagnosticCommands(PsAppConsoleContext *ctx, const char *c
         }
 
         PsAppConsole_RunFpsTest(ctx, seconds * 1000U, sample_ms);
+        return 1U;
+    }
+
+    if (strcmp(cmd, "cacheprof") == 0) {
+        u32 duration_ms = 5000U;
+        arg1 = strtok(NULL, " \t");
+        if ((arg1 != NULL) && (PsAppConsole_ParseU32Value(arg1, &duration_ms) != 0)) {
+            xil_printf("[CMD] usage: cacheprof [duration_ms]\r\n");
+            return 1U;
+        }
+        if ((duration_ms == 0U) || (duration_ms > 30000U)) {
+            xil_printf("[CMD] range: duration_ms=1..30000\r\n");
+            return 1U;
+        }
+        PsAppConsole_RunCacheProf(ctx, duration_ms);
         return 1U;
     }
 

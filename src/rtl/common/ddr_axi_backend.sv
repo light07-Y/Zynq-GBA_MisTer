@@ -56,6 +56,7 @@ module ddr_axi_backend_sv #(
 
     // --- 常量与类型定义 ---
     localparam logic [31:0] C_MISTER_BASE = 32'h3000_0000;
+    localparam logic [19:0] C_WATCHDOG_LIMIT = 20'd100000;
 
     typedef enum logic [2:0] {
         S_IDLE,
@@ -87,6 +88,7 @@ module ddr_axi_backend_sv #(
     logic [7:0]  rd_remaining;
     logic        aw_done;
     logic        w_done;
+    logic [19:0] watchdog_ctr;
 
     // --- 增强型地址映射逻辑 ---
     // 确保 2025.2 综合器不会因位宽推导产生警告
@@ -101,6 +103,36 @@ module ddr_axi_backend_sv #(
         end
     end
     endfunction
+
+    task automatic latch_error(input logic [3:0] err_code, input logic [27:0] err_addr);
+    begin
+        ERR_VEC   <= {err_code, err_addr};
+        ERR_PULSE <= 1'b1;
+    end
+    endtask
+
+    task automatic abort_axi(input logic is_read, input logic [3:0] err_code);
+    begin
+        awvalid_reg    <= 1'b0;
+        wvalid_reg     <= 1'b0;
+        bready_reg     <= 1'b0;
+        arvalid_reg    <= 1'b0;
+        rready_reg     <= 1'b0;
+        aw_done        <= 1'b0;
+        w_done         <= 1'b0;
+        rd_remaining   <= 8'd0;
+        watchdog_ctr   <= 20'd0;
+        state          <= S_IDLE;
+
+        if (is_read) begin
+            dout_reg       <= 64'hFFFF_FFFF_FFFF_FFFF;
+            dout_ready_reg <= 1'b1;
+            latch_error(err_code, araddr_reg[27:0]);
+        end else begin
+            latch_error(err_code, awaddr_reg[27:0]);
+        end
+    end
+    endtask
 
     // --- 接口驱动 (组合逻辑) ---
     assign DDRAM_BUSY       = (state != S_IDLE);
@@ -137,11 +169,21 @@ module ddr_axi_backend_sv #(
             dout_ready_reg <= 1'b0;
             aw_done <= 1'b0;
             w_done  <= 1'b0;
+            rd_remaining <= 8'd0;
+            watchdog_ctr <= 20'd0;
+            dout_reg <= 64'd0;
+            awaddr_reg <= 32'd0;
+            awlen_reg <= 8'd0;
+            wdata_reg <= 64'd0;
+            wstrb_reg <= 8'd0;
+            araddr_reg <= 32'd0;
+            arlen_reg <= 8'd0;
             ERR_VEC <= 32'h0;
             ERR_PULSE <= 1'b0;
         end else begin
             dout_ready_reg <= 1'b0;
             ERR_PULSE <= 1'b0;
+            watchdog_ctr <= (state == S_IDLE) ? 20'd0 : (watchdog_ctr + 20'd1);
 
             case (state)
                 S_IDLE: begin
@@ -150,6 +192,7 @@ module ddr_axi_backend_sv #(
                         arlen_reg   <= (DDRAM_BURSTCNT == 8'd0) ? 8'd0 : DDRAM_BURSTCNT - 8'd1;
                         rd_remaining <= (DDRAM_BURSTCNT == 8'd0) ? 8'd0 : DDRAM_BURSTCNT - 8'd1;
                         arvalid_reg <= 1'b1;
+                        watchdog_ctr <= 20'd0;
                         state       <= S_RD_ADDR;
                     end else if (DDRAM_WE) begin
                         awaddr_reg  <= map_addr(DDRAM_ADDR);
@@ -161,6 +204,7 @@ module ddr_axi_backend_sv #(
                         bready_reg  <= 1'b0;
                         aw_done     <= 1'b0;
                         w_done      <= 1'b0;
+                        watchdog_ctr <= 20'd0;
                         state       <= S_WR_ADDR_DATA;
                     end
                 end
@@ -169,16 +213,22 @@ module ddr_axi_backend_sv #(
                     if (M_AXI_ARREADY) begin
                         arvalid_reg <= 1'b0;
                         rready_reg  <= 1'b1;
+                        watchdog_ctr <= 20'd0;
                         state       <= S_RD_DATA;
                     end
                 end
 
                 S_RD_DATA: begin
                     if (M_AXI_RVALID) begin
-                        dout_reg       <= M_AXI_RDATA;
+                        watchdog_ctr   <= 20'd0;
+                        dout_reg       <= (M_AXI_RRESP == 2'b00) ? M_AXI_RDATA : 64'hFFFF_FFFF_FFFF_FFFF;
                         dout_ready_reg <= 1'b1;
+                        if (M_AXI_RRESP != 2'b00) begin
+                            latch_error({2'b01, M_AXI_RRESP}, araddr_reg[27:0]);
+                        end
                         if (M_AXI_RLAST || rd_remaining == 8'd0) begin
                             rready_reg <= 1'b0;
+                            rd_remaining <= 8'd0;
                             state      <= S_IDLE;
                         end else begin
                             rd_remaining <= rd_remaining - 8'd1;
@@ -190,10 +240,12 @@ module ddr_axi_backend_sv #(
                     if (M_AXI_AWREADY) begin
                         awvalid_reg <= 1'b0;
                         aw_done     <= 1'b1;
+                        watchdog_ctr <= 20'd0;
                     end
                     if (M_AXI_WREADY) begin
                         wvalid_reg  <= 1'b0;
                         w_done      <= 1'b1;
+                        watchdog_ctr <= 20'd0;
                     end
                     // 当地址和数据都握手成功后进入响应阶段
                     if ((aw_done || M_AXI_AWREADY) && (w_done || M_AXI_WREADY)) begin
@@ -204,9 +256,9 @@ module ddr_axi_backend_sv #(
 
                 S_WR_RESP: begin
                     if (M_AXI_BVALID) begin
+                        watchdog_ctr <= 20'd0;
                         if (M_AXI_BRESP != 2'b00) begin
-                            ERR_VEC   <= {M_AXI_BRESP, awaddr_reg[29:0]};
-                            ERR_PULSE <= 1'b1;
+                            latch_error({2'b10, M_AXI_BRESP}, awaddr_reg[27:0]);
                         end
                         bready_reg <= 1'b0;
                         state      <= S_IDLE;
@@ -215,11 +267,9 @@ module ddr_axi_backend_sv #(
 
                 default: state <= S_IDLE;
             endcase
-            
-            // Handle Read Errors
-            if (M_AXI_RVALID && M_AXI_RREADY && M_AXI_RRESP != 2'b00) begin
-                ERR_VEC   <= {M_AXI_RRESP, araddr_reg[29:0]};
-                ERR_PULSE <= 1'b1;
+
+            if ((state != S_IDLE) && (watchdog_ctr >= C_WATCHDOG_LIMIT)) begin
+                abort_axi((state == S_RD_ADDR) || (state == S_RD_DATA), 4'hD);
             end
         end
     end

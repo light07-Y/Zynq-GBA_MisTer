@@ -22,6 +22,24 @@ proc add_globbed_files {pattern} {
     }
 }
 
+proc disconnect_pin {pin_path} {
+    set pin [get_bd_pins -quiet $pin_path]
+    if {[llength $pin] > 0} {
+        set net [get_bd_nets -quiet -of_objects $pin]
+        if {[llength $net] > 0} { disconnect_bd_net $net $pin }
+    }
+}
+
+proc disconnect_intf_pin {pin_path} {
+    set pin [get_bd_intf_pins -quiet $pin_path]
+    if {[llength $pin] > 0} {
+        set net [get_bd_intf_nets -quiet -of_objects $pin]
+        if {[llength $net] > 0} { disconnect_bd_intf_net $net $pin }
+    }
+}
+
+proc log_step {msg} { puts "--- $msg ---" }
+
 proc upgrade_locked_project_ips {} {
     set locked_ips [get_ips -quiet -filter {IS_LOCKED == 1}]
     if {[llength $locked_ips] == 0} {
@@ -38,6 +56,8 @@ proc upgrade_locked_project_ips {} {
         error "Locked IPs remain after upgrade."
     }
 }
+
+log_step "create project skeleton"
 
 create_project -force $project_name $repo_root -part xc7z020clg400-1
 set_property board_part digilentinc.com:zybo-z7-20:part0:1.2 [current_project]
@@ -81,6 +101,8 @@ if {[file isdirectory $src_shared_dir]} {
 }
 normalize_xci_shareddir $local_ip_dir
 
+log_step "add synthesis sources"
+
 add_files -norecurse $local_bd_file
 add_globbed_files [file join $repo_root src rtl top *.v]
 add_globbed_files [file join $repo_root src rtl common *.v]
@@ -106,8 +128,7 @@ foreach relpath [list \
     }
 }
 
-upgrade_locked_project_ips
-
+log_step "assemble block design"
 open_bd_design $local_bd_file
 
 # Legacy monitor outputs were removed from zynq_gba_top; clean any stale
@@ -491,9 +512,11 @@ if {[llength $hdmi_clk_legacy_xdc] > 0} {
 make_wrapper -files [get_files $local_bd_file] -top -import -force
 close_bd_design [current_bd_design]
 
+log_step "finalize compile order"
 set_property top zynq_gba_system_wrapper [get_filesets sources_1]
 set_property top zynq_gba_system_wrapper [get_filesets sim_1]
 update_compile_order -fileset sources_1
 update_compile_order -fileset sim_1
+log_step "done — project ready for synthesis"
 close_project
 exit

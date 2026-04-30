@@ -78,7 +78,8 @@ enum {
     GBA_REG_RTC_OUT_SAVEDTIME_HI   = 0x0F4,
     GBA_REG_FEATURE_STATUS         = 0x0F8,
     GBA_REG_FEATURE_STATUS_CLR     = 0x0FC,
-    GBA_REG_RTC_TIMESTAMP_SAVED    = 0x100
+    GBA_REG_RTC_TIMESTAMP_SAVED    = 0x100,
+    GBA_REG_DEBUG_IRQ_EXT          = 0x104
 };
 
 enum {
@@ -91,7 +92,10 @@ enum {
     GBA_CTRL_FLASH_1M        = (1U << 9),
     GBA_CTRL_SPECIAL_GPIO    = (1U << 10),
     GBA_CTRL_TILT            = (1U << 11),
-    GBA_CTRL_SRAM_32K_MIRROR_TEST = (1U << 13)
+    GBA_CTRL_SRAM_32K_MIRROR_TEST = (1U << 13),
+    /* Root-cause verification mode:
+     * force ROM DDR path to single-beat fetch + no read-ahead/prefetch. */
+    GBA_CTRL_ROM_DDR_SAFE    = (1U << 14)
 };
 
 enum {

@@ -47,6 +47,9 @@ static u16 s_ps_app_video_scale_y_lut[PS_APP_HDMI_HEIGHT];
 static u32 s_ps_app_video_scale_lut_width = 0U;
 static u32 s_ps_app_video_scale_lut_height = 0U;
 static u32 s_ps_app_video_blit_fail_log_count = 0U;
+static u32 s_ps_app_video_stale_seq_ticks = 0U;
+static u32 s_ps_app_video_stale_seq_log_count = 0U;
+static const u32 PS_APP_VIDEO_STALE_SEQ_FORCE_BLIT_TICKS = 16U;
 
 static u8 PsAppVideo_IsCoreContextValid(const PsAppVideoContext *ctx) {
     if ((ctx == NULL) || (ctx->vdma == NULL) || (ctx->regs == NULL) || (ctx->state == NULL)) {
@@ -515,8 +518,32 @@ void PsAppVideo_PresentCapturedFrameIfReady(PsAppVideoContext *ctx) {
     }
     sampled_buf_idx = status & 0x1U;
     last_seq = ctx->state->fbcap_last_frame_seq;
-    if ((seq1 == 0U) || (seq1 == last_seq)) {
+    if (seq1 == 0U) {
+        s_ps_app_video_stale_seq_ticks = 0U;
         return;
+    }
+    if (seq1 == last_seq) {
+        if (s_ps_app_video_stale_seq_ticks < 0xFFFFFFFFU) {
+            s_ps_app_video_stale_seq_ticks++;
+        }
+
+        /* Defensive path:
+         * if FB_CAP_SEQ stalls (e.g. end-of-frame marker occasionally missed),
+         * keep presenting from the currently exposed capture buffer so display
+         * does not freeze on a black transition frame.
+         */
+        if (s_ps_app_video_stale_seq_ticks < PS_APP_VIDEO_STALE_SEQ_FORCE_BLIT_TICKS) {
+            return;
+        }
+        s_ps_app_video_stale_seq_ticks = 0U;
+        if (s_ps_app_video_stale_seq_log_count < 8U) {
+            xil_printf("[BLIT] stale-seq fallback seq=%u buf=%u\r\n",
+                       (unsigned int)seq1,
+                       (unsigned int)sampled_buf_idx);
+            s_ps_app_video_stale_seq_log_count++;
+        }
+    } else {
+        s_ps_app_video_stale_seq_ticks = 0U;
     }
     if ((last_seq != 0U) && (seq1 < last_seq)) {
         if (ctx->state->blit_seq_glitch_drop < 0xFFFFFFFFU) {

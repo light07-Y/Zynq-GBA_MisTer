@@ -1,5 +1,7 @@
 #include "Diagnostics/Inc/ps_app_diag.h"
+#include "Diagnostics/Inc/ps_app_diag_disasm.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "FreeRTOS.h"
@@ -75,8 +77,254 @@ static const char *PsAppDiag_BiosModeName(u8 bios_mode) {
     }
 }
 
+static const char *PsAppDiag_MemStateName(u32 state) {
+    static const char *const names[] = {
+        "IDLE", "READBIOS", "READSMALLRAM", "READPALETTERAM",
+        "PALETTEDONE", "READVRAM", "VRAMDONE", "READOAMRAM",
+        "OAMDONE", "WAIT_GBBUS", "WAIT_PROCBUS", "WAIT_SDRAM",
+        "READAFTERPAK", "READ_UNREADABLE", "ROTATE", "READ_GPIO",
+        "WAIT_WRAMRMW", "WRITE_WRAMLARGE", "WRITE_WRAMSMALL", "WRITE_REG",
+        "WRITE_PALETTE", "WRITE_VRAM", "VRAMWAITWRITE", "WRITE_OAM",
+        "EEPROMREAD", "EEPROM_WAITREAD", "EEPROMWRITE", "FLASHREAD",
+        "FLASH_WAITREAD", "FLASHSRAMDECIDE1", "FLASHSRAMDECIDE2",
+        "SRAMWRITE", "FLASHWRITE", "FLASH_WRITEBLOCK", "FLASH_BLOCKWAIT"
+    };
+
+    if (state < (sizeof(names) / sizeof(names[0]))) {
+        return names[state];
+    }
+    return "UNKNOWN";
+}
+
+static const char *PsAppDiag_InferDdrBlocker(u32 mem_state,
+                                             u32 flags,
+                                             u32 counts0,
+                                             u32 counts1,
+                                             u32 err_latch) {
+    u32 ch1_cnt = counts0 & 0xFFU;
+    u32 ddr_cnt = (counts0 >> 8) & 0xFFU;
+    u32 ar_cnt = (counts0 >> 16) & 0xFFU;
+    u32 r_cnt = (counts0 >> 24) & 0xFFU;
+    u32 dout_cnt = counts1 & 0xFFU;
+    u32 done_cnt = (counts1 >> 8) & 0xFFU;
+    u32 saturated = ((ch1_cnt == 0xFFU) &&
+                     (ddr_cnt == 0xFFU) &&
+                     (ar_cnt == 0xFFU) &&
+                     (r_cnt == 0xFFU) &&
+                     (dout_cnt == 0xFFU) &&
+                     (done_cnt == 0xFFU)) ? 1U : 0U;
+
+    if (err_latch != 0U) {
+        return "AXI_ERROR_OR_TIMEOUT";
+    }
+    if ((mem_state == PS_APP_MEM_STATE_WAIT_SDRAM) && (saturated != 0U)) {
+        return "CHAIN_COUNTERS_SATURATED";
+    }
+    if (mem_state != PS_APP_MEM_STATE_WAIT_SDRAM) {
+        return "CPU_NOT_IN_WAIT_SDRAM";
+    }
+    if (((flags & (1U << 0)) == 0U) || (ch1_cnt == 0U)) {
+        return "CACHE_DID_NOT_REQUEST_CH1";
+    }
+    if (((flags & (1U << 1)) == 0U) || (ddr_cnt < ch1_cnt)) {
+        return "DDRAM_MUX_DID_NOT_ISSUE_READ";
+    }
+    if (((flags & (1U << 2)) == 0U) || (ar_cnt < ddr_cnt)) {
+        return "AXI_AR_NOT_ACCEPTED";
+    }
+    if (((flags & (1U << 3)) == 0U) || (r_cnt < ar_cnt)) {
+        return "WAITING_AXI_R_BEAT";
+    }
+    if (((flags & (1U << 4)) == 0U) || (dout_cnt < r_cnt)) {
+        return "BACKEND_DOUT_READY_MISSING";
+    }
+    if (((flags & (1U << 5)) == 0U) || (done_cnt < dout_cnt)) {
+        return "MEMORYMUX_CACHE_DONE_MISSING";
+    }
+    return "WAIT_SDRAM_AFTER_DONE_OR_STALE_CHAIN";
+}
+
+static const char *PsAppDiag_CpuModeName(u32 mode) {
+    switch (mode & 0xFU) {
+        case 0x0U: return "USER";
+        case 0x1U: return "FIQ";
+        case 0x2U: return "IRQ";
+        case 0x3U: return "SVC";
+        case 0x7U: return "ABT";
+        case 0xBU: return "UND";
+        case 0xFU: return "SYS";
+        default: return "UNK";
+    }
+}
+
+static const char *PsAppDiag_PcRegionName(u32 pc) {
+    if (pc < 0x00004000U) {
+        return "BIOS";
+    }
+    if ((pc >= 0x02000000U) && (pc <= 0x0203FFFFU)) {
+        return "EWRAM";
+    }
+    if ((pc >= 0x03000000U) && (pc <= 0x03007FFFU)) {
+        return "IWRAM";
+    }
+    if ((pc >= 0x04000000U) && (pc <= 0x040003FFU)) {
+        return "IO";
+    }
+    if ((pc >= 0x05000000U) && (pc <= 0x050003FFU)) {
+        return "PAL";
+    }
+    if ((pc >= 0x06000000U) && (pc <= 0x06017FFFU)) {
+        return "VRAM";
+    }
+    if ((pc >= 0x07000000U) && (pc <= 0x070003FFU)) {
+        return "OAM";
+    }
+    if ((pc >= 0x08000000U) && (pc <= 0x09FFFFFFU)) {
+        return "ROM0";
+    }
+    if ((pc >= 0x0A000000U) && (pc <= 0x0BFFFFFFU)) {
+        return "ROM1";
+    }
+    if ((pc >= 0x0C000000U) && (pc <= 0x0DFFFFFFU)) {
+        return "ROM2";
+    }
+    return "INVALID";
+}
+
+static const char *PsAppDiag_BiosPcHint(u32 pc) {
+    if ((pc >= 0x00000480U) && (pc <= 0x000004C0U)) {
+        return "BIOS_WAIT_IRQ";
+    }
+    if ((pc >= 0x00000600U) && (pc <= 0x000006B0U)) {
+        return "BIOS_INTRWAIT";
+    }
+    if (pc < 0x00004000U) {
+        return "BIOS_OTHER";
+    }
+    return "-";
+}
+
+static void PsAppDiag_PrintCpuIrqDecode(const char *tag,
+                                        u32 idx,
+                                        u32 ctrl,
+                                        u32 key_shadow,
+                                        u32 sw_reset,
+                                        u32 ps_irq_en,
+                                        u32 ps_irq_sts,
+                                        u32 rom_status,
+                                        u32 status0,
+                                        u32 status1,
+                                        u32 dbg_pc,
+                                        u32 dbg_mix,
+                                        u32 dbg_irq,
+                                        u32 dbg_irq_ext,
+                                        u32 dbg_mem,
+                                        u32 dbg_dma,
+                                        u32 fbcap_seq,
+                                        u32 fbcap_buf,
+                                        u32 parked,
+                                        u32 vdma_status) {
+    u32 halt = dbg_mix & 0x1U;
+    u32 thumb = (dbg_mix >> 5) & 0x1U;
+    u32 mode = (dbg_mix >> 6) & 0xFU;
+    u32 irq_disable = (dbg_mix >> 10) & 0x1U;
+    u32 fiq_disable = (dbg_mix >> 11) & 0x1U;
+    u32 iflags = dbg_irq & 0xFFFFU;
+    u32 ime = (dbg_irq >> 16) & 0x1U;
+    u32 vcount = (dbg_irq >> 17) & 0xFFU;
+    u32 disp = (dbg_irq >> 25) & 0x7FU;
+    u32 ie = dbg_irq_ext & 0xFFFFU;
+    u32 enabled_pending = (dbg_irq_ext >> 16) & 0xFFFFU;
+    u32 cpu_can_irq = ((ime != 0U) && (irq_disable == 0U) && (enabled_pending != 0U)) ? 1U : 0U;
+    u32 mem_state = dbg_mem & 0xFFU;
+
+    xil_printf("[HANG] %s i=%u cfg ctrl=0x%08x reset=%u rom=%u romsafe=%u ps_irq_en=0x%x ps_irq_sts=0x%x key_shadow=0x%03x physical=0x%03x\r\n",
+               tag,
+               (unsigned int)idx,
+               (unsigned int)ctrl,
+               (unsigned int)(sw_reset & 0x1U),
+               (unsigned int)(rom_status & 0x1U),
+               (unsigned int)((ctrl & GBA_CTRL_ROM_DDR_SAFE) != 0U),
+               (unsigned int)(ps_irq_en & 0x3U),
+               (unsigned int)(ps_irq_sts & 0x3U),
+               (unsigned int)(key_shadow & 0x3FFU),
+               (unsigned int)(status0 & 0x3FFU));
+    xil_printf("[HANG] %s i=%u pc=0x%08x region=%s hint=%s mix=0x%08x halt=%u thumb=%u mode=%s irq_dis=%u fiq_dis=%u\r\n",
+               tag,
+               (unsigned int)idx,
+               (unsigned int)dbg_pc,
+               PsAppDiag_PcRegionName(dbg_pc),
+               PsAppDiag_BiosPcHint(dbg_pc),
+               (unsigned int)dbg_mix,
+               (unsigned int)halt,
+               (unsigned int)thumb,
+               PsAppDiag_CpuModeName(mode),
+               (unsigned int)irq_disable,
+               (unsigned int)fiq_disable);
+    xil_printf("[HANG] %s i=%u irq IF=0x%04x IE=0x%04x IF_IE=0x%04x IME=%u cpu_can_irq=%u dispstat=0x%02x vblank=%u hblank=%u vcnt=%u vblank_ie=%u hblank_ie=%u vcnt_ie=%u vcount=%u\r\n",
+               tag,
+               (unsigned int)idx,
+               (unsigned int)iflags,
+               (unsigned int)ie,
+               (unsigned int)enabled_pending,
+               (unsigned int)ime,
+               (unsigned int)cpu_can_irq,
+               (unsigned int)disp,
+               (unsigned int)((disp >> 0) & 0x1U),
+               (unsigned int)((disp >> 1) & 0x1U),
+               (unsigned int)((disp >> 2) & 0x1U),
+               (unsigned int)((disp >> 3) & 0x1U),
+               (unsigned int)((disp >> 4) & 0x1U),
+               (unsigned int)((disp >> 5) & 0x1U),
+               (unsigned int)vcount);
+    xil_printf("[HANG] %s i=%u bus mem=0x%08x state=0x%02x(%s) dma=0x%08x keys=0x%03x frame=%u miss=%u vsync=%u fbseq=%u fbbuf=%u park=%u vdma_sr=0x%08x\r\n",
+               tag,
+               (unsigned int)idx,
+               (unsigned int)dbg_mem,
+               (unsigned int)mem_state,
+               PsAppDiag_MemStateName(mem_state),
+               (unsigned int)dbg_dma,
+               (unsigned int)(status0 & 0x3FFU),
+               (unsigned int)(status1 & 0x3U),
+               (unsigned int)((status1 >> 2) & 0x3FFFU),
+               (unsigned int)((status1 >> 16) & 0xFFFFU),
+               (unsigned int)fbcap_seq,
+               (unsigned int)(fbcap_buf & 0x1U),
+               (unsigned int)parked,
+               (unsigned int)vdma_status);
+}
+
+static void PsAppDiag_ReadDdrChain(PsAppDiagContext *ctx,
+                                   u32 *flags,
+                                   u32 *counts0,
+                                   u32 *counts1,
+                                   u32 *ch1_last_addr,
+                                   u32 *ch1_last_meta,
+                                   u32 *ddr_last_addr,
+                                   u32 *ddr_last_meta,
+                                   u32 *ar_last_addr,
+                                   u32 *ar_last_meta,
+                                   u32 *r_last_addr,
+                                   u32 *r_last_meta,
+                                   u32 *done_last_addr,
+                                   u32 *done_last_meta) {
+    *flags = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CHAIN_FLAGS);
+    *counts0 = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CHAIN_COUNTS0);
+    *counts1 = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CHAIN_COUNTS1);
+    *ch1_last_addr = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CH1_LAST_ADDR);
+    *ch1_last_meta = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_CH1_LAST_META);
+    *ddr_last_addr = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_DDR_LAST_ADDR);
+    *ddr_last_meta = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_DDR_LAST_META);
+    *ar_last_addr = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_AXI_AR_LAST_ADDR);
+    *ar_last_meta = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_AXI_AR_LAST_META);
+    *r_last_addr = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_AXI_R_LAST_ADDR);
+    *r_last_meta = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_AXI_R_LAST_META);
+    *done_last_addr = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_DONE_LAST_ADDR);
+    *done_last_meta = PsGbaRegs_Read(ctx->regs, GBA_REG_DBG_DONE_LAST_META);
+}
+
 static void PsAppDiag_PrintCtrlDecode(u32 ctrl) {
-    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u flash1m=%u gpio=%u tilt=%u rom_loading=%u unsafe=%u\r\n",
+    xil_printf("[PROBE] ctrl core=%u lock=%u turbo=%u sram=%u remap=%u flash1m=%u gpio=%u tilt=%u rom_loading=%u romsafe=%u unsafe=%u\r\n",
                (unsigned int)((ctrl >> 0) & 0x1U),
                (unsigned int)((ctrl >> 1) & 0x1U),
                (unsigned int)((ctrl >> 2) & 0x1U),
@@ -86,6 +334,7 @@ static void PsAppDiag_PrintCtrlDecode(u32 ctrl) {
                (unsigned int)((ctrl >> 10) & 0x1U),
                (unsigned int)((ctrl >> 11) & 0x1U),
                (unsigned int)((ctrl >> 8) & 0x1U),
+               (unsigned int)((ctrl >> 14) & 0x1U),
                (unsigned int)((ctrl >> 13) & 0x1U));
 }
 
@@ -561,6 +810,9 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     u32 dbg_irq;
     u32 dbg_dma;
     u32 dbg_mem;
+    u32 mem_sdram_timeout;
+    u32 mem_eeprom_cmd;
+    u32 mem_sram_enable;
     u32 gpu_vcount;
     u32 gpu_disp_low;
 
@@ -586,6 +838,9 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
     dbg_irq = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ);
     dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
     dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
+    mem_eeprom_cmd = (dbg_mem >> 29) & 0x1U;
+    mem_sram_enable = (dbg_mem >> 30) & 0x1U;
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
     gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
 
@@ -618,12 +873,15 @@ void PsAppDiag_PrintProbe(PsAppDiagContext *ctx) {
                (unsigned int)((status1 >> 2) & 0x3FFFU),
                (unsigned int)((status1 >> 16) & 0xFFFFU),
                (unsigned int)err_latch);
-    xil_printf("[PROBE] dbg pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x\r\n",
+    xil_printf("[PROBE] dbg pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x sdram_timeout=%u eeprom_cmd=%u sram=%u\r\n",
                (unsigned int)dbg_pc,
                (unsigned int)dbg_mix,
                (unsigned int)dbg_irq,
                (unsigned int)dbg_dma,
-               (unsigned int)dbg_mem);
+               (unsigned int)dbg_mem,
+               (unsigned int)mem_sdram_timeout,
+               (unsigned int)mem_eeprom_cmd,
+               (unsigned int)mem_sram_enable);
     xil_printf("[PROBE] gpu vcount=%u disp_lo=0x%02x\r\n",
                (unsigned int)gpu_vcount,
                (unsigned int)gpu_disp_low);
@@ -704,6 +962,212 @@ void PsAppDiag_PrintTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
     }
 
     xil_printf("[TRACE] end\r\n");
+}
+
+void PsAppDiag_PrintHangSnapshot(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
+    u32 idx;
+    u32 first_pc = 0U;
+    u32 last_pc = 0U;
+    u32 prev_pc = 0U;
+    u32 first_fbseq = 0U;
+    u32 last_fbseq = 0U;
+    u32 prev_fbseq = 0U;
+    u32 pc_change_cnt = 0U;
+    u32 fbseq_change_cnt = 0U;
+    u32 bios_cnt = 0U;
+    u32 rom_cnt = 0U;
+    u32 invalid_pc_cnt = 0U;
+    u32 halt_cnt = 0U;
+    u32 wait_sdram_cnt = 0U;
+    u32 no_enabled_irq_cnt = 0U;
+    u32 masked_irq_cnt = 0U;
+    u32 can_irq_cnt = 0U;
+    u32 vblank_flag_cnt = 0U;
+    u32 vblank_ie_cnt = 0U;
+    u32 has_prev = 0U;
+    u32 rom_pcs[32];
+    u32 rom_pc_count = 0U;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    if (samples == 0U) {
+        samples = 8U;
+    } else if (samples > PS_APP_TRACE_MAX_SAMPLES) {
+        samples = PS_APP_TRACE_MAX_SAMPLES;
+    }
+    if (interval_ms == 0U) {
+        interval_ms = 20U;
+    }
+
+    xil_printf("[HANG] begin samples=%u interval_ms=%u\r\n",
+               (unsigned int)samples,
+               (unsigned int)interval_ms);
+
+    for (idx = 0U; idx < samples; ++idx) {
+        u32 ctrl;
+        u32 key_shadow;
+        u32 sw_reset;
+        u32 ps_irq_en;
+        u32 ps_irq_sts;
+        u32 rom_status;
+        u32 status0;
+        u32 status1;
+        u32 dbg_pc;
+        u32 dbg_mix;
+        u32 dbg_irq;
+        u32 dbg_irq_ext;
+        u32 dbg_dma;
+        u32 dbg_mem;
+        u32 fbcap_status;
+        u32 fbcap_seq;
+        u32 parked;
+        u32 vdma_status;
+        u32 if_ie;
+        u32 ime;
+        u32 irq_disable;
+        u32 disp;
+
+        ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+        key_shadow = PsGbaRegs_Read(ctx->regs, GBA_REG_KEYS);
+        sw_reset = PsGbaRegs_Read(ctx->regs, GBA_REG_SW_RESET);
+        ps_irq_en = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_EN);
+        ps_irq_sts = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_STS);
+        rom_status = PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS);
+        status0 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS0);
+        status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
+        dbg_pc = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+        if (dbg_pc >= 0x08000000U && dbg_pc < 0x0A000000U && rom_pc_count < 30U) {
+            rom_pcs[rom_pc_count++] = dbg_pc;
+        }
+        dbg_mix = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_MIX);
+        dbg_irq = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ);
+        dbg_irq_ext = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ_EXT);
+        dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
+        dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+        fbcap_status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
+        fbcap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
+        parked = XAxiVdma_CurrFrameStore(&ctx->vdma->vdma, XAXIVDMA_READ);
+        vdma_status = XAxiVdma_GetStatus(&ctx->vdma->vdma, XAXIVDMA_READ);
+
+        if (idx == 0U) {
+            first_pc = dbg_pc;
+            first_fbseq = fbcap_seq;
+        }
+        last_pc = dbg_pc;
+        last_fbseq = fbcap_seq;
+
+        if (has_prev != 0U) {
+            if (dbg_pc != prev_pc) {
+                pc_change_cnt++;
+            }
+            if (fbcap_seq != prev_fbseq) {
+                fbseq_change_cnt++;
+            }
+        }
+        prev_pc = dbg_pc;
+        prev_fbseq = fbcap_seq;
+        has_prev = 1U;
+
+        if (dbg_pc < 0x00004000U) {
+            bios_cnt++;
+        } else if ((dbg_pc >= 0x08000000U) && (dbg_pc <= 0x0DFFFFFFU)) {
+            rom_cnt++;
+        } else if ((strcmp(PsAppDiag_PcRegionName(dbg_pc), "INVALID") == 0)) {
+            invalid_pc_cnt++;
+        }
+        if ((dbg_mix & 0x1U) != 0U) {
+            halt_cnt++;
+        }
+        if ((dbg_mem & 0xFFU) == PS_APP_MEM_STATE_WAIT_SDRAM) {
+            wait_sdram_cnt++;
+        }
+
+        if_ie = (dbg_irq_ext >> 16) & 0xFFFFU;
+        ime = (dbg_irq >> 16) & 0x1U;
+        irq_disable = (dbg_mix >> 10) & 0x1U;
+        disp = (dbg_irq >> 25) & 0x7FU;
+        if (if_ie == 0U) {
+            no_enabled_irq_cnt++;
+        } else if ((ime == 0U) || (irq_disable != 0U)) {
+            masked_irq_cnt++;
+        } else {
+            can_irq_cnt++;
+        }
+        if ((disp & 0x1U) != 0U) {
+            vblank_flag_cnt++;
+        }
+        if ((disp & 0x8U) != 0U) {
+            vblank_ie_cnt++;
+        }
+
+        PsAppDiag_PrintCpuIrqDecode("sample", idx, ctrl, key_shadow, sw_reset,
+                                    ps_irq_en, ps_irq_sts, rom_status,
+                                    status0, status1, dbg_pc, dbg_mix,
+                                    dbg_irq, dbg_irq_ext, dbg_mem, dbg_dma,
+                                    fbcap_seq, fbcap_status & 0x1U, parked, vdma_status);
+
+        if ((idx + 1U) < samples) {
+            vTaskDelay(pdMS_TO_TICKS(interval_ms));
+        }
+    }
+
+    xil_printf("[HANG] summary pc_first=0x%08x pc_last=0x%08x pc_change=%u bios=%u rom=%u invalid=%u halt=%u wait_sdram=%u fbseq_first=%u fbseq_last=%u fbseq_change=%u\r\n",
+               (unsigned int)first_pc,
+               (unsigned int)last_pc,
+               (unsigned int)pc_change_cnt,
+               (unsigned int)bios_cnt,
+               (unsigned int)rom_cnt,
+               (unsigned int)invalid_pc_cnt,
+               (unsigned int)halt_cnt,
+               (unsigned int)wait_sdram_cnt,
+               (unsigned int)first_fbseq,
+               (unsigned int)last_fbseq,
+               (unsigned int)fbseq_change_cnt);
+    xil_printf("[HANG] irq_summary no_enabled_irq=%u masked_irq=%u can_irq=%u vblank_flag=%u vblank_ie=%u\r\n",
+               (unsigned int)no_enabled_irq_cnt,
+               (unsigned int)masked_irq_cnt,
+               (unsigned int)can_irq_cnt,
+               (unsigned int)vblank_flag_cnt,
+               (unsigned int)vblank_ie_cnt);
+
+    if ((bios_cnt == samples) && (pc_change_cnt == 0U)) {
+        xil_printf("[HANG] verdict=CPU_STABLE_IN_BIOS hint=%s\r\n",
+                   PsAppDiag_BiosPcHint(last_pc));
+    } else if (halt_cnt == samples) {
+        xil_printf("[HANG] verdict=CPU_HALTED irq_path=%s\r\n",
+                   (can_irq_cnt != 0U) ? "wakeable" :
+                   ((masked_irq_cnt != 0U) ? "masked" : "no_enabled_irq"));
+    } else if (invalid_pc_cnt != 0U) {
+        xil_printf("[HANG] verdict=PC_RUNAWAY_OR_TORN_CDC invalid_samples=%u\r\n",
+                   (unsigned int)invalid_pc_cnt);
+    } else if (fbseq_change_cnt == 0U) {
+        xil_printf("[HANG] verdict=FRAME_CAPTURE_NOT_ADVANCING cpu_region=%s\r\n",
+                   PsAppDiag_PcRegionName(last_pc));
+    } else {
+        xil_printf("[HANG] verdict=CPU_AND_CAPTURE_ADVANCING cpu_region=%s\r\n",
+                   PsAppDiag_PcRegionName(last_pc));
+    }
+
+    PsAppDiag_PrintDdrLogSnapshot(ctx, "hang");
+    PsAppDiag_PrintChainSnapshot(ctx, "hang");
+    PsAppDiag_PrintVdmaSnapshot(ctx, "hang");
+    {
+        u32 latest_seq;
+        u32 latest_buf;
+        PsAppVideo_ReadCaptureStatus(ctx->video, &latest_seq, &latest_buf);
+        (void)latest_seq;
+        PsAppDiag_PrintPixcapSummary(ctx, latest_buf & 0x1U);
+        PsAppDiag_PrintPixcapRow(ctx, latest_buf & 0x1U, 0U);
+        PsAppDiag_PrintPixcapRow(ctx, latest_buf & 0x1U, PS_APP_GBA_FRAME_HEIGHT / 2U);
+        PsAppDiag_PrintPixcapRow(ctx, latest_buf & 0x1U, PS_APP_GBA_FRAME_HEIGHT - 1U);
+    }
+    PsAppDiag_ScanFramebufferForAnomaly(ctx, "hang", 1U);
+    if (rom_pc_count > 0U) {
+        PsAppDiag_DisasmHangPcs(rom_pcs, rom_pc_count);
+    }
+    xil_printf("[HANG] end\r\n");
 }
 
 void PsAppDiag_PrintLaunchTrace(PsAppDiagContext *ctx, u32 samples, u32 interval_ms) {
@@ -852,6 +1316,9 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
     u32 mem_state;
     u32 mem_eeprom_mode;
     u32 mem_dma_eepromcount;
+    u32 mem_sdram_timeout;
+    u32 mem_eeprom_cmd;
+    u32 mem_sram_enable;
     u32 fbcap_status;
     u32 fbcap_seq;
     u32 gpu_vcount;
@@ -877,6 +1344,9 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
     mem_state = dbg_mem & 0xFFU;
     mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
     mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
+    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
+    mem_eeprom_cmd = (dbg_mem >> 29) & 0x1U;
+    mem_sram_enable = (dbg_mem >> 30) & 0x1U;
     fbcap_status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
     fbcap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
@@ -905,14 +1375,228 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
                (unsigned int)gpu_disp_low,
                (unsigned int)fbcap_status,
                (unsigned int)fbcap_seq);
-    xil_printf("[RUNTIME] %s memdec state=0x%02x eepromMode=%u dma_eepromcount=%u\r\n",
+    xil_printf("[RUNTIME] %s memdec state=0x%02x eepromMode=%u dma_eepromcount=%u sdram_timeout=%u eeprom_cmd=%u sram=%u\r\n",
                print_tag,
                (unsigned int)mem_state,
                (unsigned int)mem_eeprom_mode,
-               (unsigned int)mem_dma_eepromcount);
+               (unsigned int)mem_dma_eepromcount,
+               (unsigned int)mem_sdram_timeout,
+               (unsigned int)mem_eeprom_cmd,
+               (unsigned int)mem_sram_enable);
+}
+
+void PsAppDiag_PrintDdrLogSnapshot(PsAppDiagContext *ctx, const char *tag) {
+    const char *label;
+    u32 ctrl;
+    u32 status1;
+    u32 err_latch;
+    u32 irq_sts;
+    u32 dbg_pc;
+    u32 dbg_mix;
+    u32 dbg_dma;
+    u32 dbg_mem;
+    u32 mem_state;
+    u32 mem_eeprom_mode;
+    u32 mem_dma_eepromcount;
+    u32 mem_sdram_timeout;
+    u32 flags;
+    u32 counts0;
+    u32 counts1;
+    u32 ch1_last_addr;
+    u32 ch1_last_meta;
+    u32 ddr_last_addr;
+    u32 ddr_last_meta;
+    u32 ar_last_addr;
+    u32 ar_last_meta;
+    u32 r_last_addr;
+    u32 r_last_meta;
+    u32 done_last_addr;
+    u32 done_last_meta;
+    const char *blocked_at;
+
+    if (ctx == NULL) {
+        return;
+    }
+
+    label = (tag != NULL) ? tag : "ddr";
+    ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
+    status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
+    err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
+    irq_sts = PsGbaRegs_Read(ctx->regs, GBA_REG_IRQ_STS);
+    dbg_pc = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+    dbg_mix = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_MIX);
+    dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
+    dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+    mem_state = dbg_mem & 0xFFU;
+    mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
+    mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
+    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
+
+    PsAppDiag_ReadDdrChain(ctx,
+                           &flags,
+                           &counts0,
+                           &counts1,
+                           &ch1_last_addr,
+                           &ch1_last_meta,
+                           &ddr_last_addr,
+                           &ddr_last_meta,
+                           &ar_last_addr,
+                           &ar_last_meta,
+                           &r_last_addr,
+                           &r_last_meta,
+                           &done_last_addr,
+                           &done_last_meta);
+    blocked_at = PsAppDiag_InferDdrBlocker(mem_state, flags, counts0, counts1, err_latch);
+
+    xil_printf("[DDRLOG] %s state=0x%02x(%s) blocked_at=%s pc=0x%08x dma=0x%08x mix=0x%08x frame=%u miss=%u irq=0x%x err=0x%08x timeout=%u\r\n",
+               label,
+               (unsigned int)mem_state,
+               PsAppDiag_MemStateName(mem_state),
+               blocked_at,
+               (unsigned int)dbg_pc,
+               (unsigned int)dbg_dma,
+               (unsigned int)dbg_mix,
+               (unsigned int)(status1 & 0x3U),
+               (unsigned int)((status1 >> 2) & 0x3FFFU),
+               (unsigned int)(irq_sts & 0x3U),
+               (unsigned int)err_latch,
+               (unsigned int)mem_sdram_timeout);
+    xil_printf("[DDRLOG] %s mem=0x%08x ctrl=0x%08x romsafe=%u eepromMode=%u dma_eepromcount=%u flags=0x%08x counts ch1=%u ddr=%u ar=%u r=%u dout=%u done=%u errp=%u we=%u pix=%u\r\n",
+               label,
+               (unsigned int)dbg_mem,
+               (unsigned int)ctrl,
+               (unsigned int)((ctrl & GBA_CTRL_ROM_DDR_SAFE) != 0U),
+               (unsigned int)mem_eeprom_mode,
+               (unsigned int)mem_dma_eepromcount,
+               (unsigned int)flags,
+               (unsigned int)(counts0 & 0xFFU),
+               (unsigned int)((counts0 >> 8) & 0xFFU),
+               (unsigned int)((counts0 >> 16) & 0xFFU),
+               (unsigned int)((counts0 >> 24) & 0xFFU),
+               (unsigned int)(counts1 & 0xFFU),
+               (unsigned int)((counts1 >> 8) & 0xFFU),
+               (unsigned int)((counts1 >> 16) & 0xFFU),
+               (unsigned int)((counts1 >> 24) & 0xFU),
+               (unsigned int)((counts1 >> 28) & 0xFU));
+    xil_printf("[DDRLOG] %s last ch1=0x%08x lane=%u busy=%u ddr=0x%08x burst=%u rd=%u we=%u busy=%u ar=0x%08x len=%u size=%u burst=%u\r\n",
+               label,
+               (unsigned int)ch1_last_addr,
+               (unsigned int)((ch1_last_meta >> 8) & 0x3U),
+               (unsigned int)((ch1_last_meta >> 10) & 0x1U),
+               (unsigned int)ddr_last_addr,
+               (unsigned int)((ddr_last_meta >> 8) & 0xFFU),
+               (unsigned int)((ddr_last_meta >> 16) & 0x1U),
+               (unsigned int)((ddr_last_meta >> 17) & 0x1U),
+               (unsigned int)((ddr_last_meta >> 18) & 0x1U),
+               (unsigned int)ar_last_addr,
+               (unsigned int)((ar_last_meta >> 8) & 0xFFU),
+               (unsigned int)((ar_last_meta >> 16) & 0x7U),
+               (unsigned int)((ar_last_meta >> 19) & 0x3U));
+    xil_printf("[DDRLOG] %s last r_ar=0x%08x rresp=%u rlast=%u done=0x%08x done_lane=%u done_rresp=%u done_rlast=%u metas ch1=0x%08x ddr=0x%08x ar=0x%08x r=0x%08x done=0x%08x\r\n",
+               label,
+               (unsigned int)r_last_addr,
+               (unsigned int)((r_last_meta >> 8) & 0x3U),
+               (unsigned int)((r_last_meta >> 10) & 0x1U),
+               (unsigned int)done_last_addr,
+               (unsigned int)((done_last_meta >> 8) & 0x3U),
+               (unsigned int)((done_last_meta >> 12) & 0x3U),
+               (unsigned int)((done_last_meta >> 14) & 0x1U),
+               (unsigned int)ch1_last_meta,
+               (unsigned int)ddr_last_meta,
+               (unsigned int)ar_last_meta,
+               (unsigned int)r_last_meta,
+               (unsigned int)done_last_meta);
+}
+
+void PsAppDiag_ServiceDdrLog(PsAppDiagContext *ctx,
+                             u32 status1,
+                             u32 dbg_pc,
+                             u32 dbg_mem,
+                             u32 dbg_dma) {
+    u32 flags;
+    u32 counts0;
+    u32 counts1;
+    u32 dummy_addr;
+    u32 dummy_meta;
+    u32 err_latch;
+    u32 signature_changed;
+    u32 force_print;
+    u32 interval;
+    char tag[24];
+
+    if ((ctx == NULL) || (ctx->diag == NULL) || (ctx->diag->log_ddr_enable == 0U)) {
+        return;
+    }
+
+    PsAppDiag_ReadDdrChain(ctx,
+                           &flags,
+                           &counts0,
+                           &counts1,
+                           &dummy_addr,
+                           &dummy_meta,
+                           &dummy_addr,
+                           &dummy_meta,
+                           &dummy_addr,
+                           &dummy_meta,
+                           &dummy_addr,
+                           &dummy_meta,
+                           &dummy_addr,
+                           &dummy_meta);
+    err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
+    signature_changed = ((ctx->diag->ddrlog_last_status1 != status1) ||
+                         (ctx->diag->ddrlog_last_pc != dbg_pc) ||
+                         (ctx->diag->ddrlog_last_mem != dbg_mem) ||
+                         (ctx->diag->ddrlog_last_dma != dbg_dma) ||
+                         (ctx->diag->ddrlog_last_err != err_latch) ||
+                         (ctx->diag->ddrlog_last_counts0 != counts0) ||
+                         (ctx->diag->ddrlog_last_counts1 != counts1)) ? 1U : 0U;
+
+    if (signature_changed != 0U) {
+        ctx->diag->ddrlog_same_sample_count = 0U;
+    } else if (ctx->diag->ddrlog_same_sample_count < 0xFFFFFFFFU) {
+        ctx->diag->ddrlog_same_sample_count++;
+    }
+
+    interval = ctx->diag->ddrlog_interval_ticks;
+    if (interval < PS_APP_DDRLOG_MIN_INTERVAL_TICKS) {
+        interval = PS_APP_DDRLOG_DEFAULT_INTERVAL_TICKS;
+    }
+
+    ctx->diag->ddrlog_tick++;
+    force_print = 0U;
+    if (signature_changed != 0U) {
+        force_print = 1U;
+    }
+    if (((dbg_mem >> 28) & 0x1U) != 0U) {
+        force_print = 1U;
+    }
+    if ((dbg_mem & 0xFFU) == PS_APP_MEM_STATE_WAIT_SDRAM) {
+        if ((ctx->diag->ddrlog_same_sample_count == PS_APP_AUTO_STALL_AUDIT_SAMPLES) ||
+            ((ctx->diag->ddrlog_same_sample_count > PS_APP_AUTO_STALL_AUDIT_SAMPLES) &&
+             ((ctx->diag->ddrlog_same_sample_count % interval) == 0U))) {
+            force_print = 1U;
+        }
+    }
+    if ((ctx->diag->ddrlog_tick % interval) == 0U) {
+        force_print = 1U;
+    }
+
+    if (force_print != 0U) {
+        (void)snprintf(tag, sizeof(tag), "auto%u", (unsigned int)ctx->diag->ddrlog_tick);
+        PsAppDiag_PrintDdrLogSnapshot(ctx, tag);
+    }
+
+    ctx->diag->ddrlog_last_status1 = status1;
+    ctx->diag->ddrlog_last_pc = dbg_pc;
+    ctx->diag->ddrlog_last_mem = dbg_mem;
+    ctx->diag->ddrlog_last_dma = dbg_dma;
+    ctx->diag->ddrlog_last_err = err_latch;
+    ctx->diag->ddrlog_last_counts0 = counts0;
+    ctx->diag->ddrlog_last_counts1 = counts1;
 }
 
 void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
+    u32 ctrl;
     u32 status1;
     u32 rom_status;
     u32 err_latch;
@@ -931,6 +1615,7 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
         return;
     }
 
+    ctrl = PsGbaRegs_Read(ctx->regs, GBA_REG_CTRL);
     status1 = PsGbaRegs_Read(ctx->regs, GBA_REG_STATUS1);
     rom_status = PsGbaRegs_Read(ctx->regs, GBA_REG_ROM_STATUS);
     err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
@@ -963,7 +1648,7 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
                (unsigned int)vdma_errs,
                (unsigned int)fbcap_seq,
                (unsigned int)(fbcap_status & 0x1U));
-    xil_printf("[STAT] blit count=%u last_us=%u max_us=%u avg_us=%u seq_gap_max=%u seq_glitch_drop=%u log_input=%u log_fbscan=%u\r\n",
+    xil_printf("[STAT] blit count=%u last_us=%u max_us=%u avg_us=%u seq_gap_max=%u seq_glitch_drop=%u log_input=%u log_fbscan=%u log_ddr=%u ddr_interval=%u guard=%u romsafe=%u active=%u cd=%u rec=%u\r\n",
                (unsigned int)ctx->video->state->blit_count,
                (unsigned int)ctx->video->state->blit_last_us,
                (unsigned int)ctx->video->state->blit_max_us,
@@ -971,7 +1656,14 @@ void PsAppDiag_PrintStatus(PsAppDiagContext *ctx) {
                (unsigned int)ctx->video->state->blit_seq_gap_max,
                (unsigned int)ctx->video->state->blit_seq_glitch_drop,
                (unsigned int)(ctx->diag->log_input_delta_enable != 0U),
-               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U));
+               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U),
+               (unsigned int)(ctx->diag->log_ddr_enable != 0U),
+               (unsigned int)ctx->diag->ddrlog_interval_ticks,
+               (unsigned int)(ctx->diag->pc_guard_enable != 0U),
+               (unsigned int)((ctrl & GBA_CTRL_ROM_DDR_SAFE) != 0U),
+               (unsigned int)(ctx->diag->pc_guard_recovery_active != 0U),
+               (unsigned int)ctx->diag->pc_guard_cooldown_ticks,
+               (unsigned int)ctx->diag->pc_guard_recovery_count);
 
     if ((irq_sts & 0x3U) != 0U) {
         PsGbaRegs_ClearIrqStatus(ctx->regs, irq_sts & 0x3U);
@@ -994,6 +1686,9 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
     u32 dbg_irq;
     u32 dbg_dma;
     u32 dbg_mem;
+    u32 mem_sdram_timeout;
+    u32 mem_eeprom_cmd;
+    u32 mem_sram_enable;
     u32 gpu_vcount;
     u32 gpu_disp_low;
     u32 blit_avg_us;
@@ -1015,6 +1710,9 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
     dbg_irq = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_IRQ);
     dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
     dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
+    mem_eeprom_cmd = (dbg_mem >> 29) & 0x1U;
+    mem_sram_enable = (dbg_mem >> 30) & 0x1U;
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
     gpu_disp_low = (dbg_irq >> 25) & 0x7FU;
     blit_avg_us = (ctx->video->state->blit_count != 0U) ?
@@ -1030,12 +1728,15 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
                (unsigned int)(irq_en & 0x3U),
                (unsigned int)(sw_reset & 0x1U));
     xil_printf("[DIAG] physical_keys=0x%03x\r\n", (unsigned int)physical_keys);
-    xil_printf("[DIAG] dbg pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x\r\n",
+    xil_printf("[DIAG] dbg pc=0x%08x mix=0x%08x irq=0x%08x dma=0x%08x mem=0x%08x sdram_timeout=%u eeprom_cmd=%u sram=%u\r\n",
                (unsigned int)dbg_pc,
                (unsigned int)dbg_mix,
                (unsigned int)dbg_irq,
                (unsigned int)dbg_dma,
-               (unsigned int)dbg_mem);
+               (unsigned int)dbg_mem,
+               (unsigned int)mem_sdram_timeout,
+               (unsigned int)mem_eeprom_cmd,
+               (unsigned int)mem_sram_enable);
     xil_printf("[DIAG] gpu vcount=%u disp_lo=0x%02x\r\n",
                (unsigned int)gpu_vcount,
                (unsigned int)gpu_disp_low);
@@ -1068,9 +1769,23 @@ void PsAppDiag_PrintDiag(PsAppDiagContext *ctx) {
                (unsigned int)blit_avg_us,
                (unsigned int)ctx->video->state->blit_seq_gap_max,
                (unsigned int)ctx->video->state->blit_seq_glitch_drop);
-    xil_printf("[DIAG] log input=%u fbscan=%u\r\n",
+    xil_printf("[DIAG] log input=%u fbscan=%u ddr=%u ddr_interval=%u guard=%u romsafe=%u active=%u cooldown=%u hold=%u rec=%u\r\n",
                (unsigned int)(ctx->diag->log_input_delta_enable != 0U),
-               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U));
+               (unsigned int)(ctx->diag->log_fbscan_auto_enable != 0U),
+               (unsigned int)(ctx->diag->log_ddr_enable != 0U),
+               (unsigned int)ctx->diag->ddrlog_interval_ticks,
+               (unsigned int)(ctx->diag->pc_guard_enable != 0U),
+               (unsigned int)((ctrl & GBA_CTRL_ROM_DDR_SAFE) != 0U),
+               (unsigned int)(ctx->diag->pc_guard_recovery_active != 0U),
+               (unsigned int)ctx->diag->pc_guard_cooldown_ticks,
+               (unsigned int)ctx->diag->pc_guard_reset_hold_ticks,
+               (unsigned int)ctx->diag->pc_guard_recovery_count);
+    xil_printf("[DIAG] guard last_bad_pc=0x%08x status1=0x%08x mem=0x%08x dma=0x%08x trigger_tick=%u\r\n",
+               (unsigned int)ctx->diag->pc_guard_last_bad_pc,
+               (unsigned int)ctx->diag->pc_guard_last_bad_status1,
+               (unsigned int)ctx->diag->pc_guard_last_bad_mem,
+               (unsigned int)ctx->diag->pc_guard_last_bad_dma,
+               (unsigned int)ctx->diag->pc_guard_last_trigger_tick);
 
     PsAppDiag_PrintVdmaSnapshot(ctx, "diag");
 }
@@ -1097,12 +1812,15 @@ void PsAppDiag_MaybePrintStallAudit(PsAppDiagContext *ctx,
                                     u32 dbg_dma) {
     u32 frame_idx;
     u32 same_state;
+    u32 mem_sdram_timeout;
+    u32 err_latch;
 
     if ((ctx == NULL) || (ctx->rom->loaded == 0U) || (ctx->rom->is_loading != 0U)) {
         return;
     }
 
     frame_idx = status1 & 0x3U;
+    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
     same_state = ((ctx->diag->stall_last_pc == dbg_pc) &&
                   (ctx->diag->stall_last_mem == dbg_mem) &&
                   (ctx->diag->stall_last_dma == dbg_dma) &&
@@ -1125,8 +1843,12 @@ void PsAppDiag_MaybePrintStallAudit(PsAppDiagContext *ctx,
     if ((ctx->diag->auto_stall_audit_printed == 0U) &&
         ((dbg_mem & 0xFFU) == PS_APP_MEM_STATE_WAIT_SDRAM) &&
         (ctx->diag->stall_same_sample_count >= PS_APP_AUTO_STALL_AUDIT_SAMPLES)) {
-        xil_printf("[AUTO] stall audit begin samples=%u\r\n",
-                   (unsigned int)ctx->diag->stall_same_sample_count);
+        err_latch = PsGbaRegs_Read(ctx->regs, GBA_REG_ERROR_LATCH);
+        xil_printf("[AUTO] stall audit begin samples=%u mem_state=0x%02x sdram_timeout=%u err=0x%08x\r\n",
+                   (unsigned int)ctx->diag->stall_same_sample_count,
+                   (unsigned int)(dbg_mem & 0xFFU),
+                   (unsigned int)mem_sdram_timeout,
+                   (unsigned int)err_latch);
         PsAppDiag_PrintConfigReadback(ctx, "stall");
         PsAppDiag_PrintDiag(ctx);
         PsAppDiag_PrintChainSnapshot(ctx, "stall");

@@ -23,6 +23,211 @@ static const char *const s_ps_app_runtime_gba_key_names[10] = {
 
 static PsAppSaveContext *s_ps_app_runtime_save_task_context = NULL;
 
+static u8 PsAppRuntime_IsPcLikelyValid(u32 pc) {
+    if (pc < 0x00004000U) {
+        return 1U;
+    }
+    if ((pc >= 0x02000000U) && (pc <= 0x0203FFFFU)) {
+        return 1U;
+    }
+    if ((pc >= 0x03000000U) && (pc <= 0x03007FFFU)) {
+        return 1U;
+    }
+    if ((pc >= 0x08000000U) && (pc <= 0x0DFFFFFFU)) {
+        return 1U;
+    }
+    return 0U;
+}
+
+static u8 PsAppRuntime_ReconfirmInvalidPc(PsAppRuntimeContext *ctx,
+                                          u32 first_pc,
+                                          u32 *confirmed_pc,
+                                          u32 *confirmed_mem,
+                                          u32 *confirmed_dma) {
+    u32 pc_retry1;
+    u32 pc_retry2;
+    u32 mem_retry;
+    u32 dma_retry;
+
+    if ((ctx == NULL) || (ctx->regs == NULL)) {
+        if (confirmed_pc != NULL) {
+            *confirmed_pc = first_pc;
+        }
+        return (u8)(PsAppRuntime_IsPcLikelyValid(first_pc) == 0U);
+    }
+
+    pc_retry1 = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+    if (PsAppRuntime_IsPcLikelyValid(pc_retry1) != 0U) {
+        return 0U;
+    }
+
+    pc_retry2 = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_CPU_PC);
+    if (PsAppRuntime_IsPcLikelyValid(pc_retry2) != 0U) {
+        return 0U;
+    }
+
+    mem_retry = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
+    dma_retry = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
+    /* Require memory state to be meaningful before classifying as runaway:
+     * upper byte carries memory-mux state ID; 0x00 is typically reset/idle
+     * and often appears in torn CDC samples. */
+    if (((mem_retry >> 24) & 0xFFU) == 0U) {
+        return 0U;
+    }
+
+    if (confirmed_pc != NULL) {
+        *confirmed_pc = pc_retry2;
+    }
+    if (confirmed_mem != NULL) {
+        *confirmed_mem = mem_retry;
+    }
+    if (confirmed_dma != NULL) {
+        *confirmed_dma = dma_retry;
+    }
+
+    return 1U;
+}
+
+static void PsAppRuntime_PcGuardReleaseReset(PsAppRuntimeContext *ctx) {
+    if ((ctx == NULL) || (ctx->diag == NULL) || (ctx->config == NULL) || (ctx->regs == NULL)) {
+        return;
+    }
+
+    PsGbaRegs_SetSwReset(ctx->regs, 0U);
+    ctx->config->ctrl |= (GBA_CTRL_CORE_ON | PS_APP_GBA_CTRL_BOOT_REQUIRED | GBA_CTRL_ROM_DDR_SAFE);
+    ctx->config->ctrl &= ~GBA_CTRL_ROM_LOADING;
+    PsAppRuntime_ApplyShadowConfig(ctx);
+    ctx->diag->pc_guard_recovery_active = 0U;
+    ctx->diag->pc_guard_reset_hold_ticks = 0U;
+    ctx->diag->pc_guard_invalid_streak = 0U;
+    ctx->diag->rom_ddr_safe_recovery_active = 1U;
+    ctx->diag->rom_ddr_safe_recovery_count++;
+    ctx->diag->rom_ddr_safe_recovery_tick = ctx->diag->pc_guard_tick;
+    xil_printf("[GUARD] recovery released count=%u cooldown=%u ddr_safe=1\r\n",
+               (unsigned int)ctx->diag->pc_guard_recovery_count,
+               (unsigned int)ctx->diag->pc_guard_cooldown_ticks);
+}
+
+static void PsAppRuntime_ServicePcGuard(PsAppRuntimeContext *ctx,
+                                        u32 status1,
+                                        u32 dbg_pc,
+                                        u32 dbg_mem,
+                                        u32 dbg_dma) {
+    u8 pc_valid;
+
+    if ((ctx == NULL) || (ctx->diag == NULL) || (ctx->config == NULL) || (ctx->regs == NULL)) {
+        return;
+    }
+
+    if ((ctx->rom == NULL) || (ctx->rom->loaded == 0U) || (ctx->rom->is_loading != 0U)) {
+        ctx->diag->pc_guard_invalid_streak = 0U;
+        return;
+    }
+
+    ctx->diag->pc_guard_tick++;
+    if (ctx->diag->pc_guard_cooldown_ticks > 0U) {
+        ctx->diag->pc_guard_cooldown_ticks--;
+    }
+
+    if (ctx->diag->pc_guard_enable == 0U) {
+        if (ctx->diag->pc_guard_recovery_active != 0U) {
+            PsAppRuntime_PcGuardReleaseReset(ctx);
+        }
+        if ((ctx->diag->pc_guard_audio_restore_pending != 0U) &&
+            (ctx->audio != NULL) &&
+            (ctx->audio->mute != 0U)) {
+            ctx->audio->mute = 0U;
+            (void)PsAppRuntime_ApplyAudioOutputState(ctx);
+            ctx->diag->pc_guard_audio_restore_pending = 0U;
+        }
+        ctx->diag->pc_guard_invalid_streak = 0U;
+        return;
+    }
+
+    if (ctx->diag->pc_guard_recovery_active != 0U) {
+        if (ctx->diag->pc_guard_reset_hold_ticks > 0U) {
+            ctx->diag->pc_guard_reset_hold_ticks--;
+        }
+        if (ctx->diag->pc_guard_reset_hold_ticks == 0U) {
+            PsAppRuntime_PcGuardReleaseReset(ctx);
+        }
+        return;
+    }
+
+    pc_valid = PsAppRuntime_IsPcLikelyValid(dbg_pc);
+    if (pc_valid != 0U) {
+        ctx->diag->pc_guard_invalid_streak = 0U;
+        if ((ctx->diag->pc_guard_audio_restore_pending != 0U) &&
+            (ctx->diag->pc_guard_cooldown_ticks == 0U) &&
+            (ctx->audio != NULL) &&
+            (ctx->audio->mute != 0U)) {
+            ctx->audio->mute = 0U;
+            (void)PsAppRuntime_ApplyAudioOutputState(ctx);
+            ctx->diag->pc_guard_audio_restore_pending = 0U;
+            xil_printf("[GUARD] audio restored after cooldown\r\n");
+        }
+        return;
+    }
+
+    if (PsAppRuntime_ReconfirmInvalidPc(ctx, dbg_pc, &dbg_pc, &dbg_mem, &dbg_dma) == 0U) {
+        if (ctx->diag->pc_guard_invalid_streak != 0U) {
+            ctx->diag->pc_guard_invalid_streak = 0U;
+        }
+        return;
+    }
+
+    ctx->diag->pc_guard_last_bad_pc = dbg_pc;
+    ctx->diag->pc_guard_last_bad_status1 = status1;
+    ctx->diag->pc_guard_last_bad_mem = dbg_mem;
+    ctx->diag->pc_guard_last_bad_dma = dbg_dma;
+
+    if (ctx->diag->pc_guard_cooldown_ticks > 0U) {
+        return;
+    }
+
+    if (ctx->diag->pc_guard_invalid_streak < 0xFFFFFFFFU) {
+        ctx->diag->pc_guard_invalid_streak++;
+    }
+    if (ctx->diag->pc_guard_invalid_streak < PS_APP_PC_GUARD_TRIGGER_SAMPLES) {
+        return;
+    }
+
+    ctx->diag->pc_guard_recovery_count++;
+    ctx->diag->pc_guard_last_trigger_tick = ctx->diag->pc_guard_tick;
+    ctx->diag->pc_guard_recovery_active = 1U;
+    ctx->diag->pc_guard_reset_hold_ticks = PS_APP_PC_GUARD_RESET_HOLD_TICKS;
+    ctx->diag->pc_guard_cooldown_ticks = PS_APP_PC_GUARD_COOLDOWN_TICKS;
+    ctx->diag->pc_guard_invalid_streak = 0U;
+
+    if ((ctx->audio != NULL) && (ctx->audio->mute == 0U) && (ctx->audio->volume > 0U)) {
+        ctx->diag->pc_guard_audio_restore_pending = 1U;
+        ctx->audio->mute = 1U;
+        (void)PsAppRuntime_ApplyAudioOutputState(ctx);
+    } else {
+        ctx->diag->pc_guard_audio_restore_pending = 0U;
+    }
+
+    /* 先停 core，再抓快照，避免复位后观测值被清零。 */
+    ctx->config->ctrl |= PS_APP_GBA_CTRL_BOOT_REQUIRED;
+    ctx->config->ctrl &= ~GBA_CTRL_CORE_ON;
+    PsAppRuntime_ApplyShadowConfig(ctx);
+
+    xil_printf("[GUARD] runaway detected pc=0x%08x mem=0x%08x dma=0x%08x frame=%u miss=%u trigger=%u\r\n",
+               (unsigned int)dbg_pc,
+               (unsigned int)dbg_mem,
+               (unsigned int)dbg_dma,
+               (unsigned int)(status1 & 0x3U),
+               (unsigned int)((status1 >> 2) & 0x3FFFU),
+               (unsigned int)PS_APP_PC_GUARD_TRIGGER_SAMPLES);
+    PsAppDiag_PrintRuntimeSample(ctx->diag_ctx, "runaway_pre");
+    PsAppDiag_PrintDdrLogSnapshot(ctx->diag_ctx, "runaway_pre");
+    PsAppDiag_PrintChainSnapshot(ctx->diag_ctx, "runaway_pre");
+    PsAppDiag_PrintConfigReadback(ctx->diag_ctx, "runaway_pre");
+
+    PsGbaRegs_SetSwReset(ctx->regs, 1U);
+    PsGbaRegs_ClearErrorLatch(ctx->regs);
+}
+
 static void PsAppRuntime_PrintPsButtons(u32 ps_btn_mask) {
     xil_printf("[BTN] ps BTN4=%u BTN5=%u mask=0x%02x\r\n",
                (unsigned int)((ps_btn_mask & PS_APP_BTN4_MASK) != 0U),
@@ -220,6 +425,8 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
     cycles_missing = (status1 >> 2) & 0x3FFFU;
     physical_keys = status0 & 0x3FFU;
 
+    PsAppRuntime_ServicePcGuard(ctx, status1, dbg_pc, dbg_mem, dbg_dma);
+
     if (ctx->diag->last_physical_keys != physical_keys) {
         PsAppRuntime_PrintPhysicalKeys(physical_keys);
         ctx->diag->last_physical_keys = physical_keys;
@@ -255,6 +462,8 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
         PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
         ctx->hdmi->blank_frame_pending = 0U;
     }
+
+    PsAppDiag_ServiceDdrLog(ctx->diag_ctx, status1, dbg_pc, dbg_mem, dbg_dma);
 
     if (ctx->rom->is_loading != 0U) {
         PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);
@@ -331,6 +540,61 @@ static void PsAppRuntime_ServiceSlow(PsAppRuntimeContext *ctx) {
 
     PsAppVideo_SyncDisplayFrame(ctx->video_ctx);
     PsAppDiag_MaybePrintStallAudit(ctx->diag_ctx, status1, dbg_pc, dbg_mem, dbg_dma);
+
+#if 0
+    /* DDR_SAFE 自动切入已禁用：实测表明 burst=1 反而加速场景转换卡死，
+     * 因为场景转换以顺序 ROM 读取为主，burst=4 的预取能显著减少 AXI 事务数。
+     * 根因修复方向：增大 gamepak cache SIZE 降低冲突缺失率。 */
+    {
+        u8 ddr_safe_needed = 0U;
+        u32 miss_delta_threshold = 4000U;
+        u32 miss_samples_threshold = 40U;
+        u32 miss_delta;
+
+        if (ctx->diag->auto_stall_audit_printed != 0U) {
+            ddr_safe_needed = 1U;
+        }
+
+        if (ctx->diag->miss_last_cycles == 0U) {
+            miss_delta = 0U;
+        } else if (cycles_missing >= ctx->diag->miss_last_cycles) {
+            miss_delta = cycles_missing - ctx->diag->miss_last_cycles;
+        } else {
+            miss_delta = (0x4000U - ctx->diag->miss_last_cycles) + cycles_missing;
+        }
+        ctx->diag->miss_last_cycles = cycles_missing;
+
+        if (miss_delta > miss_delta_threshold) {
+            if (ctx->diag->miss_high_sample_count < 0xFFFFFFFFU) {
+                ctx->diag->miss_high_sample_count++;
+            }
+        } else {
+            if (ctx->diag->miss_high_sample_count > 0U) {
+                ctx->diag->miss_high_sample_count--;
+            }
+        }
+
+        if (ctx->diag->miss_high_sample_count >= miss_samples_threshold) {
+            ddr_safe_needed = 1U;
+        }
+
+        if ((ddr_safe_needed != 0U) &&
+            (ctx->diag->rom_ddr_safe_recovery_active == 0U) &&
+            ((ctx->config->ctrl & GBA_CTRL_ROM_DDR_SAFE) == 0U)) {
+            ctx->config->ctrl |= GBA_CTRL_ROM_DDR_SAFE;
+            ctx->diag->rom_ddr_safe_recovery_active = 1U;
+            ctx->diag->rom_ddr_safe_recovery_count++;
+            ctx->diag->rom_ddr_safe_recovery_tick = ctx->diag->pc_guard_tick;
+            xil_printf("[RECOVER] DDR_SAFE engaged count=%u tick=%u miss_delta=%u stall=%u\r\n",
+                       (unsigned int)ctx->diag->rom_ddr_safe_recovery_count,
+                       (unsigned int)ctx->diag->rom_ddr_safe_recovery_tick,
+                       (unsigned int)miss_delta,
+                       (unsigned int)ctx->diag->auto_stall_audit_printed);
+            PsAppRuntime_ApplyShadowConfig(ctx);
+        }
+    }
+#endif
+
     PsAppVideo_AttemptRecover(ctx->video_ctx, vdma_status, vdma_errs);
 
     /* 早期 BRAM 捕获诊断：ROM 加载后约 1 秒触发一次 */

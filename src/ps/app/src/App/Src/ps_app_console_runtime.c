@@ -27,6 +27,7 @@ void PsAppConsole_PrintRuntimeHelp(void) {
     xil_printf("  lock on|off\r\n");
     xil_printf("  remap on|off\r\n");
     xil_printf("  unsafe on|off\r\n");
+    xil_printf("  romsafe on|off      (force ROM DDR single-beat/no-prefetch)\r\n");
     xil_printf("  key <name> on|off   (a/b/select/start/right/left/up/down/r/l)\r\n");
     xil_printf("  keymask <hex>\r\n");
     xil_printf("  btn status           (PS-side BTN4/BTN5 on MIO50/51)\r\n");
@@ -145,7 +146,7 @@ u8 PsAppConsole_HandleRuntimeCommands(PsAppConsoleContext *ctx, const char *cmd)
 
     if ((strcmp(cmd, "core") == 0) || (strcmp(cmd, "turbo") == 0) ||
         (strcmp(cmd, "lock") == 0) || (strcmp(cmd, "remap") == 0) ||
-        (strcmp(cmd, "unsafe") == 0)) {
+        (strcmp(cmd, "unsafe") == 0) || (strcmp(cmd, "romsafe") == 0)) {
         u32 bit;
 
         arg1 = strtok(NULL, " \t");
@@ -162,6 +163,8 @@ u8 PsAppConsole_HandleRuntimeCommands(PsAppConsoleContext *ctx, const char *cmd)
             bit = 2U;
         } else if (strcmp(cmd, "remap") == 0) {
             bit = 5U;
+        } else if (strcmp(cmd, "romsafe") == 0) {
+            bit = 14U;
         } else {
             bit = 13U;
         }

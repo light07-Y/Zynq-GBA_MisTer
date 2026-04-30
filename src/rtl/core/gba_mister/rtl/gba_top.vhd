@@ -137,6 +137,7 @@ entity gba_top is
       debug_cpu_pc          : out    std_logic_vector(31 downto 0);
       debug_cpu_mixed       : out    std_logic_vector(31 downto 0);
       debug_irq             : out    std_logic_vector(31 downto 0);
+      debug_irq_ext         : out    std_logic_vector(31 downto 0);
       debug_dma             : out    std_logic_vector(31 downto 0);
       debug_mem             : out    std_logic_vector(31 downto 0);
       -- 内部诊断端口：暴露关键控制信号到顶层用于硬件调试
@@ -746,7 +747,6 @@ begin
       flash_1m             => GBA_flash_1m,
       MaxPakAddr           => MaxPakAddr_modified,
       SramFlashEnable      => SramFlashEnable,
-      Sram32KMirrorTest    => Sram32KMirrorTest,
       memory_remap         => memory_remap,
       bitmapdrawmode       => bitmapdrawmode,
       
@@ -1126,6 +1126,8 @@ begin
    debug_irq(16)           <= REG_IME(0);
    debug_irq(24 downto 17) <= DISPSTAT_debug(23 downto 16); -- VCOUNT
    debug_irq(31 downto 25) <= DISPSTAT_debug(6 downto 0);   -- DISPSTAT low flags/IRQ enable bits
+   debug_irq_ext(15 downto 0)  <= REG_IRP_IE;
+   debug_irq_ext(31 downto 16) <= IRPFLags and REG_IRP_IE;
 
    ------------- interrupt
    process (clk100)

@@ -81,6 +81,9 @@ module gba_frame_capture_bram (
   localparam int unsigned FRAME_WORDS  = FRAME_PIXELS / 2;
   localparam int unsigned MEM_WORDS    = FRAME_WORDS * 2;
   localparam int unsigned MEM_ADDR_W   = 16;
+  // If the tail pixel is occasionally lost, commit the previous frame when a
+  // new frame starts only if we already captured "almost a full frame".
+  localparam int unsigned FRAME_COMMIT_MIN_WORDS = FRAME_WORDS - 64;
 
   logic        write_buf_idx;
   logic [15:0] even_pixel_latched;
@@ -88,6 +91,8 @@ module gba_frame_capture_bram (
   logic [MEM_ADDR_W-1:0] mem_addrb;
   logic [31:0] mem_dina;
   logic        mem_wea;
+  logic        frame_active;
+  logic [15:0] frame_word_count;
 
   function automatic logic [15:0] pack_pixel(input logic [17:0] pixel);
     pack_pixel = {pixel[17:13], pixel[11:6], pixel[5:1]};
@@ -164,10 +169,22 @@ module gba_frame_capture_bram (
       mem_wea             <= 1'b0;
       frame_seq           <= 32'd0;
       frame_buf_idx       <= 1'b0;
+      frame_active        <= 1'b0;
+      frame_word_count    <= 16'd0;
     end else begin
       mem_wea <= 1'b0;
 
       if (pixel_we) begin
+        if (pixel_addr == 16'd0) begin
+          if (frame_active && (frame_word_count >= FRAME_COMMIT_MIN_WORDS)) begin
+            frame_buf_idx <= write_buf_idx;
+            frame_seq     <= frame_seq + 32'd1;
+            write_buf_idx <= ~write_buf_idx;
+          end
+          frame_active     <= 1'b1;
+          frame_word_count <= 16'd0;
+        end
+
         if (!pixel_addr[0]) begin
           even_pixel_latched <= pack_pixel(pixel_data);
         end else if (pixel_addr < FRAME_PIXELS) begin
@@ -175,11 +192,15 @@ module gba_frame_capture_bram (
                      + {{(MEM_ADDR_W-15){1'b0}}, pixel_addr[15:1]};
           mem_dina  <= {pack_pixel(pixel_data), even_pixel_latched};
           mem_wea   <= 1'b1;
+          if (frame_word_count != FRAME_WORDS[15:0]) begin
+            frame_word_count <= frame_word_count + 16'd1;
+          end
 
           if (pixel_addr == 16'd38399) begin
             frame_buf_idx <= write_buf_idx;
             frame_seq     <= frame_seq + 32'd1;
             write_buf_idx <= ~write_buf_idx;
+            frame_active  <= 1'b0;
           end
         end
       end
