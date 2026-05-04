@@ -237,6 +237,10 @@ static void PsAppDiag_PrintCpuIrqDecode(const char *tag,
     u32 enabled_pending = (dbg_irq_ext >> 16) & 0xFFFFU;
     u32 cpu_can_irq = ((ime != 0U) && (irq_disable == 0U) && (enabled_pending != 0U)) ? 1U : 0U;
     u32 mem_state = dbg_mem & 0xFFU;
+    u32 vram_req_cnt = (dbg_mem >> 8) & 0xFFU;
+    u32 vram_we_cnt = (dbg_mem >> 16) & 0xFFU;
+    u32 vram_blk_cnt = (dbg_mem >> 24) & 0xFU;
+    u32 vram_nz_seen = (dbg_mem >> 31) & 0x1U;
 
     xil_printf("[HANG] %s i=%u cfg ctrl=0x%08x reset=%u rom=%u romsafe=%u ps_irq_en=0x%x ps_irq_sts=0x%x key_shadow=0x%03x physical=0x%03x\r\n",
                tag,
@@ -277,7 +281,7 @@ static void PsAppDiag_PrintCpuIrqDecode(const char *tag,
                (unsigned int)((disp >> 4) & 0x1U),
                (unsigned int)((disp >> 5) & 0x1U),
                (unsigned int)vcount);
-    xil_printf("[HANG] %s i=%u bus mem=0x%08x state=0x%02x(%s) dma=0x%08x keys=0x%03x frame=%u miss=%u vsync=%u fbseq=%u fbbuf=%u park=%u vdma_sr=0x%08x\r\n",
+    xil_printf("[HANG] %s i=%u bus mem=0x%08x state=0x%02x(%s) dma=0x%08x keys=0x%03x frame=%u miss=%u vsync=%u fbseq=%u fbbuf=%u park=%u vdma_sr=0x%08x vreq=%u vwe=%u vblk=%u vnz=%u\r\n",
                tag,
                (unsigned int)idx,
                (unsigned int)dbg_mem,
@@ -291,7 +295,11 @@ static void PsAppDiag_PrintCpuIrqDecode(const char *tag,
                (unsigned int)fbcap_seq,
                (unsigned int)(fbcap_buf & 0x1U),
                (unsigned int)parked,
-               (unsigned int)vdma_status);
+               (unsigned int)vdma_status,
+               (unsigned int)vram_req_cnt,
+               (unsigned int)vram_we_cnt,
+               (unsigned int)vram_blk_cnt,
+               (unsigned int)vram_nz_seen);
 }
 
 static void PsAppDiag_ReadDdrChain(PsAppDiagContext *ctx,
@@ -1314,11 +1322,11 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
     u32 dbg_dma;
     u32 dbg_mem;
     u32 mem_state;
-    u32 mem_eeprom_mode;
-    u32 mem_dma_eepromcount;
-    u32 mem_sdram_timeout;
-    u32 mem_eeprom_cmd;
+    u32 mem_vram_req;
+    u32 mem_vram_we;
+    u32 mem_vram_blk;
     u32 mem_sram_enable;
+    u32 mem_vram_nz_seen;
     u32 fbcap_status;
     u32 fbcap_seq;
     u32 gpu_vcount;
@@ -1342,11 +1350,11 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
     dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
     dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
     mem_state = dbg_mem & 0xFFU;
-    mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
-    mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
-    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
-    mem_eeprom_cmd = (dbg_mem >> 29) & 0x1U;
+    mem_vram_req = (dbg_mem >> 8) & 0xFFU;
+    mem_vram_we = (dbg_mem >> 16) & 0xFFU;
+    mem_vram_blk = (dbg_mem >> 24) & 0xFU;
     mem_sram_enable = (dbg_mem >> 30) & 0x1U;
+    mem_vram_nz_seen = (dbg_mem >> 31) & 0x1U;
     fbcap_status = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_STATUS);
     fbcap_seq = PsGbaRegs_Read(ctx->regs, GBA_REG_FB_CAP_SEQ);
     gpu_vcount = (dbg_irq >> 17) & 0xFFU;
@@ -1375,13 +1383,13 @@ void PsAppDiag_PrintRuntimeSample(PsAppDiagContext *ctx, const char *tag) {
                (unsigned int)gpu_disp_low,
                (unsigned int)fbcap_status,
                (unsigned int)fbcap_seq);
-    xil_printf("[RUNTIME] %s memdec state=0x%02x eepromMode=%u dma_eepromcount=%u sdram_timeout=%u eeprom_cmd=%u sram=%u\r\n",
+    xil_printf("[RUNTIME] %s memdec state=0x%02x vreq=%u vwe=%u vblk=%u vnz=%u sram=%u\r\n",
                print_tag,
                (unsigned int)mem_state,
-               (unsigned int)mem_eeprom_mode,
-               (unsigned int)mem_dma_eepromcount,
-               (unsigned int)mem_sdram_timeout,
-               (unsigned int)mem_eeprom_cmd,
+               (unsigned int)mem_vram_req,
+               (unsigned int)mem_vram_we,
+               (unsigned int)mem_vram_blk,
+               (unsigned int)mem_vram_nz_seen,
                (unsigned int)mem_sram_enable);
 }
 
@@ -1396,9 +1404,11 @@ void PsAppDiag_PrintDdrLogSnapshot(PsAppDiagContext *ctx, const char *tag) {
     u32 dbg_dma;
     u32 dbg_mem;
     u32 mem_state;
-    u32 mem_eeprom_mode;
-    u32 mem_dma_eepromcount;
-    u32 mem_sdram_timeout;
+    u32 mem_vram_req;
+    u32 mem_vram_we;
+    u32 mem_vram_blk;
+    u32 mem_sram_enable;
+    u32 mem_vram_nz_seen;
     u32 flags;
     u32 counts0;
     u32 counts1;
@@ -1428,9 +1438,11 @@ void PsAppDiag_PrintDdrLogSnapshot(PsAppDiagContext *ctx, const char *tag) {
     dbg_dma = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_DMA);
     dbg_mem = PsGbaRegs_Read(ctx->regs, GBA_REG_DEBUG_MEM);
     mem_state = dbg_mem & 0xFFU;
-    mem_eeprom_mode = (dbg_mem >> 8) & 0x7U;
-    mem_dma_eepromcount = (dbg_mem >> 11) & 0x1FFFFU;
-    mem_sdram_timeout = (dbg_mem >> 28) & 0x1U;
+    mem_vram_req = (dbg_mem >> 8) & 0xFFU;
+    mem_vram_we = (dbg_mem >> 16) & 0xFFU;
+    mem_vram_blk = (dbg_mem >> 24) & 0xFU;
+    mem_sram_enable = (dbg_mem >> 30) & 0x1U;
+    mem_vram_nz_seen = (dbg_mem >> 31) & 0x1U;
 
     PsAppDiag_ReadDdrChain(ctx,
                            &flags,
@@ -1448,7 +1460,7 @@ void PsAppDiag_PrintDdrLogSnapshot(PsAppDiagContext *ctx, const char *tag) {
                            &done_last_meta);
     blocked_at = PsAppDiag_InferDdrBlocker(mem_state, flags, counts0, counts1, err_latch);
 
-    xil_printf("[DDRLOG] %s state=0x%02x(%s) blocked_at=%s pc=0x%08x dma=0x%08x mix=0x%08x frame=%u miss=%u irq=0x%x err=0x%08x timeout=%u\r\n",
+    xil_printf("[DDRLOG] %s state=0x%02x(%s) blocked_at=%s pc=0x%08x dma=0x%08x mix=0x%08x frame=%u miss=%u irq=0x%x err=0x%08x\r\n",
                label,
                (unsigned int)mem_state,
                PsAppDiag_MemStateName(mem_state),
@@ -1459,15 +1471,17 @@ void PsAppDiag_PrintDdrLogSnapshot(PsAppDiagContext *ctx, const char *tag) {
                (unsigned int)(status1 & 0x3U),
                (unsigned int)((status1 >> 2) & 0x3FFFU),
                (unsigned int)(irq_sts & 0x3U),
-               (unsigned int)err_latch,
-               (unsigned int)mem_sdram_timeout);
-    xil_printf("[DDRLOG] %s mem=0x%08x ctrl=0x%08x romsafe=%u eepromMode=%u dma_eepromcount=%u flags=0x%08x counts ch1=%u ddr=%u ar=%u r=%u dout=%u done=%u errp=%u we=%u pix=%u\r\n",
+               (unsigned int)err_latch);
+    xil_printf("[DDRLOG] %s mem=0x%08x ctrl=0x%08x romsafe=%u vreq=%u vwe=%u vblk=%u vnz=%u sram=%u flags=0x%08x counts ch1=%u ddr=%u ar=%u r=%u dout=%u done=%u errp=%u we=%u pix=%u\r\n",
                label,
                (unsigned int)dbg_mem,
                (unsigned int)ctrl,
                (unsigned int)((ctrl & GBA_CTRL_ROM_DDR_SAFE) != 0U),
-               (unsigned int)mem_eeprom_mode,
-               (unsigned int)mem_dma_eepromcount,
+               (unsigned int)mem_vram_req,
+               (unsigned int)mem_vram_we,
+               (unsigned int)mem_vram_blk,
+               (unsigned int)mem_vram_nz_seen,
+               (unsigned int)mem_sram_enable,
                (unsigned int)flags,
                (unsigned int)(counts0 & 0xFFU),
                (unsigned int)((counts0 >> 8) & 0xFFU),

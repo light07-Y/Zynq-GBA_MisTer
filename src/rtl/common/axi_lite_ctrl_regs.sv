@@ -30,10 +30,45 @@ module axi_lite_ctrl_regs #(
   input  logic [9:0]           stat_physical_keys,
   input  logic [31:0]          stat_debug_cpu_pc,
   input  logic [31:0]          stat_debug_cpu_mixed,
+  input  logic [31:0]          stat_debug_cpu_r0,
+  input  logic [31:0]          stat_debug_cpu_r1,
+  input  logic [31:0]          stat_debug_cpu_r2,
+  input  logic [31:0]          stat_debug_cpu_r4,
+  input  logic [31:0]          stat_debug_cpu_cpuset,
+  input  logic [31:0]          stat_ddr_atom_word0,
+  input  logic [31:0]          stat_ddr_atom_word1,
+  input  logic [31:0]          stat_ddr_atom_next0,
+  input  logic [31:0]          stat_ddr_atom_next1,
+  input  logic [31:0]          stat_ddr_atom_stat,
   input  logic [31:0]          stat_debug_irq,
   input  logic [31:0]          stat_debug_irq_ext,
   input  logic [31:0]          stat_debug_dma,
   input  logic [31:0]          stat_debug_mem,
+  input  logic [31:0]          stat_debug_vram_regs0,
+  input  logic [31:0]          stat_debug_vram_regs1,
+  input  logic [31:0]          stat_debug_vram_regs2,
+  input  logic [31:0]          stat_debug_vram_regs3,
+  input  logic [31:0]          stat_debug_vram_regs4,
+  input  logic [31:0]          stat_debug_vram_hits,
+  input  logic [31:0]          stat_debug_vram_ring0,
+  input  logic [31:0]          stat_debug_vram_ring1,
+  input  logic [31:0]          stat_debug_vram_ring2,
+  input  logic [31:0]          stat_debug_vram_ring3,
+  input  logic [31:0]          stat_debug_vram_dist0,
+  input  logic [31:0]          stat_debug_vram_dist1,
+  input  logic [31:0]          stat_debug_dma_tr0,
+  input  logic [31:0]          stat_debug_dma_tr1,
+  input  logic [31:0]          stat_debug_dma_tr2,
+  input  logic [31:0]          stat_debug_dma_tr3,
+  input  logic [31:0]          stat_debug_dma_tr4,
+  input  logic [31:0]          stat_debug_dma_tr5,
+  input  logic [31:0]          stat_debug_dma_tr6,
+  input  logic [31:0]          stat_debug_dma_tr7,
+  input  logic [31:0]          stat_debug_dma_tr8,
+  input  logic [31:0]          stat_debug_wait0,
+  input  logic [31:0]          stat_debug_wait1,
+  input  logic [31:0]          stat_debug_wait2,
+  input  logic [31:0]          stat_debug_wait3,
   input  logic [31:0]          stat_dbg_chain_flags,
   input  logic [31:0]          stat_dbg_chain_counts0,
   input  logic [31:0]          stat_dbg_chain_counts1,
@@ -179,6 +214,41 @@ module axi_lite_ctrl_regs #(
   localparam logic [ADDR_W-1:0] REG_FEATURE_STATUS_CLR    = 12'h0FC;
   localparam logic [ADDR_W-1:0] REG_RTC_TIMESTAMP_SAVED   = 12'h100;
   localparam logic [ADDR_W-1:0] REG_DEBUG_IRQ_EXT         = 12'h104;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_R0          = 12'h108;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_R1          = 12'h10C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_R2          = 12'h110;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_R4          = 12'h114;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_CPU_CPUSET      = 12'h118;
+  localparam logic [ADDR_W-1:0] REG_DDR_ATOM_WORD0        = 12'h11C;
+  localparam logic [ADDR_W-1:0] REG_DDR_ATOM_WORD1        = 12'h120;
+  localparam logic [ADDR_W-1:0] REG_DDR_ATOM_NEXT0        = 12'h124;
+  localparam logic [ADDR_W-1:0] REG_DDR_ATOM_NEXT1        = 12'h128;
+  localparam logic [ADDR_W-1:0] REG_DDR_ATOM_STAT         = 12'h12C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_REGS0      = 12'h130;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_REGS1      = 12'h134;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_REGS2      = 12'h138;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_REGS3      = 12'h13C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_REGS4      = 12'h140;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_HITS       = 12'h144;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_RING0      = 12'h148;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_RING1      = 12'h14C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_RING2      = 12'h150;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_RING3      = 12'h154;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_DIST0      = 12'h158;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_VRAM_DIST1      = 12'h15C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR0         = 12'h160;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR1         = 12'h164;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR2         = 12'h168;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR3         = 12'h16C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR4         = 12'h170;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR5         = 12'h174;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR6         = 12'h178;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR7         = 12'h17C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_DMA_TR8         = 12'h180;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_WAIT0           = 12'h184;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_WAIT1           = 12'h188;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_WAIT2           = 12'h18C;
+  localparam logic [ADDR_W-1:0] REG_DEBUG_WAIT3           = 12'h190;
 
   logic [31:0] shadow_ctrl;
   logic [9:0]  shadow_keys;
@@ -233,7 +303,7 @@ module axi_lite_ctrl_regs #(
     logic [31:0] merged32;
 
     if (!rst_n) begin
-      shadow_ctrl                <= 32'h0000_1612;
+      shadow_ctrl                <= 32'h0000_1616;
       shadow_keys                <= '0;
       shadow_max_pak_addr        <= '0;
       shadow_cycle_precalc       <= 16'd100;
@@ -252,7 +322,7 @@ module axi_lite_ctrl_regs #(
       shadow_rtc_in_savedtime_lo <= 32'd0;
       shadow_rtc_in_savedtime_hi <= 32'd0;
 
-      cfg_ctrl                   <= 32'h0000_1612;
+      cfg_ctrl                   <= 32'h0000_1616;
       cfg_keys                   <= '0;
       cfg_max_pak_addr           <= '0;
       cfg_cycle_precalc          <= 16'd100;
@@ -486,10 +556,45 @@ module axi_lite_ctrl_regs #(
           REG_BIOS_WR_ACK:         rdata_next = stat_bios_wr_ack_seq;
           REG_DEBUG_CPU_PC:        rdata_next = stat_debug_cpu_pc;
           REG_DEBUG_CPU_MIX:       rdata_next = stat_debug_cpu_mixed;
+          REG_DEBUG_CPU_R0:        rdata_next = stat_debug_cpu_r0;
+          REG_DEBUG_CPU_R1:        rdata_next = stat_debug_cpu_r1;
+          REG_DEBUG_CPU_R2:        rdata_next = stat_debug_cpu_r2;
+          REG_DEBUG_CPU_R4:        rdata_next = stat_debug_cpu_r4;
+          REG_DEBUG_CPU_CPUSET:    rdata_next = stat_debug_cpu_cpuset;
+          REG_DDR_ATOM_WORD0:      rdata_next = stat_ddr_atom_word0;
+          REG_DDR_ATOM_WORD1:      rdata_next = stat_ddr_atom_word1;
+          REG_DDR_ATOM_NEXT0:      rdata_next = stat_ddr_atom_next0;
+          REG_DDR_ATOM_NEXT1:      rdata_next = stat_ddr_atom_next1;
+          REG_DDR_ATOM_STAT:       rdata_next = stat_ddr_atom_stat;
           REG_DEBUG_IRQ:           rdata_next = stat_debug_irq;
           REG_DEBUG_IRQ_EXT:       rdata_next = stat_debug_irq_ext;
           REG_DEBUG_DMA:           rdata_next = stat_debug_dma;
           REG_DEBUG_MEM:           rdata_next = stat_debug_mem;
+          REG_DEBUG_VRAM_REGS0:    rdata_next = stat_debug_vram_regs0;
+          REG_DEBUG_VRAM_REGS1:    rdata_next = stat_debug_vram_regs1;
+          REG_DEBUG_VRAM_REGS2:    rdata_next = stat_debug_vram_regs2;
+          REG_DEBUG_VRAM_REGS3:    rdata_next = stat_debug_vram_regs3;
+          REG_DEBUG_VRAM_REGS4:    rdata_next = stat_debug_vram_regs4;
+          REG_DEBUG_VRAM_HITS:     rdata_next = stat_debug_vram_hits;
+          REG_DEBUG_VRAM_RING0:    rdata_next = stat_debug_vram_ring0;
+          REG_DEBUG_VRAM_RING1:    rdata_next = stat_debug_vram_ring1;
+          REG_DEBUG_VRAM_RING2:    rdata_next = stat_debug_vram_ring2;
+          REG_DEBUG_VRAM_RING3:    rdata_next = stat_debug_vram_ring3;
+          REG_DEBUG_VRAM_DIST0:    rdata_next = stat_debug_vram_dist0;
+          REG_DEBUG_VRAM_DIST1:    rdata_next = stat_debug_vram_dist1;
+          REG_DEBUG_DMA_TR0:       rdata_next = stat_debug_dma_tr0;
+          REG_DEBUG_DMA_TR1:       rdata_next = stat_debug_dma_tr1;
+          REG_DEBUG_DMA_TR2:       rdata_next = stat_debug_dma_tr2;
+          REG_DEBUG_DMA_TR3:       rdata_next = stat_debug_dma_tr3;
+          REG_DEBUG_DMA_TR4:       rdata_next = stat_debug_dma_tr4;
+          REG_DEBUG_DMA_TR5:       rdata_next = stat_debug_dma_tr5;
+          REG_DEBUG_DMA_TR6:       rdata_next = stat_debug_dma_tr6;
+          REG_DEBUG_DMA_TR7:       rdata_next = stat_debug_dma_tr7;
+          REG_DEBUG_DMA_TR8:       rdata_next = stat_debug_dma_tr8;
+          REG_DEBUG_WAIT0:         rdata_next = stat_debug_wait0;
+          REG_DEBUG_WAIT1:         rdata_next = stat_debug_wait1;
+          REG_DEBUG_WAIT2:         rdata_next = stat_debug_wait2;
+          REG_DEBUG_WAIT3:         rdata_next = stat_debug_wait3;
           REG_DISPLAY_FRAME:       rdata_next = {30'd0, cfg_display_frame_idx};
           REG_DBG_CHAIN_FLAGS:     rdata_next = stat_dbg_chain_flags;
           REG_DBG_CHAIN_COUNTS0:   rdata_next = stat_dbg_chain_counts0;

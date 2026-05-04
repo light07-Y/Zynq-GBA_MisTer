@@ -136,10 +136,40 @@ entity gba_top is
       -- debug                    
       debug_cpu_pc          : out    std_logic_vector(31 downto 0);
       debug_cpu_mixed       : out    std_logic_vector(31 downto 0);
+      debug_cpu_r0          : out    std_logic_vector(31 downto 0);
+      debug_cpu_r1          : out    std_logic_vector(31 downto 0);
+      debug_cpu_r2          : out    std_logic_vector(31 downto 0);
+      debug_cpu_r4          : out    std_logic_vector(31 downto 0);
+      debug_cpu_cpuset      : out    std_logic_vector(31 downto 0);
       debug_irq             : out    std_logic_vector(31 downto 0);
       debug_irq_ext         : out    std_logic_vector(31 downto 0);
       debug_dma             : out    std_logic_vector(31 downto 0);
       debug_mem             : out    std_logic_vector(31 downto 0);
+      debug_vram_regs0      : out    std_logic_vector(31 downto 0);
+      debug_vram_regs1      : out    std_logic_vector(31 downto 0);
+      debug_vram_regs2      : out    std_logic_vector(31 downto 0);
+      debug_vram_regs3      : out    std_logic_vector(31 downto 0);
+      debug_vram_regs4      : out    std_logic_vector(31 downto 0);
+      debug_vram_hits       : out    std_logic_vector(31 downto 0);
+      debug_vram_ring0      : out    std_logic_vector(31 downto 0);
+      debug_vram_ring1      : out    std_logic_vector(31 downto 0);
+      debug_vram_ring2      : out    std_logic_vector(31 downto 0);
+      debug_vram_ring3      : out    std_logic_vector(31 downto 0);
+      debug_vram_dist0      : out    std_logic_vector(31 downto 0);
+      debug_vram_dist1      : out    std_logic_vector(31 downto 0);
+      debug_dma_tr0         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr1         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr2         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr3         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr4         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr5         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr6         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr7         : out    std_logic_vector(31 downto 0);
+      debug_dma_tr8         : out    std_logic_vector(31 downto 0);
+      debug_wait0           : out    std_logic_vector(31 downto 0);
+      debug_wait1           : out    std_logic_vector(31 downto 0);
+      debug_wait2           : out    std_logic_vector(31 downto 0);
+      debug_wait3           : out    std_logic_vector(31 downto 0);
       -- 内部诊断端口：暴露关键控制信号到顶层用于硬件调试
       debug_internal        : out    std_logic_vector(31 downto 0)
    );
@@ -319,6 +349,19 @@ architecture arch of gba_top is
    
    signal REG_HALTCNT_written : std_logic;
    signal WAITCNT_written     : std_logic;
+
+   -- wait-path debug probes
+   signal dbg_wait_ie_last      : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_wait_if_last      : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_wait_ime_last     : std_logic := '0';
+   signal dbg_wait_prev_idle    : std_logic := '0';
+   signal dbg_wait_ie_chg_cnt   : unsigned(15 downto 0) := (others => '0');
+   signal dbg_wait_if_chg_cnt   : unsigned(15 downto 0) := (others => '0');
+   signal dbg_wait_ime_chg_cnt  : unsigned(7 downto 0) := (others => '0');
+   signal dbg_wait_wake_cnt     : unsigned(15 downto 0) := (others => '0');
+   signal dbg_wait_last_src     : std_logic_vector(3 downto 0) := (others => '0');
+   signal dbg_wait_last_ie      : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_wait_last_if      : std_logic_vector(15 downto 0) := (others => '0');
    
    -- IRP
    signal SAVESTATE_IRP : std_logic_vector(15 downto 0) := (others => '0');
@@ -789,7 +832,19 @@ begin
       AnalogTiltX          => AnalogTiltX,
       AnalogTiltY          => AnalogTiltY,
 
-      debug_mem            => debug_mem      
+      debug_mem            => debug_mem,
+      debug_vram_regs0     => debug_vram_regs0,
+      debug_vram_regs1     => debug_vram_regs1,
+      debug_vram_regs2     => debug_vram_regs2,
+      debug_vram_regs3     => debug_vram_regs3,
+      debug_vram_regs4     => debug_vram_regs4,
+      debug_vram_hits      => debug_vram_hits,
+      debug_vram_ring0     => debug_vram_ring0,
+      debug_vram_ring1     => debug_vram_ring1,
+      debug_vram_ring2     => debug_vram_ring2,
+      debug_vram_ring3     => debug_vram_ring3,
+      debug_vram_dist0     => debug_vram_dist0,
+      debug_vram_dist1     => debug_vram_dist1
    );
    
    igba_dma : entity work.gba_dma
@@ -838,7 +893,16 @@ begin
       dma_bus_done        => dma_bus_done,
       dma_bus_unread      => dma_bus_unread,
       
-      debug_dma           => debug_dma
+      debug_dma           => debug_dma,
+      debug_dma_tr0       => debug_dma_tr0,
+      debug_dma_tr1       => debug_dma_tr1,
+      debug_dma_tr2       => debug_dma_tr2,
+      debug_dma_tr3       => debug_dma_tr3,
+      debug_dma_tr4       => debug_dma_tr4,
+      debug_dma_tr5       => debug_dma_tr5,
+      debug_dma_tr6       => debug_dma_tr6,
+      debug_dma_tr7       => debug_dma_tr7,
+      debug_dma_tr8       => debug_dma_tr8
    );
    
    igba_sound : entity work.gba_sound        
@@ -1034,7 +1098,12 @@ begin
       timerdebug3      => timerdebug3,
       
       debug_cpu_pc     => debug_cpu_pc,   
-      debug_cpu_mixed  => debug_cpu_mixed
+      debug_cpu_mixed  => debug_cpu_mixed,
+      debug_cpu_r0     => debug_cpu_r0,
+      debug_cpu_r1     => debug_cpu_r1,
+      debug_cpu_r2     => debug_cpu_r2,
+      debug_cpu_r4     => debug_cpu_r4,
+      debug_cpu_cpuset => debug_cpu_cpuset
    );
    
    new_cycles       <= x"01"           when GBA_cputurbo = '1' or DEBUG_NOCPU = '1' or vram_cycle = '1' else new_cycles_cpu      ;
@@ -1128,6 +1197,16 @@ begin
    debug_irq(31 downto 25) <= DISPSTAT_debug(6 downto 0);   -- DISPSTAT low flags/IRQ enable bits
    debug_irq_ext(15 downto 0)  <= REG_IRP_IE;
    debug_irq_ext(31 downto 16) <= IRPFLags and REG_IRP_IE;
+   debug_wait0 <= std_logic_vector(dbg_wait_ie_chg_cnt) & std_logic_vector(dbg_wait_if_chg_cnt);
+   debug_wait1(31 downto 16) <= std_logic_vector(dbg_wait_wake_cnt);
+   debug_wait1(15 downto 8)  <= std_logic_vector(dbg_wait_ime_chg_cnt);
+   debug_wait1(7 downto 4)   <= dbg_wait_last_src;
+   debug_wait1(3)            <= REG_IME(0);
+   debug_wait1(2)            <= cpu_IRP;
+   debug_wait1(1)            <= dma_on;
+   debug_wait1(0)            <= CPU_bus_idle;
+   debug_wait2 <= dbg_wait_last_ie & dbg_wait_last_if;
+   debug_wait3 <= REG_IRP_IE & IRPFLags;
 
    ------------- interrupt
    process (clk100)
@@ -1140,6 +1219,17 @@ begin
          if (reset = '1') then -- reset
    
             IRPFLags <= SAVESTATE_IRP;
+            dbg_wait_ie_last <= (others => '0');
+            dbg_wait_if_last <= (others => '0');
+            dbg_wait_ime_last <= '0';
+            dbg_wait_prev_idle <= '0';
+            dbg_wait_ie_chg_cnt <= (others => '0');
+            dbg_wait_if_chg_cnt <= (others => '0');
+            dbg_wait_ime_chg_cnt <= (others => '0');
+            dbg_wait_wake_cnt <= (others => '0');
+            dbg_wait_last_src <= (others => '0');
+            dbg_wait_last_ie <= (others => '0');
+            dbg_wait_last_if <= (others => '0');
    
          elsif (gbaon = '1') then
 
@@ -1186,6 +1276,48 @@ begin
                   new_halt <= '1';
                end if;
             end if;
+
+            if (REG_IRP_IE /= dbg_wait_ie_last) then
+               dbg_wait_ie_last <= REG_IRP_IE;
+               if (dbg_wait_ie_chg_cnt /= to_unsigned(16#FFFF#, dbg_wait_ie_chg_cnt'length)) then
+                  dbg_wait_ie_chg_cnt <= dbg_wait_ie_chg_cnt + 1;
+               end if;
+            end if;
+            if (irp_next /= dbg_wait_if_last) then
+               dbg_wait_if_last <= irp_next;
+               if (dbg_wait_if_chg_cnt /= to_unsigned(16#FFFF#, dbg_wait_if_chg_cnt'length)) then
+                  dbg_wait_if_chg_cnt <= dbg_wait_if_chg_cnt + 1;
+               end if;
+            end if;
+            if (REG_IME(0) /= dbg_wait_ime_last) then
+               dbg_wait_ime_last <= REG_IME(0);
+               if (dbg_wait_ime_chg_cnt /= to_unsigned(16#FF#, dbg_wait_ime_chg_cnt'length)) then
+                  dbg_wait_ime_chg_cnt <= dbg_wait_ime_chg_cnt + 1;
+               end if;
+            end if;
+
+            if (dbg_wait_prev_idle = '1' and CPU_bus_idle = '0') then
+               if (dbg_wait_wake_cnt /= to_unsigned(16#FFFF#, dbg_wait_wake_cnt'length)) then
+                  dbg_wait_wake_cnt <= dbg_wait_wake_cnt + 1;
+               end if;
+               dbg_wait_last_ie <= REG_IRP_IE;
+               dbg_wait_last_if <= irp_next;
+               dbg_wait_last_src <= x"0";
+               if (((irp_next and REG_IRP_IE) /= x"0000") and REG_IME(0) = '1') then
+                  dbg_wait_last_src <= x"1"; -- IRQ wake
+               elsif (dma_on = '1') then
+                  dbg_wait_last_src <= x"2"; -- DMA path wake
+               elsif (IRP_DMA /= "0000") then
+                  dbg_wait_last_src <= x"3"; -- DMA IRQ pending
+               elsif (IRP_Timer /= "0000") then
+                  dbg_wait_last_src <= x"4"; -- timer IRQ pending
+               elsif (IRP_VBlank = '1' or IRP_HBlank = '1' or IRP_LCDStat = '1') then
+                  dbg_wait_last_src <= x"5"; -- LCD IRQ pending
+               elsif (new_halt = '1') then
+                  dbg_wait_last_src <= x"6"; -- HALT transition
+               end if;
+            end if;
+            dbg_wait_prev_idle <= CPU_bus_idle;
             
          end if;
 

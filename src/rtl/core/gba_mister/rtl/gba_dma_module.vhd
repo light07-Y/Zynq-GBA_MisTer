@@ -71,6 +71,12 @@ entity gba_dma_module is
       dma_bus_din         : in     std_logic_vector(31 downto 0);
       dma_bus_done        : in     std_logic;
       dma_bus_unread      : in     std_logic;
+
+      dbg_cur_src         : out    std_logic_vector(27 downto 0);
+      dbg_cur_dst         : out    std_logic_vector(27 downto 0);
+      dbg_cur_cnt         : out    std_logic_vector(16 downto 0);
+      dbg_start_pulse     : out    std_logic := '0';
+      dbg_finish_pulse    : out    std_logic := '0';
                                    
       is_idle             : out    std_logic
    );
@@ -169,6 +175,9 @@ begin
    is_idle <= '1' when state = IDLE else '0';
    
    dma_on <= dmaon;
+   dbg_cur_src <= std_logic_vector(addr_source);
+   dbg_cur_dst <= std_logic_vector(addr_target);
+   dbg_cur_cnt <= std_logic_vector(count);
    
    process (clk100)
    begin
@@ -186,6 +195,8 @@ begin
          dma_toROM        <= '0';
          dma_init_cycles  <= '0';
          dma_cycles_adrup <= (others => '0');
+         dbg_start_pulse  <= '0';
+         dbg_finish_pulse <= '0';
          
          if (reset = '1') then
             addr_source        <= unsigned(SAVESTATE_DMASOURCE);
@@ -292,6 +303,7 @@ begin
                         waitTicks <= 0;
                         dma_soon  <= '0';
                         state     <= IDLE;
+                        dbg_start_pulse <= '1';
                      else
                         waitTicks <= waitTicks - to_integer(new_cycles);
                      end if;
@@ -400,6 +412,7 @@ begin
                               state   <= IDLE;
                               running <= '0';
                               dmaon   <= '0';
+                              dbg_finish_pulse <= '1';
    
                               IRP_DMA <= CNT_H_IRQ_on(CNT_H_IRQ_on'left);
    

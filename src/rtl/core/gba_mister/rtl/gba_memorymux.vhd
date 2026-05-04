@@ -116,7 +116,19 @@ entity gba_memorymux is
       AnalogTiltX          : in     signed(7 downto 0);
       AnalogTiltY          : in     signed(7 downto 0);
       
-      debug_mem            : out    std_logic_vector(31 downto 0)  
+      debug_mem            : out    std_logic_vector(31 downto 0);
+      debug_vram_regs0     : out    std_logic_vector(31 downto 0);
+      debug_vram_regs1     : out    std_logic_vector(31 downto 0);
+      debug_vram_regs2     : out    std_logic_vector(31 downto 0);
+      debug_vram_regs3     : out    std_logic_vector(31 downto 0);
+      debug_vram_regs4     : out    std_logic_vector(31 downto 0);
+      debug_vram_hits      : out    std_logic_vector(31 downto 0);
+      debug_vram_ring0     : out    std_logic_vector(31 downto 0);
+      debug_vram_ring1     : out    std_logic_vector(31 downto 0);
+      debug_vram_ring2     : out    std_logic_vector(31 downto 0);
+      debug_vram_ring3     : out    std_logic_vector(31 downto 0);
+      debug_vram_dist0     : out    std_logic_vector(31 downto 0);
+      debug_vram_dist1     : out    std_logic_vector(31 downto 0)
    );
 end entity;
 
@@ -206,7 +218,25 @@ architecture arch of gba_memorymux is
    signal cache_read_done    : std_logic;
    signal cache_read_full    : std_logic_vector(63 downto 0);
    signal pending_cache_read_addr : std_logic_vector(22 downto 0) := (others => '0');
-   
+
+   -- VRAM debug counters
+   signal dbg_vram_req_cnt    : unsigned(7 downto 0) := (others => '0');
+   signal dbg_vram_we_cnt     : unsigned(7 downto 0) := (others => '0');
+   signal dbg_vram_blk_cnt    : unsigned(3 downto 0) := (others => '0');
+   signal dbg_vram_nz_seen    : std_logic := '0';
+   signal dbg_reg_dispcnt_last : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_bldcnt_last  : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_bg0cnt_last  : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_bg1cnt_last  : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_bg2cnt_last  : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_bg3cnt_last  : std_logic_vector(15 downto 0) := (others => '0');
+   signal dbg_reg_dispcnt_cnt  : unsigned(7 downto 0) := (others => '0');
+   signal dbg_reg_bldcnt_cnt   : unsigned(7 downto 0) := (others => '0');
+   signal dbg_reg_bg0cnt_cnt   : unsigned(7 downto 0) := (others => '0');
+   signal dbg_reg_bg1cnt_cnt   : unsigned(7 downto 0) := (others => '0');
+   signal dbg_reg_bg2cnt_cnt   : unsigned(7 downto 0) := (others => '0');
+   signal dbg_reg_bg3cnt_cnt   : unsigned(7 downto 0) := (others => '0');
+
    -- EEPROM
    type tEEPROMSTATE is
    (
@@ -360,8 +390,28 @@ begin
    SAVESTATE_FLASH_BACK(12 downto 9)  <= std_logic_vector(to_unsigned(tFLASHSTATE'POS(flashState), 4));
    SAVESTATE_FLASH_BACK(16 downto 13) <= std_logic_vector(to_unsigned(tFLASHSTATE'POS(flashReadState), 4));
    
-   debug_mem(7 downto 0)  <= std_logic_vector(to_unsigned(tState'POS(state), 8));
-   debug_mem(31 downto 8) <= (others => '0');
+   debug_mem(7 downto 0)   <= std_logic_vector(to_unsigned(tState'POS(state), 8));
+   debug_mem(15 downto 8)  <= std_logic_vector(dbg_vram_req_cnt);
+   debug_mem(23 downto 16) <= std_logic_vector(dbg_vram_we_cnt);
+   debug_mem(27 downto 24) <= std_logic_vector(dbg_vram_blk_cnt);
+   debug_mem(28)           <= '0';
+   debug_mem(29)           <= '0';
+   debug_mem(30)           <= SramFlashEnable;
+   debug_mem(31)           <= dbg_vram_nz_seen;
+
+   debug_vram_regs0 <= dbg_reg_dispcnt_last & dbg_reg_bldcnt_last;
+   debug_vram_regs1 <= dbg_reg_bg1cnt_last & dbg_reg_bg0cnt_last;
+   debug_vram_regs2 <= dbg_reg_bg3cnt_last & dbg_reg_bg2cnt_last;
+   debug_vram_regs3 <= std_logic_vector(dbg_reg_bg1cnt_cnt) & std_logic_vector(dbg_reg_bg0cnt_cnt)
+                       & std_logic_vector(dbg_reg_bldcnt_cnt) & std_logic_vector(dbg_reg_dispcnt_cnt);
+   debug_vram_regs4 <= x"0000" & std_logic_vector(dbg_reg_bg3cnt_cnt) & std_logic_vector(dbg_reg_bg2cnt_cnt);
+   debug_vram_hits  <= (others => '0');
+   debug_vram_ring0 <= (others => '0');
+   debug_vram_ring1 <= (others => '0');
+   debug_vram_ring2 <= (others => '0');
+   debug_vram_ring3 <= (others => '0');
+   debug_vram_dist0 <= (others => '0');
+   debug_vram_dist1 <= (others => '0');
    
    process (clk100)
       variable palette_we : std_logic_vector(3 downto 0);
@@ -384,8 +434,12 @@ begin
             flashState      <= tFLASHSTATE'VAL(to_integer(unsigned(SAVESTATE_FLASH(12 downto 9))));
             flashReadState  <= tFLASHSTATE'VAL(to_integer(unsigned(SAVESTATE_FLASH(16 downto 13))));
             
-            sdram_addr_buf  <= (others => '1');
-            state           <= IDLE;
+            sdram_addr_buf    <= (others => '1');
+            dbg_vram_req_cnt  <= (others => '0');
+            dbg_vram_we_cnt   <= (others => '0');
+            dbg_vram_blk_cnt  <= (others => '0');
+            dbg_vram_nz_seen  <= '0';
+            state             <= IDLE;
          end if;
          
          -- register settle
@@ -518,8 +572,8 @@ begin
                            when x"6" =>
                               VRAM_Hi_addr   <= to_integer(unsigned(mem_bus_Adr(14 downto 2)));
                               VRAM_Lo_addr   <= to_integer(unsigned(mem_bus_Adr(15 downto 2)));
-                              state          <= READVRAM; 
-   
+                              state          <= READVRAM;
+                              dbg_vram_req_cnt <= dbg_vram_req_cnt + 1;
                            when x"7" =>
                               OAMRAM_PROC_addr <= to_integer(unsigned(mem_bus_Adr(9 downto 2)));
                               state         <= READOAMRAM;  
@@ -1021,6 +1075,10 @@ begin
                
                
             when WRITE_VRAM =>
+               dbg_vram_we_cnt <= dbg_vram_we_cnt + 1;
+               if (rotate_writedata /= x"00000000") then
+                  dbg_vram_nz_seen <= '1';
+               end if;
                VRAM_Hi_addr   <= to_integer(unsigned(adr_save(14 downto 2)));
                VRAM_Lo_addr   <= to_integer(unsigned(adr_save(15 downto 2)));
                VRAM_Hi_datain <= rotate_writedata;
@@ -1069,6 +1127,7 @@ begin
                else
                   VRAM_Lo_we <= '1';
                   if (vramwait = '1') then
+                     dbg_vram_blk_cnt <= dbg_vram_blk_cnt + 1;
                      state        <= VRAMWAITWRITE;
                   end if;
                end if;

@@ -51,7 +51,16 @@ entity gba_dma is
       dma_bus_done        : in     std_logic;
       dma_bus_unread      : in     std_logic;
       
-      debug_dma           : out    std_logic_vector(31 downto 0)
+      debug_dma           : out    std_logic_vector(31 downto 0);
+      debug_dma_tr0       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr1       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr2       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr3       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr4       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr5       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr6       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr7       : out    std_logic_vector(31 downto 0);
+      debug_dma_tr8       : out    std_logic_vector(31 downto 0)
    );
 end entity;
 
@@ -63,6 +72,8 @@ architecture arch of gba_dma is
    type tArray_rnw  is array(0 to 3) of std_logic;
    type tArray_ena  is array(0 to 3) of std_logic;
    type tArray_done is array(0 to 3) of std_logic;
+   type tArray_dbg28 is array(0 to 3) of std_logic_vector(27 downto 0);
+   type tArray_dbg17 is array(0 to 3) of std_logic_vector(16 downto 0);
    
    signal Array_Dout : tArray_Dout;
    signal Array_Adr  : tArray_Adr;
@@ -70,6 +81,11 @@ architecture arch of gba_dma is
    signal Array_rnw  : tArray_rnw;
    signal Array_ena  : tArray_ena;
    signal Array_done : tArray_done;
+   signal dbg_cur_src_a : tArray_dbg28;
+   signal dbg_cur_dst_a : tArray_dbg28;
+   signal dbg_cur_cnt_a : tArray_dbg17;
+   signal dbg_start_pulse_a  : std_logic_vector(3 downto 0);
+   signal dbg_finish_pulse_a : std_logic_vector(3 downto 0);
              
    signal single_new_cycles   : std_logic_vector(3 downto 0);
    signal single_first_cycles : std_logic_vector(3 downto 0);
@@ -101,6 +117,18 @@ architecture arch of gba_dma is
    signal last_dma_valid3  : std_logic;
    
    signal single_is_idle   : std_logic_vector(3 downto 0);
+
+   signal dbg_start_src  : tArray_dbg28 := (others => (others => '0'));
+   signal dbg_start_dst  : tArray_dbg28 := (others => (others => '0'));
+   signal dbg_finish_src : tArray_dbg28 := (others => (others => '0'));
+   signal dbg_finish_dst : tArray_dbg28 := (others => (others => '0'));
+   signal dbg_start_cnt  : tArray_dbg17 := (others => (others => '0'));
+   signal dbg_finish_cnt : tArray_dbg17 := (others => (others => '0'));
+   signal dbg_start_seq  : unsigned(7 downto 0) := (others => '0');
+   signal dbg_finish_seq : unsigned(7 downto 0) := (others => '0');
+   signal dbg_start_valid  : std_logic_vector(3 downto 0) := (others => '0');
+   signal dbg_finish_valid : std_logic_vector(3 downto 0) := (others => '0');
+   signal dbg_vram_hits    : tArray_dbg17 := (others => (others => '0'));
            
 begin 
 
@@ -168,6 +196,11 @@ begin
       dma_bus_din       => dma_bus_din,
       dma_bus_done      => Array_done(0),
       dma_bus_unread    => dma_bus_unread,
+      dbg_cur_src       => dbg_cur_src_a(0),
+      dbg_cur_dst       => dbg_cur_dst_a(0),
+      dbg_cur_cnt       => dbg_cur_cnt_a(0),
+      dbg_start_pulse   => dbg_start_pulse_a(0),
+      dbg_finish_pulse  => dbg_finish_pulse_a(0),
       
       is_idle           => single_is_idle(0)
    );
@@ -236,6 +269,11 @@ begin
       dma_bus_din       => dma_bus_din,
       dma_bus_done      => Array_done(1),
       dma_bus_unread    => dma_bus_unread,
+      dbg_cur_src       => dbg_cur_src_a(1),
+      dbg_cur_dst       => dbg_cur_dst_a(1),
+      dbg_cur_cnt       => dbg_cur_cnt_a(1),
+      dbg_start_pulse   => dbg_start_pulse_a(1),
+      dbg_finish_pulse  => dbg_finish_pulse_a(1),
       
       is_idle           => single_is_idle(1)
    );
@@ -304,6 +342,11 @@ begin
       dma_bus_din       => dma_bus_din,
       dma_bus_done      => Array_done(2),
       dma_bus_unread    => dma_bus_unread,
+      dbg_cur_src       => dbg_cur_src_a(2),
+      dbg_cur_dst       => dbg_cur_dst_a(2),
+      dbg_cur_cnt       => dbg_cur_cnt_a(2),
+      dbg_start_pulse   => dbg_start_pulse_a(2),
+      dbg_finish_pulse  => dbg_finish_pulse_a(2),
       
       is_idle           => single_is_idle(2)
    );
@@ -372,6 +415,11 @@ begin
       dma_bus_din       => dma_bus_din,
       dma_bus_done      => Array_done(3),
       dma_bus_unread    => dma_bus_unread,
+      dbg_cur_src       => dbg_cur_src_a(3),
+      dbg_cur_dst       => dbg_cur_dst_a(3),
+      dbg_cur_cnt       => dbg_cur_cnt_a(3),
+      dbg_start_pulse   => dbg_start_pulse_a(3),
+      dbg_finish_pulse  => dbg_finish_pulse_a(3),
       
       is_idle           => single_is_idle(3)
    );
@@ -430,8 +478,83 @@ begin
          
             dma_idle   <= '1';
             dma_switch <= 0;
+            dbg_start_seq <= (others => '0');
+            dbg_finish_seq <= (others => '0');
+            dbg_start_valid <= (others => '0');
+            dbg_finish_valid <= (others => '0');
+            dbg_vram_hits(0) <= (others => '0');
+            dbg_vram_hits(1) <= (others => '0');
+            dbg_vram_hits(2) <= (others => '0');
+            dbg_vram_hits(3) <= (others => '0');
         
          else
+
+            if (dbg_start_pulse_a(0) = '1') then
+               dbg_start_src(0) <= dbg_cur_src_a(0);
+               dbg_start_dst(0) <= dbg_cur_dst_a(0);
+               dbg_start_cnt(0) <= dbg_cur_cnt_a(0);
+               dbg_start_valid(0) <= '1';
+               if (dbg_start_seq /= x"FF") then dbg_start_seq <= dbg_start_seq + 1; end if;
+            end if;
+            if (dbg_start_pulse_a(1) = '1') then
+               dbg_start_src(1) <= dbg_cur_src_a(1);
+               dbg_start_dst(1) <= dbg_cur_dst_a(1);
+               dbg_start_cnt(1) <= dbg_cur_cnt_a(1);
+               dbg_start_valid(1) <= '1';
+               if (dbg_start_seq /= x"FF") then dbg_start_seq <= dbg_start_seq + 1; end if;
+            end if;
+            if (dbg_start_pulse_a(2) = '1') then
+               dbg_start_src(2) <= dbg_cur_src_a(2);
+               dbg_start_dst(2) <= dbg_cur_dst_a(2);
+               dbg_start_cnt(2) <= dbg_cur_cnt_a(2);
+               dbg_start_valid(2) <= '1';
+               if (dbg_start_seq /= x"FF") then dbg_start_seq <= dbg_start_seq + 1; end if;
+            end if;
+            if (dbg_start_pulse_a(3) = '1') then
+               dbg_start_src(3) <= dbg_cur_src_a(3);
+               dbg_start_dst(3) <= dbg_cur_dst_a(3);
+               dbg_start_cnt(3) <= dbg_cur_cnt_a(3);
+               dbg_start_valid(3) <= '1';
+               if (dbg_start_seq /= x"FF") then dbg_start_seq <= dbg_start_seq + 1; end if;
+            end if;
+
+            if (dbg_finish_pulse_a(0) = '1') then
+               dbg_finish_src(0) <= dbg_cur_src_a(0);
+               dbg_finish_dst(0) <= dbg_cur_dst_a(0);
+               dbg_finish_cnt(0) <= dbg_cur_cnt_a(0);
+               dbg_finish_valid(0) <= '1';
+               if (dbg_finish_seq /= x"FF") then dbg_finish_seq <= dbg_finish_seq + 1; end if;
+            end if;
+            if (dbg_finish_pulse_a(1) = '1') then
+               dbg_finish_src(1) <= dbg_cur_src_a(1);
+               dbg_finish_dst(1) <= dbg_cur_dst_a(1);
+               dbg_finish_cnt(1) <= dbg_cur_cnt_a(1);
+               dbg_finish_valid(1) <= '1';
+               if (dbg_finish_seq /= x"FF") then dbg_finish_seq <= dbg_finish_seq + 1; end if;
+            end if;
+            if (dbg_finish_pulse_a(2) = '1') then
+               dbg_finish_src(2) <= dbg_cur_src_a(2);
+               dbg_finish_dst(2) <= dbg_cur_dst_a(2);
+               dbg_finish_cnt(2) <= dbg_cur_cnt_a(2);
+               dbg_finish_valid(2) <= '1';
+               if (dbg_finish_seq /= x"FF") then dbg_finish_seq <= dbg_finish_seq + 1; end if;
+            end if;
+            if (dbg_finish_pulse_a(3) = '1') then
+               dbg_finish_src(3) <= dbg_cur_src_a(3);
+               dbg_finish_dst(3) <= dbg_cur_dst_a(3);
+               dbg_finish_cnt(3) <= dbg_cur_cnt_a(3);
+               dbg_finish_valid(3) <= '1';
+               if (dbg_finish_seq /= x"FF") then dbg_finish_seq <= dbg_finish_seq + 1; end if;
+            end if;
+
+            if (dma_bus_done = '1' and Array_rnw(dma_switch) = '0' and Array_Adr(dma_switch)(27 downto 24) = x"6") then
+               case dma_switch is
+                  when 0 => if (unsigned(dbg_vram_hits(0)) /= to_unsigned(16#1FFFF#, 17)) then dbg_vram_hits(0) <= std_logic_vector(unsigned(dbg_vram_hits(0)) + 1); end if;
+                  when 1 => if (unsigned(dbg_vram_hits(1)) /= to_unsigned(16#1FFFF#, 17)) then dbg_vram_hits(1) <= std_logic_vector(unsigned(dbg_vram_hits(1)) + 1); end if;
+                  when 2 => if (unsigned(dbg_vram_hits(2)) /= to_unsigned(16#1FFFF#, 17)) then dbg_vram_hits(2) <= std_logic_vector(unsigned(dbg_vram_hits(2)) + 1); end if;
+                  when others => if (unsigned(dbg_vram_hits(3)) /= to_unsigned(16#1FFFF#, 17)) then dbg_vram_hits(3) <= std_logic_vector(unsigned(dbg_vram_hits(3)) + 1); end if;
+               end case;
+            end if;
          
             if (dma_idle = '1') then
                   if (single_dma_on(0) = '1') then dma_switch <= 0; dma_idle <= '0';
@@ -462,7 +585,29 @@ begin
    debug_dma(13) <= single_is_idle(1);
    debug_dma(14) <= single_is_idle(2);
    debug_dma(15) <= single_is_idle(3);
-   debug_dma(31 downto 16) <= (others => '0');
+   -- [31:28]=start_valid ch3..0, [27:24]=finish_valid ch3..0,
+   -- [23:20]=vram_hit_seen ch3..0, [19:16]=reserved
+   debug_dma(31 downto 28) <= dbg_start_valid(3 downto 0);
+   debug_dma(27 downto 24) <= dbg_finish_valid(3 downto 0);
+   debug_dma(23) <= '1' when unsigned(dbg_vram_hits(3)) /= to_unsigned(0, dbg_vram_hits(3)'length) else '0';
+   debug_dma(22) <= '1' when unsigned(dbg_vram_hits(2)) /= to_unsigned(0, dbg_vram_hits(2)'length) else '0';
+   debug_dma(21) <= '1' when unsigned(dbg_vram_hits(1)) /= to_unsigned(0, dbg_vram_hits(1)'length) else '0';
+   debug_dma(20) <= '1' when unsigned(dbg_vram_hits(0)) /= to_unsigned(0, dbg_vram_hits(0)'length) else '0';
+   debug_dma(19 downto 16) <= (others => '0');
+
+   -- DMA per-channel recent snapshots:
+   -- tr0..tr3: last START src for ch0..ch3
+   -- tr4..tr7: last FINISH dst for ch0..ch3
+   -- tr8: [31:24] ch3 cnt, [23:16] ch2 cnt, [15:8] ch1 cnt, [7:0] ch0 cnt (START count low8)
+   debug_dma_tr0 <= "0000" & dbg_start_src(0);
+   debug_dma_tr1 <= "0000" & dbg_start_src(1);
+   debug_dma_tr2 <= "0000" & dbg_start_src(2);
+   debug_dma_tr3 <= "0000" & dbg_start_src(3);
+   debug_dma_tr4 <= "0000" & dbg_finish_dst(0);
+   debug_dma_tr5 <= "0000" & dbg_finish_dst(1);
+   debug_dma_tr6 <= "0000" & dbg_finish_dst(2);
+   debug_dma_tr7 <= "0000" & dbg_finish_dst(3);
+   debug_dma_tr8 <= dbg_start_cnt(3)(7 downto 0) & dbg_start_cnt(2)(7 downto 0) & dbg_start_cnt(1)(7 downto 0) & dbg_start_cnt(0)(7 downto 0);
     
 end architecture;
 

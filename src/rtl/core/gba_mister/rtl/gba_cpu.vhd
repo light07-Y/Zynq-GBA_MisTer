@@ -72,7 +72,12 @@ entity gba_cpu is
 -- synthesis translate_on     
 	  
       debug_cpu_pc     : out   std_logic_vector(31 downto 0);
-      debug_cpu_mixed  : out   std_logic_vector(31 downto 0)
+      debug_cpu_mixed  : out   std_logic_vector(31 downto 0);
+      debug_cpu_r0     : out   std_logic_vector(31 downto 0);
+      debug_cpu_r1     : out   std_logic_vector(31 downto 0);
+      debug_cpu_r2     : out   std_logic_vector(31 downto 0);
+      debug_cpu_r4     : out   std_logic_vector(31 downto 0);
+      debug_cpu_cpuset : out   std_logic_vector(31 downto 0)
    );
 end entity;
 
@@ -574,6 +579,15 @@ architecture arch of gba_cpu is
    
    signal SAVESTATE_mixed_in        : std_logic_vector(11 downto 0);
    signal SAVESTATE_mixed_out       : std_logic_vector(11 downto 0);
+
+   signal cpuset_probe_in_window : std_logic := '0';
+   signal cpuset_probe_seen      : std_logic := '0';
+   signal cpuset_probe_count     : unsigned(15 downto 0) := (others => '0');
+
+   -- second probe: IWRAM game-logic window (0x03001200..0x03001300)
+   signal cpuset_probe2_in_window : std_logic := '0';
+   signal cpuset_probe2_seen      : std_logic := '0';
+   signal cpuset_probe2_count     : unsigned(7 downto 0) := (others => '0');
      
 begin  
 
@@ -589,6 +603,48 @@ begin
    debug_cpu_mixed(10) <= IRQ_disable;    
    debug_cpu_mixed(11) <= FIQ_disable; 
    debug_cpu_mixed(31 downto 12) <= (others => '0');
+
+   debug_cpu_r0 <= std_logic_vector(regs(0));
+   debug_cpu_r1 <= std_logic_vector(regs(1));
+   debug_cpu_r2 <= std_logic_vector(regs(2));
+   debug_cpu_r4 <= std_logic_vector(regs(4));
+
+   cpuset_probe_in_window  <= '1' when (PC >= unsigned'(x"08056166") and PC <= unsigned'(x"08056184")) else '0';
+   cpuset_probe2_in_window <= '1' when (PC >= unsigned'(x"03001200") and PC <= unsigned'(x"03001300")) else '0';
+
+   debug_cpu_cpuset(15 downto 0)  <= std_logic_vector(cpuset_probe_count);
+   debug_cpu_cpuset(16) <= cpuset_probe_seen;
+   debug_cpu_cpuset(17) <= cpuset_probe_in_window;
+   -- second probe: IWRAM game-logic region
+   debug_cpu_cpuset(25 downto 18) <= std_logic_vector(cpuset_probe2_count);
+   debug_cpu_cpuset(26) <= cpuset_probe2_seen;
+   debug_cpu_cpuset(27) <= cpuset_probe2_in_window;
+   debug_cpu_cpuset(31 downto 28) <= (others => '0');
+
+   process (clk100)
+   begin
+      if rising_edge(clk100) then
+         if (reset = '1' or gb_on = '0') then
+            cpuset_probe_seen   <= '0';
+            cpuset_probe_count  <= (others => '0');
+            cpuset_probe2_seen  <= '0';
+            cpuset_probe2_count <= (others => '0');
+         else
+            if (cpuset_probe_in_window = '1') then
+               cpuset_probe_seen <= '1';
+               if (cpuset_probe_count /= to_unsigned(65535, cpuset_probe_count'length)) then
+                  cpuset_probe_count <= cpuset_probe_count + 1;
+               end if;
+            end if;
+            if (cpuset_probe2_in_window = '1') then
+               cpuset_probe2_seen <= '1';
+               if (cpuset_probe2_count /= to_unsigned(255, cpuset_probe2_count'length)) then
+                  cpuset_probe2_count <= cpuset_probe2_count + 1;
+               end if;
+            end if;
+         end if;
+      end if;
+   end process;
    
    -- savestates
    iSAVESTATE_PC : entity work.eProcReg_gba generic map (REG_SAVESTATE_PC ) port map (clk100, savestate_bus, std_logic_vector(new_pc) , SAVESTATE_PC);

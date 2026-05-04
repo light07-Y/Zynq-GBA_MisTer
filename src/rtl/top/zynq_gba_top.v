@@ -268,10 +268,45 @@ module zynq_gba_top #(
   wire [9:0]  physical_keys_axi;
   wire [31:0] debug_cpu_pc_axi;
   wire [31:0] debug_cpu_mixed_axi;
+  wire [31:0] debug_cpu_r0_axi;
+  wire [31:0] debug_cpu_r1_axi;
+  wire [31:0] debug_cpu_r2_axi;
+  wire [31:0] debug_cpu_r4_axi;
+  wire [31:0] debug_cpu_cpuset_axi;
+  wire [31:0] ddr_atom_word0_axi;
+  wire [31:0] ddr_atom_word1_axi;
+  wire [31:0] ddr_atom_next0_axi;
+  wire [31:0] ddr_atom_next1_axi;
+  wire [31:0] ddr_atom_stat_axi;
   wire [31:0] debug_irq_axi;
   wire [31:0] debug_irq_ext_axi;
   wire [31:0] debug_dma_axi;
   wire [31:0] debug_mem_axi;
+  wire [31:0] debug_vram_regs0_axi;
+  wire [31:0] debug_vram_regs1_axi;
+  wire [31:0] debug_vram_regs2_axi;
+  wire [31:0] debug_vram_regs3_axi;
+  wire [31:0] debug_vram_regs4_axi;
+  wire [31:0] debug_vram_hits_axi;
+  wire [31:0] debug_vram_ring0_axi;
+  wire [31:0] debug_vram_ring1_axi;
+  wire [31:0] debug_vram_ring2_axi;
+  wire [31:0] debug_vram_ring3_axi;
+  wire [31:0] debug_vram_dist0_axi;
+  wire [31:0] debug_vram_dist1_axi;
+  wire [31:0] debug_dma_tr0_axi;
+  wire [31:0] debug_dma_tr1_axi;
+  wire [31:0] debug_dma_tr2_axi;
+  wire [31:0] debug_dma_tr3_axi;
+  wire [31:0] debug_dma_tr4_axi;
+  wire [31:0] debug_dma_tr5_axi;
+  wire [31:0] debug_dma_tr6_axi;
+  wire [31:0] debug_dma_tr7_axi;
+  wire [31:0] debug_dma_tr8_axi;
+  wire [31:0] debug_wait0_axi;
+  wire [31:0] debug_wait1_axi;
+  wire [31:0] debug_wait2_axi;
+  wire [31:0] debug_wait3_axi;
   wire [31:0] dbg_chain_flags_axi;
   wire [31:0] dbg_chain_counts0_axi;
   wire [31:0] dbg_chain_counts1_axi;
@@ -318,10 +353,45 @@ module zynq_gba_top #(
   (* ASYNC_REG = "TRUE" *) reg [9:0]  physical_keys_axi_meta, physical_keys_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_pc_axi_meta, debug_cpu_pc_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_mixed_axi_meta, debug_cpu_mixed_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_r0_axi_meta, debug_cpu_r0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_r1_axi_meta, debug_cpu_r1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_r2_axi_meta, debug_cpu_r2_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_r4_axi_meta, debug_cpu_r4_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_cpu_cpuset_axi_meta, debug_cpu_cpuset_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] ddr_atom_word0_axi_meta, ddr_atom_word0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] ddr_atom_word1_axi_meta, ddr_atom_word1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] ddr_atom_next0_axi_meta, ddr_atom_next0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] ddr_atom_next1_axi_meta, ddr_atom_next1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] ddr_atom_stat_axi_meta, ddr_atom_stat_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_irq_axi_meta, debug_irq_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_irq_ext_axi_meta, debug_irq_ext_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_axi_meta, debug_dma_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] debug_mem_axi_meta, debug_mem_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_regs0_axi_meta, debug_vram_regs0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_regs1_axi_meta, debug_vram_regs1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_regs2_axi_meta, debug_vram_regs2_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_regs3_axi_meta, debug_vram_regs3_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_regs4_axi_meta, debug_vram_regs4_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_hits_axi_meta, debug_vram_hits_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_ring0_axi_meta, debug_vram_ring0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_ring1_axi_meta, debug_vram_ring1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_ring2_axi_meta, debug_vram_ring2_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_ring3_axi_meta, debug_vram_ring3_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_dist0_axi_meta, debug_vram_dist0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_vram_dist1_axi_meta, debug_vram_dist1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr0_axi_meta, debug_dma_tr0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr1_axi_meta, debug_dma_tr1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr2_axi_meta, debug_dma_tr2_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr3_axi_meta, debug_dma_tr3_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr4_axi_meta, debug_dma_tr4_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr5_axi_meta, debug_dma_tr5_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr6_axi_meta, debug_dma_tr6_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr7_axi_meta, debug_dma_tr7_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_dma_tr8_axi_meta, debug_dma_tr8_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_wait0_axi_meta, debug_wait0_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_wait1_axi_meta, debug_wait1_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_wait2_axi_meta, debug_wait2_axi_sync;
+  (* ASYNC_REG = "TRUE" *) reg [31:0] debug_wait3_axi_meta, debug_wait3_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_flags_axi_meta, dbg_chain_flags_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_counts0_axi_meta, dbg_chain_counts0_axi_sync;
   (* ASYNC_REG = "TRUE" *) reg [31:0] dbg_chain_counts1_axi_meta, dbg_chain_counts1_axi_sync;
@@ -412,6 +482,12 @@ module zynq_gba_top #(
   reg [31:0]                          dbg_done_first_meta_core;
   reg [31:0]                          dbg_done_last_addr_core;
   reg [31:0]                          dbg_done_last_meta_core;
+  reg [31:0]                          ddr_atom_word0_core;
+  reg [31:0]                          ddr_atom_word1_core;
+  reg [31:0]                          ddr_atom_next0_core;
+  reg [31:0]                          ddr_atom_next1_core;
+  reg [31:0]                          ddr_atom_stat_core;
+  reg                                 ddr_atom_pending_core;
   reg [31:0]                          dbg_pending_line_addr;
   reg [1:0]                           dbg_pending_lane;
   reg [31:0]                          dbg_pending_axi_ar_addr;
@@ -436,10 +512,40 @@ module zynq_gba_top #(
   wire        core_rumble;
   wire [31:0] unused_debug_cpu_pc;
   wire [31:0] unused_debug_cpu_mixed;
+  wire [31:0] unused_debug_cpu_r0;
+  wire [31:0] unused_debug_cpu_r1;
+  wire [31:0] unused_debug_cpu_r2;
+  wire [31:0] unused_debug_cpu_r4;
+  wire [31:0] unused_debug_cpu_cpuset;
   wire [31:0] unused_debug_irq;
   wire [31:0] unused_debug_irq_ext;
   wire [31:0] unused_debug_dma;
   wire [31:0] unused_debug_mem;
+  wire [31:0] unused_debug_vram_regs0;
+  wire [31:0] unused_debug_vram_regs1;
+  wire [31:0] unused_debug_vram_regs2;
+  wire [31:0] unused_debug_vram_regs3;
+  wire [31:0] unused_debug_vram_regs4;
+  wire [31:0] unused_debug_vram_hits;
+  wire [31:0] unused_debug_vram_ring0;
+  wire [31:0] unused_debug_vram_ring1;
+  wire [31:0] unused_debug_vram_ring2;
+  wire [31:0] unused_debug_vram_ring3;
+  wire [31:0] unused_debug_vram_dist0;
+  wire [31:0] unused_debug_vram_dist1;
+  wire [31:0] unused_debug_dma_tr0;
+  wire [31:0] unused_debug_dma_tr1;
+  wire [31:0] unused_debug_dma_tr2;
+  wire [31:0] unused_debug_dma_tr3;
+  wire [31:0] unused_debug_dma_tr4;
+  wire [31:0] unused_debug_dma_tr5;
+  wire [31:0] unused_debug_dma_tr6;
+  wire [31:0] unused_debug_dma_tr7;
+  wire [31:0] unused_debug_dma_tr8;
+  wire [31:0] unused_debug_wait0;
+  wire [31:0] unused_debug_wait1;
+  wire [31:0] unused_debug_wait2;
+  wire [31:0] unused_debug_wait3;
   wire [15:0] core_audio_l;
   wire [15:0] core_audio_r;
   wire        audio_sample_ce;
@@ -455,10 +561,45 @@ module zynq_gba_top #(
   assign physical_keys_axi = physical_keys_axi_sync;
   assign debug_cpu_pc_axi = debug_cpu_pc_axi_sync;
   assign debug_cpu_mixed_axi = debug_cpu_mixed_axi_sync;
+  assign debug_cpu_r0_axi = debug_cpu_r0_axi_sync;
+  assign debug_cpu_r1_axi = debug_cpu_r1_axi_sync;
+  assign debug_cpu_r2_axi = debug_cpu_r2_axi_sync;
+  assign debug_cpu_r4_axi = debug_cpu_r4_axi_sync;
+  assign debug_cpu_cpuset_axi = debug_cpu_cpuset_axi_sync;
+  assign ddr_atom_word0_axi = ddr_atom_word0_axi_sync;
+  assign ddr_atom_word1_axi = ddr_atom_word1_axi_sync;
+  assign ddr_atom_next0_axi = ddr_atom_next0_axi_sync;
+  assign ddr_atom_next1_axi = ddr_atom_next1_axi_sync;
+  assign ddr_atom_stat_axi = ddr_atom_stat_axi_sync;
   assign debug_irq_axi = debug_irq_axi_sync;
   assign debug_irq_ext_axi = debug_irq_ext_axi_sync;
   assign debug_dma_axi = debug_dma_axi_sync;
   assign debug_mem_axi = debug_mem_axi_sync;
+  assign debug_vram_regs0_axi = debug_vram_regs0_axi_sync;
+  assign debug_vram_regs1_axi = debug_vram_regs1_axi_sync;
+  assign debug_vram_regs2_axi = debug_vram_regs2_axi_sync;
+  assign debug_vram_regs3_axi = debug_vram_regs3_axi_sync;
+  assign debug_vram_regs4_axi = debug_vram_regs4_axi_sync;
+  assign debug_vram_hits_axi = debug_vram_hits_axi_sync;
+  assign debug_vram_ring0_axi = debug_vram_ring0_axi_sync;
+  assign debug_vram_ring1_axi = debug_vram_ring1_axi_sync;
+  assign debug_vram_ring2_axi = debug_vram_ring2_axi_sync;
+  assign debug_vram_ring3_axi = debug_vram_ring3_axi_sync;
+  assign debug_vram_dist0_axi = debug_vram_dist0_axi_sync;
+  assign debug_vram_dist1_axi = debug_vram_dist1_axi_sync;
+  assign debug_dma_tr0_axi = debug_dma_tr0_axi_sync;
+  assign debug_dma_tr1_axi = debug_dma_tr1_axi_sync;
+  assign debug_dma_tr2_axi = debug_dma_tr2_axi_sync;
+  assign debug_dma_tr3_axi = debug_dma_tr3_axi_sync;
+  assign debug_dma_tr4_axi = debug_dma_tr4_axi_sync;
+  assign debug_dma_tr5_axi = debug_dma_tr5_axi_sync;
+  assign debug_dma_tr6_axi = debug_dma_tr6_axi_sync;
+  assign debug_dma_tr7_axi = debug_dma_tr7_axi_sync;
+  assign debug_dma_tr8_axi = debug_dma_tr8_axi_sync;
+  assign debug_wait0_axi = debug_wait0_axi_sync;
+  assign debug_wait1_axi = debug_wait1_axi_sync;
+  assign debug_wait2_axi = debug_wait2_axi_sync;
+  assign debug_wait3_axi = debug_wait3_axi_sync;
   assign audio_out_l = core_audio_l;
   assign audio_out_r = core_audio_r;
   // Keep the PS-side frame IRQ aligned with the core's original largeimg frame
@@ -541,6 +682,12 @@ module zynq_gba_top #(
       dbg_done_first_meta_core <= 32'd0;
       dbg_done_last_addr_core <= 32'd0;
       dbg_done_last_meta_core <= 32'd0;
+      ddr_atom_word0_core      <= 32'd0;
+      ddr_atom_word1_core      <= 32'd0;
+      ddr_atom_next0_core      <= 32'd0;
+      ddr_atom_next1_core      <= 32'd0;
+      ddr_atom_stat_core       <= 32'd0;
+      ddr_atom_pending_core    <= 1'b0;
       dbg_pending_line_addr   <= 32'd0;
       dbg_pending_lane        <= 2'd0;
       dbg_pending_axi_ar_addr <= 32'd0;
@@ -588,6 +735,12 @@ module zynq_gba_top #(
         dbg_done_first_meta_core <= 32'd0;
         dbg_done_last_addr_core <= 32'd0;
         dbg_done_last_meta_core <= 32'd0;
+        ddr_atom_word0_core      <= 32'd0;
+        ddr_atom_word1_core      <= 32'd0;
+        ddr_atom_next0_core      <= 32'd0;
+        ddr_atom_next1_core      <= 32'd0;
+        ddr_atom_stat_core       <= 32'd0;
+        ddr_atom_pending_core    <= 1'b0;
         dbg_pending_line_addr   <= 32'd0;
         dbg_pending_lane        <= 2'd0;
         dbg_pending_axi_ar_addr <= 32'd0;
@@ -678,6 +831,33 @@ module zynq_gba_top #(
           dbg_chain_counts1_core[15:8] <= sat_inc8(dbg_chain_counts1_core[15:8]);
         end
 
+        // DDR 64-bit 返回“同拍原子性”自证：
+        // 在 sdram_read_done 拍锁存 {first, second}，
+        // 下一拍再采样一次并对比，检查是否出现漂移。
+        if (ddr_atom_pending_core) begin
+          ddr_atom_next0_core <= sdram_read_data;
+          ddr_atom_next1_core <= sdram_second_dword;
+          ddr_atom_pending_core <= 1'b0;
+          ddr_atom_stat_core[3] <= 1'b0;
+          ddr_atom_stat_core[0] <= (sdram_read_data != ddr_atom_word0_core);
+          ddr_atom_stat_core[1] <= (sdram_second_dword != ddr_atom_word1_core);
+          ddr_atom_stat_core[2] <= (sdram_read_data != ddr_atom_word0_core) ||
+                                   (sdram_second_dword != ddr_atom_word1_core);
+          ddr_atom_stat_core[15:8] <= sat_inc8(ddr_atom_stat_core[15:8]);
+          if (sdram_read_data != ddr_atom_word0_core) begin
+            ddr_atom_stat_core[23:16] <= sat_inc8(ddr_atom_stat_core[23:16]);
+          end
+          if (sdram_second_dword != ddr_atom_word1_core) begin
+            ddr_atom_stat_core[31:24] <= sat_inc8(ddr_atom_stat_core[31:24]);
+          end
+        end
+        if (sdram_read_done) begin
+          ddr_atom_word0_core <= sdram_read_data;
+          ddr_atom_word1_core <= sdram_second_dword;
+          ddr_atom_pending_core <= 1'b1;
+          ddr_atom_stat_core[3] <= 1'b1;
+        end
+
         if (sys_err_pulse_w) begin
           dbg_chain_flags_core[6] <= 1'b1;
           dbg_chain_counts1_core[23:16] <= sat_inc8(dbg_chain_counts1_core[23:16]);
@@ -746,6 +926,26 @@ module zynq_gba_top #(
       debug_cpu_pc_axi_sync        <= 32'd0;
       debug_cpu_mixed_axi_meta     <= 32'd0;
       debug_cpu_mixed_axi_sync     <= 32'd0;
+      debug_cpu_r0_axi_meta        <= 32'd0;
+      debug_cpu_r0_axi_sync        <= 32'd0;
+      debug_cpu_r1_axi_meta        <= 32'd0;
+      debug_cpu_r1_axi_sync        <= 32'd0;
+      debug_cpu_r2_axi_meta        <= 32'd0;
+      debug_cpu_r2_axi_sync        <= 32'd0;
+      debug_cpu_r4_axi_meta        <= 32'd0;
+      debug_cpu_r4_axi_sync        <= 32'd0;
+      debug_cpu_cpuset_axi_meta    <= 32'd0;
+      debug_cpu_cpuset_axi_sync    <= 32'd0;
+      ddr_atom_word0_axi_meta      <= 32'd0;
+      ddr_atom_word0_axi_sync      <= 32'd0;
+      ddr_atom_word1_axi_meta      <= 32'd0;
+      ddr_atom_word1_axi_sync      <= 32'd0;
+      ddr_atom_next0_axi_meta      <= 32'd0;
+      ddr_atom_next0_axi_sync      <= 32'd0;
+      ddr_atom_next1_axi_meta      <= 32'd0;
+      ddr_atom_next1_axi_sync      <= 32'd0;
+      ddr_atom_stat_axi_meta       <= 32'd0;
+      ddr_atom_stat_axi_sync       <= 32'd0;
       debug_irq_axi_meta           <= 32'd0;
       debug_irq_axi_sync           <= 32'd0;
       debug_irq_ext_axi_meta       <= 32'd0;
@@ -754,6 +954,56 @@ module zynq_gba_top #(
       debug_dma_axi_sync           <= 32'd0;
       debug_mem_axi_meta           <= 32'd0;
       debug_mem_axi_sync           <= 32'd0;
+      debug_vram_regs0_axi_meta    <= 32'd0;
+      debug_vram_regs0_axi_sync    <= 32'd0;
+      debug_vram_regs1_axi_meta    <= 32'd0;
+      debug_vram_regs1_axi_sync    <= 32'd0;
+      debug_vram_regs2_axi_meta    <= 32'd0;
+      debug_vram_regs2_axi_sync    <= 32'd0;
+      debug_vram_regs3_axi_meta    <= 32'd0;
+      debug_vram_regs3_axi_sync    <= 32'd0;
+      debug_vram_regs4_axi_meta    <= 32'd0;
+      debug_vram_regs4_axi_sync    <= 32'd0;
+      debug_vram_hits_axi_meta     <= 32'd0;
+      debug_vram_hits_axi_sync     <= 32'd0;
+      debug_vram_ring0_axi_meta    <= 32'd0;
+      debug_vram_ring0_axi_sync    <= 32'd0;
+      debug_vram_ring1_axi_meta    <= 32'd0;
+      debug_vram_ring1_axi_sync    <= 32'd0;
+      debug_vram_ring2_axi_meta    <= 32'd0;
+      debug_vram_ring2_axi_sync    <= 32'd0;
+      debug_vram_ring3_axi_meta    <= 32'd0;
+      debug_vram_ring3_axi_sync    <= 32'd0;
+      debug_vram_dist0_axi_meta    <= 32'd0;
+      debug_vram_dist0_axi_sync    <= 32'd0;
+      debug_vram_dist1_axi_meta    <= 32'd0;
+      debug_vram_dist1_axi_sync    <= 32'd0;
+      debug_dma_tr0_axi_meta       <= 32'd0;
+      debug_dma_tr0_axi_sync       <= 32'd0;
+      debug_dma_tr1_axi_meta       <= 32'd0;
+      debug_dma_tr1_axi_sync       <= 32'd0;
+      debug_dma_tr2_axi_meta       <= 32'd0;
+      debug_dma_tr2_axi_sync       <= 32'd0;
+      debug_dma_tr3_axi_meta       <= 32'd0;
+      debug_dma_tr3_axi_sync       <= 32'd0;
+      debug_dma_tr4_axi_meta       <= 32'd0;
+      debug_dma_tr4_axi_sync       <= 32'd0;
+      debug_dma_tr5_axi_meta       <= 32'd0;
+      debug_dma_tr5_axi_sync       <= 32'd0;
+      debug_dma_tr6_axi_meta       <= 32'd0;
+      debug_dma_tr6_axi_sync       <= 32'd0;
+      debug_dma_tr7_axi_meta       <= 32'd0;
+      debug_dma_tr7_axi_sync       <= 32'd0;
+      debug_dma_tr8_axi_meta       <= 32'd0;
+      debug_dma_tr8_axi_sync       <= 32'd0;
+      debug_wait0_axi_meta         <= 32'd0;
+      debug_wait0_axi_sync         <= 32'd0;
+      debug_wait1_axi_meta         <= 32'd0;
+      debug_wait1_axi_sync         <= 32'd0;
+      debug_wait2_axi_meta         <= 32'd0;
+      debug_wait2_axi_sync         <= 32'd0;
+      debug_wait3_axi_meta         <= 32'd0;
+      debug_wait3_axi_sync         <= 32'd0;
       dbg_chain_flags_axi_meta     <= 32'd0;
       dbg_chain_flags_axi_sync     <= 32'd0;
       dbg_chain_counts0_axi_meta   <= 32'd0;
@@ -853,6 +1103,26 @@ module zynq_gba_top #(
       debug_cpu_pc_axi_sync        <= debug_cpu_pc_axi_meta;
       debug_cpu_mixed_axi_meta     <= unused_debug_cpu_mixed;
       debug_cpu_mixed_axi_sync     <= debug_cpu_mixed_axi_meta;
+      debug_cpu_r0_axi_meta        <= unused_debug_cpu_r0;
+      debug_cpu_r0_axi_sync        <= debug_cpu_r0_axi_meta;
+      debug_cpu_r1_axi_meta        <= unused_debug_cpu_r1;
+      debug_cpu_r1_axi_sync        <= debug_cpu_r1_axi_meta;
+      debug_cpu_r2_axi_meta        <= unused_debug_cpu_r2;
+      debug_cpu_r2_axi_sync        <= debug_cpu_r2_axi_meta;
+      debug_cpu_r4_axi_meta        <= unused_debug_cpu_r4;
+      debug_cpu_r4_axi_sync        <= debug_cpu_r4_axi_meta;
+      debug_cpu_cpuset_axi_meta    <= unused_debug_cpu_cpuset;
+      debug_cpu_cpuset_axi_sync    <= debug_cpu_cpuset_axi_meta;
+      ddr_atom_word0_axi_meta      <= ddr_atom_word0_core;
+      ddr_atom_word0_axi_sync      <= ddr_atom_word0_axi_meta;
+      ddr_atom_word1_axi_meta      <= ddr_atom_word1_core;
+      ddr_atom_word1_axi_sync      <= ddr_atom_word1_axi_meta;
+      ddr_atom_next0_axi_meta      <= ddr_atom_next0_core;
+      ddr_atom_next0_axi_sync      <= ddr_atom_next0_axi_meta;
+      ddr_atom_next1_axi_meta      <= ddr_atom_next1_core;
+      ddr_atom_next1_axi_sync      <= ddr_atom_next1_axi_meta;
+      ddr_atom_stat_axi_meta       <= ddr_atom_stat_core;
+      ddr_atom_stat_axi_sync       <= ddr_atom_stat_axi_meta;
       debug_irq_axi_meta           <= unused_debug_irq;
       debug_irq_axi_sync           <= debug_irq_axi_meta;
       debug_irq_ext_axi_meta       <= unused_debug_irq_ext;
@@ -861,6 +1131,56 @@ module zynq_gba_top #(
       debug_dma_axi_sync           <= debug_dma_axi_meta;
       debug_mem_axi_meta           <= unused_debug_mem;
       debug_mem_axi_sync           <= debug_mem_axi_meta;
+      debug_vram_regs0_axi_meta    <= unused_debug_vram_regs0;
+      debug_vram_regs0_axi_sync    <= debug_vram_regs0_axi_meta;
+      debug_vram_regs1_axi_meta    <= unused_debug_vram_regs1;
+      debug_vram_regs1_axi_sync    <= debug_vram_regs1_axi_meta;
+      debug_vram_regs2_axi_meta    <= unused_debug_vram_regs2;
+      debug_vram_regs2_axi_sync    <= debug_vram_regs2_axi_meta;
+      debug_vram_regs3_axi_meta    <= unused_debug_vram_regs3;
+      debug_vram_regs3_axi_sync    <= debug_vram_regs3_axi_meta;
+      debug_vram_regs4_axi_meta    <= unused_debug_vram_regs4;
+      debug_vram_regs4_axi_sync    <= debug_vram_regs4_axi_meta;
+      debug_vram_hits_axi_meta     <= unused_debug_vram_hits;
+      debug_vram_hits_axi_sync     <= debug_vram_hits_axi_meta;
+      debug_vram_ring0_axi_meta    <= unused_debug_vram_ring0;
+      debug_vram_ring0_axi_sync    <= debug_vram_ring0_axi_meta;
+      debug_vram_ring1_axi_meta    <= unused_debug_vram_ring1;
+      debug_vram_ring1_axi_sync    <= debug_vram_ring1_axi_meta;
+      debug_vram_ring2_axi_meta    <= unused_debug_vram_ring2;
+      debug_vram_ring2_axi_sync    <= debug_vram_ring2_axi_meta;
+      debug_vram_ring3_axi_meta    <= unused_debug_vram_ring3;
+      debug_vram_ring3_axi_sync    <= debug_vram_ring3_axi_meta;
+      debug_vram_dist0_axi_meta    <= unused_debug_vram_dist0;
+      debug_vram_dist0_axi_sync    <= debug_vram_dist0_axi_meta;
+      debug_vram_dist1_axi_meta    <= unused_debug_vram_dist1;
+      debug_vram_dist1_axi_sync    <= debug_vram_dist1_axi_meta;
+      debug_dma_tr0_axi_meta       <= unused_debug_dma_tr0;
+      debug_dma_tr0_axi_sync       <= debug_dma_tr0_axi_meta;
+      debug_dma_tr1_axi_meta       <= unused_debug_dma_tr1;
+      debug_dma_tr1_axi_sync       <= debug_dma_tr1_axi_meta;
+      debug_dma_tr2_axi_meta       <= unused_debug_dma_tr2;
+      debug_dma_tr2_axi_sync       <= debug_dma_tr2_axi_meta;
+      debug_dma_tr3_axi_meta       <= unused_debug_dma_tr3;
+      debug_dma_tr3_axi_sync       <= debug_dma_tr3_axi_meta;
+      debug_dma_tr4_axi_meta       <= unused_debug_dma_tr4;
+      debug_dma_tr4_axi_sync       <= debug_dma_tr4_axi_meta;
+      debug_dma_tr5_axi_meta       <= unused_debug_dma_tr5;
+      debug_dma_tr5_axi_sync       <= debug_dma_tr5_axi_meta;
+      debug_dma_tr6_axi_meta       <= unused_debug_dma_tr6;
+      debug_dma_tr6_axi_sync       <= debug_dma_tr6_axi_meta;
+      debug_dma_tr7_axi_meta       <= unused_debug_dma_tr7;
+      debug_dma_tr7_axi_sync       <= debug_dma_tr7_axi_meta;
+      debug_dma_tr8_axi_meta       <= unused_debug_dma_tr8;
+      debug_dma_tr8_axi_sync       <= debug_dma_tr8_axi_meta;
+      debug_wait0_axi_meta         <= unused_debug_wait0;
+      debug_wait0_axi_sync         <= debug_wait0_axi_meta;
+      debug_wait1_axi_meta         <= unused_debug_wait1;
+      debug_wait1_axi_sync         <= debug_wait1_axi_meta;
+      debug_wait2_axi_meta         <= unused_debug_wait2;
+      debug_wait2_axi_sync         <= debug_wait2_axi_meta;
+      debug_wait3_axi_meta         <= unused_debug_wait3;
+      debug_wait3_axi_sync         <= debug_wait3_axi_meta;
       dbg_chain_flags_axi_meta     <= dbg_chain_flags_core;
       dbg_chain_flags_axi_sync     <= dbg_chain_flags_axi_meta;
       dbg_chain_counts0_axi_meta   <= dbg_chain_counts0_core;
@@ -1020,10 +1340,45 @@ module zynq_gba_top #(
     .stat_physical_keys  (physical_keys_axi),
     .stat_debug_cpu_pc   (debug_cpu_pc_axi),
     .stat_debug_cpu_mixed(debug_cpu_mixed_axi),
+    .stat_debug_cpu_r0   (debug_cpu_r0_axi),
+    .stat_debug_cpu_r1   (debug_cpu_r1_axi),
+    .stat_debug_cpu_r2   (debug_cpu_r2_axi),
+    .stat_debug_cpu_r4   (debug_cpu_r4_axi),
+    .stat_debug_cpu_cpuset(debug_cpu_cpuset_axi),
+    .stat_ddr_atom_word0 (ddr_atom_word0_axi),
+    .stat_ddr_atom_word1 (ddr_atom_word1_axi),
+    .stat_ddr_atom_next0 (ddr_atom_next0_axi),
+    .stat_ddr_atom_next1 (ddr_atom_next1_axi),
+    .stat_ddr_atom_stat  (ddr_atom_stat_axi),
     .stat_debug_irq      (debug_irq_axi),
     .stat_debug_irq_ext  (debug_irq_ext_axi),
     .stat_debug_dma      (debug_dma_axi),
     .stat_debug_mem      (debug_mem_axi),
+    .stat_debug_vram_regs0(debug_vram_regs0_axi),
+    .stat_debug_vram_regs1(debug_vram_regs1_axi),
+    .stat_debug_vram_regs2(debug_vram_regs2_axi),
+    .stat_debug_vram_regs3(debug_vram_regs3_axi),
+    .stat_debug_vram_regs4(debug_vram_regs4_axi),
+    .stat_debug_vram_hits(debug_vram_hits_axi),
+    .stat_debug_vram_ring0(debug_vram_ring0_axi),
+    .stat_debug_vram_ring1(debug_vram_ring1_axi),
+    .stat_debug_vram_ring2(debug_vram_ring2_axi),
+    .stat_debug_vram_ring3(debug_vram_ring3_axi),
+    .stat_debug_vram_dist0(debug_vram_dist0_axi),
+    .stat_debug_vram_dist1(debug_vram_dist1_axi),
+    .stat_debug_dma_tr0   (debug_dma_tr0_axi),
+    .stat_debug_dma_tr1   (debug_dma_tr1_axi),
+    .stat_debug_dma_tr2   (debug_dma_tr2_axi),
+    .stat_debug_dma_tr3   (debug_dma_tr3_axi),
+    .stat_debug_dma_tr4   (debug_dma_tr4_axi),
+    .stat_debug_dma_tr5   (debug_dma_tr5_axi),
+    .stat_debug_dma_tr6   (debug_dma_tr6_axi),
+    .stat_debug_dma_tr7   (debug_dma_tr7_axi),
+    .stat_debug_dma_tr8   (debug_dma_tr8_axi),
+    .stat_debug_wait0     (debug_wait0_axi),
+    .stat_debug_wait1     (debug_wait1_axi),
+    .stat_debug_wait2     (debug_wait2_axi),
+    .stat_debug_wait3     (debug_wait3_axi),
     .stat_dbg_chain_flags(dbg_chain_flags_axi),
     .stat_dbg_chain_counts0(dbg_chain_counts0_axi),
     .stat_dbg_chain_counts1(dbg_chain_counts1_axi),
@@ -1298,10 +1653,40 @@ module zynq_gba_top #(
     .sound_out_right       (core_audio_r),
     .debug_cpu_pc          (unused_debug_cpu_pc),
     .debug_cpu_mixed       (unused_debug_cpu_mixed),
+    .debug_cpu_r0          (unused_debug_cpu_r0),
+    .debug_cpu_r1          (unused_debug_cpu_r1),
+    .debug_cpu_r2          (unused_debug_cpu_r2),
+    .debug_cpu_r4          (unused_debug_cpu_r4),
+    .debug_cpu_cpuset      (unused_debug_cpu_cpuset),
     .debug_irq             (unused_debug_irq),
     .debug_irq_ext         (unused_debug_irq_ext),
     .debug_dma             (unused_debug_dma),
     .debug_mem             (unused_debug_mem),
+    .debug_vram_regs0      (unused_debug_vram_regs0),
+    .debug_vram_regs1      (unused_debug_vram_regs1),
+    .debug_vram_regs2      (unused_debug_vram_regs2),
+    .debug_vram_regs3      (unused_debug_vram_regs3),
+    .debug_vram_regs4      (unused_debug_vram_regs4),
+    .debug_vram_hits       (unused_debug_vram_hits),
+    .debug_vram_ring0      (unused_debug_vram_ring0),
+    .debug_vram_ring1      (unused_debug_vram_ring1),
+    .debug_vram_ring2      (unused_debug_vram_ring2),
+    .debug_vram_ring3      (unused_debug_vram_ring3),
+    .debug_vram_dist0      (unused_debug_vram_dist0),
+    .debug_vram_dist1      (unused_debug_vram_dist1),
+    .debug_dma_tr0         (unused_debug_dma_tr0),
+    .debug_dma_tr1         (unused_debug_dma_tr1),
+    .debug_dma_tr2         (unused_debug_dma_tr2),
+    .debug_dma_tr3         (unused_debug_dma_tr3),
+    .debug_dma_tr4         (unused_debug_dma_tr4),
+    .debug_dma_tr5         (unused_debug_dma_tr5),
+    .debug_dma_tr6         (unused_debug_dma_tr6),
+    .debug_dma_tr7         (unused_debug_dma_tr7),
+    .debug_dma_tr8         (unused_debug_dma_tr8),
+    .debug_wait0           (unused_debug_wait0),
+    .debug_wait1           (unused_debug_wait1),
+    .debug_wait2           (unused_debug_wait2),
+    .debug_wait3           (unused_debug_wait3),
     .debug_internal         (core_debug_internal)
   );
 
