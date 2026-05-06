@@ -736,29 +736,61 @@ begin
                end if;
                
             when READSMALLRAM =>
-               if (acc_save = ACCESS_8BIT) then
-                  rotate_data  <= smallram_DataOut;
-                  state        <= ROTATE;
-               elsif (acc_save = ACCESS_16BIT) then
-                  mem_bus_done <= '1'; 
-                  state <= IDLE;
-                  case (return_rotate) is
-                     when "00" => mem_bus_din <= x"0000" & smallram_DataOut(15 downto 0);
-                     when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & x"0000" & smallram_DataOut(15 downto 8);
-                     when "10" => mem_bus_din <= x"0000" & smallram_DataOut(31 downto 16);
-                     when "11" => mem_bus_din <= smallram_DataOut(23 downto 16) & x"0000" & smallram_DataOut(31 downto 24);
-                     when others => null;
-                  end case;
+               -- Custom BIOS mutex fix: force IWRAM[0x1FFE] bit0=1 only when PC in BIOS
+               if (unsigned(adr_save(14 downto 2)) = 16#1FFE#) and (PC_in_BIOS = '1') then
+                  if (acc_save = ACCESS_8BIT) then
+                     if (return_rotate = "00") then
+                        rotate_data <= smallram_DataOut(31 downto 1) & '1';
+                     else
+                        rotate_data <= smallram_DataOut;
+                     end if;
+                     state <= ROTATE;
+                  elsif (acc_save = ACCESS_16BIT) then
+                     mem_bus_done <= '1';
+                     state <= IDLE;
+                     case (return_rotate) is
+                        when "00" => mem_bus_din <= x"0000" & smallram_DataOut(15 downto 1) & '1';
+                        when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & x"0000" & smallram_DataOut(15 downto 8);
+                        when "10" => mem_bus_din <= x"0000" & smallram_DataOut(31 downto 16);
+                        when "11" => mem_bus_din <= smallram_DataOut(23 downto 16) & x"0000" & smallram_DataOut(31 downto 24);
+                        when others => null;
+                     end case;
+                  else
+                     mem_bus_done <= '1';
+                     state <= IDLE;
+                     case (return_rotate) is
+                        when "00" => mem_bus_din <= smallram_DataOut(31 downto 1) & '1';
+                        when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & smallram_DataOut(31 downto 8);
+                        when "10" => mem_bus_din <= smallram_DataOut(15 downto 0) & smallram_DataOut(31 downto 16);
+                        when "11" => mem_bus_din <= smallram_DataOut(23 downto 0) & smallram_DataOut(31 downto 24);
+                        when others => null;
+                     end case;
+                  end if;
                else
-                  mem_bus_done <= '1'; 
-                  state <= IDLE;
-                  case (return_rotate) is
-                     when "00" => mem_bus_din <= smallram_DataOut;
-                     when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & smallram_DataOut(31 downto 8);
-                     when "10" => mem_bus_din <= smallram_DataOut(15 downto 0) & smallram_DataOut(31 downto 16);
-                     when "11" => mem_bus_din <= smallram_DataOut(23 downto 0) & smallram_DataOut(31 downto 24);
-                     when others => null;
-                  end case;
+                  if (acc_save = ACCESS_8BIT) then
+                     rotate_data  <= smallram_DataOut;
+                     state        <= ROTATE;
+                  elsif (acc_save = ACCESS_16BIT) then
+                     mem_bus_done <= '1';
+                     state <= IDLE;
+                     case (return_rotate) is
+                        when "00" => mem_bus_din <= x"0000" & smallram_DataOut(15 downto 0);
+                        when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & x"0000" & smallram_DataOut(15 downto 8);
+                        when "10" => mem_bus_din <= x"0000" & smallram_DataOut(31 downto 16);
+                        when "11" => mem_bus_din <= smallram_DataOut(23 downto 16) & x"0000" & smallram_DataOut(31 downto 24);
+                        when others => null;
+                     end case;
+                  else
+                     mem_bus_done <= '1';
+                     state <= IDLE;
+                     case (return_rotate) is
+                        when "00" => mem_bus_din <= smallram_DataOut;
+                        when "01" => mem_bus_din <= smallram_DataOut(7 downto 0) & smallram_DataOut(31 downto 8);
+                        when "10" => mem_bus_din <= smallram_DataOut(15 downto 0) & smallram_DataOut(31 downto 16);
+                        when "11" => mem_bus_din <= smallram_DataOut(23 downto 0) & smallram_DataOut(31 downto 24);
+                        when others => null;
+                     end case;
+                  end if;
                end if;
                
             when READPALETTERAM =>
@@ -1495,7 +1527,7 @@ begin
                end if;
                
          end case;
-      
+
       end if;
    end process;
    
